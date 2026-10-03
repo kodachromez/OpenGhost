@@ -405,8 +405,8 @@ body {
   color: rgba(var(--fg-rgb), 0.78);
 }
 
-.glyph-ghost-eye {
-  fill: var(--app-bg);
+.glyph-ghost {
+  object-fit: contain;
 }
 
 .is-desktop .app {
@@ -2739,10 +2739,6 @@ ghost-thinking {
   width: 14px;
   height: 15px;
   color: rgb(var(--composer-accent-rgb));
-}
-
-.mini .glyph-ghost-eye {
-  fill: var(--chat-bg);
 }
 
 .mini-tools {
@@ -10144,14 +10140,10 @@ h6.md-h {
   --ghost-eye: var(--chat-bg);
 }
 
-.theme-preview-ghost svg {
+.theme-preview-ghost .glyph-ghost {
   display: block;
   width: 100%;
   height: auto;
-}
-
-.theme-preview-ghost .glyph-ghost-eye {
-  fill: var(--chat-bg);
 }
 
 .theme-preview-line {
@@ -11824,10 +11816,6 @@ button.attachment-text {
   color: rgba(var(--fg-rgb), 0.16);
 }
 
-.browser-empty .glyph-ghost-eye {
-  fill: var(--chat-bg);
-}
-
 .browser-empty p {
   max-width: 290px;
   margin: 0;
@@ -11957,10 +11945,6 @@ button.attachment-text {
   height: 14px;
   color: rgb(var(--composer-accent-rgb));
   animation: browser-float 2.4s ease-in-out infinite;
-}
-
-.browser-badge .glyph-ghost-eye {
-  fill: var(--app-bg);
 }
 
 @keyframes browser-float {

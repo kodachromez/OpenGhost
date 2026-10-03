@@ -6,7 +6,6 @@ const svg = (body, className = '') => `<svg class="glyph${className ? ` ${classN
 const thin = (body, className = '') => `<svg class="glyph${className ? ` ${className}` : ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
 
 const FOLDER_BACK = 'M38 70V46a4 4 0 0 1 4-4h10a4 4 0 0 1 3.2 1.6L58 47h20a4 4 0 0 1 4 4v2';
-const GHOST = 'M0 29A29 29 0 0 1 58 29L58 57A2.5 2.5 0 0 1 53 57A6 6 0 0 0 41 57A3 3 0 0 1 35 57A6 6 0 0 0 23 57A3 3 0 0 1 17 57A6 6 0 0 0 5 57A2.5 2.5 0 0 1 0 57Z';
 
 window.Glyphs = {
  folder: svg(`<path d="${FOLDER_BACK}"/><path class="folder-front" d="M38 53L82 53L82 72A4 4 0 0 1 78 76L42 76A4 4 0 0 1 38 72Z"/>`, 'glyph-folder'),
@@ -38,6 +37,6 @@ window.Glyphs = {
  globe: svg('<circle cx="60" cy="60" r="22"/><path d="M38.5 60h43M60 38c-6.5 6-10 13.5-10 22s3.5 16 10 22c6.5-6 10-13.5 10-22s-3.5-16-10-22z"/>'),
  // An eye for what a field hides; its slash draws across while the field shows it.
  eye: svg('<path d="M35 60c6-9.5 14.5-15 25-15s19 5.5 25 15c-6 9.5-14.5 15-25 15s-19-5.5-25-15z"/><circle cx="60" cy="60" r="6"/><path class="eye-slash" d="M42 42l36 36"/>', 'glyph-eye'),
- ghost: `<svg class="glyph glyph-ghost" viewBox="-1 -1 60 62" aria-hidden="true"><path d="${GHOST}" fill="currentColor"/><ellipse cx="17" cy="29.5" rx="3.8" ry="4.1" class="glyph-ghost-eye"/><ellipse cx="41" cy="29.5" rx="3.8" ry="4.1" class="glyph-ghost-eye"/></svg>`,
+ ghost: '<img class="glyph glyph-ghost" src="assets/ghosty.png" alt="" draggable="false" aria-hidden="true">',
 };
 })();
