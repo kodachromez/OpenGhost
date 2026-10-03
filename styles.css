@@ -25,22 +25,6 @@
   --pass-focus-edge: rgba(255, 255, 255, 0.2);
   --chat-bg: rgb(25, 25, 25);
   --titlebar-symbols: rgb(154, 154, 154);
-  /* The opening: the night it falls into; its mist, deep where little light reaches it and lit where much does; the light
-     around the ghost, and how much of it the trail takes on; the motes in the air and how bright they are; how far the
-     edges sink into shade; and the soft light that stands in without WebGL. */
-  --splash-night: rgb(13, 14, 22);
-  --splash-mist-deep: rgb(26, 30, 48);
-  --splash-mist-lit: rgb(150, 168, 240);
-  --splash-glow: rgb(150, 170, 255);
-  --splash-core: rgb(232, 238, 255);
-  --splash-mist-alpha: 0.55;
-  --splash-glow-alpha: 0.5;
-  --splash-trail: 0.35;
-  --splash-motes: 1;
-  --splash-shade: 0.5;
-  --splash-aura: rgba(86, 104, 172, 0.34);
-  --splash-glow-rgb: 150, 172, 255;
-
   --contour-outer: rgba(0, 0, 0, 0.5);
   --contour-inner: rgb(32, 32, 32);
 
@@ -148,18 +132,6 @@
   --pass-focus-edge: rgba(30, 48, 88, 0.22);
   --chat-bg: rgb(255, 255, 255);
   --titlebar-symbols: rgb(92, 92, 92);
-  --splash-night: rgb(243, 244, 250);
-  --splash-mist-deep: rgb(200, 203, 230);
-  --splash-mist-lit: rgb(255, 255, 255);
-  --splash-glow: rgb(124, 116, 228);
-  --splash-core: rgb(88, 80, 204);
-  --splash-mist-alpha: 0.75;
-  --splash-glow-alpha: 0.42;
-  --splash-trail: 0.9;
-  --splash-motes: 0;
-  --splash-shade: 0.07;
-  --splash-aura: rgba(166, 186, 242, 0.4);
-  --splash-glow-rgb: 92, 118, 230;
 
   --contour-outer: rgba(30, 48, 88, 0.1);
   --contour-inner: rgb(255, 255, 255);
@@ -419,7 +391,6 @@ body {
 }
 
 .is-splash .splash {
-  --splash-size: 112px;
   position: fixed;
   z-index: 1000;
   inset: 0;
@@ -452,7 +423,7 @@ body {
   width: 1200px;
   height: 1200px;
   margin: -600px 0 0 -600px;
-  background: radial-gradient(closest-side, var(--splash-aura), transparent);
+  background: radial-gradient(closest-side, rgba(255, 255, 255, 0.12), transparent);
   opacity: 0;
 }
 
@@ -488,7 +459,7 @@ body {
   position: absolute;
   top: 50%;
   left: 50%;
-  color: rgb(var(--composer-accent-rgb));
+  color: #fff;
   font-family: "OpenGhost Display", var(--font);
   font-size: 48px;
   font-weight: 600;
@@ -508,7 +479,7 @@ body {
 /* The name out of focus, under the sharp one: each letter drawn only as its own soft glow, painted once. */
 .splash-haze span {
   color: transparent;
-  text-shadow: 0 0 10px rgb(var(--composer-accent-rgb));
+  text-shadow: 0 0 10px rgba(255, 255, 255, 0.4);
 }
 
 .splash-word span {

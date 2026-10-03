@@ -9,6 +9,8 @@
   <title>OpenGhost</title>
   <link rel="icon" href="desktop/icon.png">
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="splash.css">
+  <link rel="preload" href="assets/splash-poses/down.png" as="image">
   <script src="desktop.js"></script>
   <script src="theme.js"></script>
 </head>
@@ -138,10 +140,12 @@
 
   <div class="splash" aria-hidden="true">
     <div class="splash-bg"><div class="splash-aura"></div><canvas class="splash-mist"></canvas></div>
-    <div class="splash-fly"><div class="splash-ghost"><div class="splash-ghost-body"><ghost-thinking></ghost-thinking></div></div></div>
-    <div class="splash-word">OpenGhost</div>
+    <div class="splash-fly"><div class="splash-ghost"><div class="splash-ghost-body"><splash-ghost></splash-ghost></div></div></div>
+    <div class="splash-word">GHOSTY</div>
   </div>
   <script src="splash-mist.js"></script>
+  <script src="splash-ghost.js"></script>
+  <script src="splash.js"></script>
 
   <script src="i18n.js"></script>
   <script src="liquid-glass.js"></script>
@@ -209,6 +213,5 @@
   <script src="browser-panel.js"></script>
   <script src="lock-ui.js"></script>
   <script src="script.js"></script>
-  <script src="splash.js"></script>
 </body>
 </html>

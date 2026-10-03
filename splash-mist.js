@@ -1,18 +1,14 @@
 (() => {
 'use strict';
 
-// The opening's mist, set going as soon as its canvas is on the page, while the app's scripts are still loading. A shader
-// like this takes a while to compile; started here, it is usually ready by the time the opening plays, and with the
-// browser's parallel compile it never holds up a frame. splash.js draws with it.
+// Start compilation while the app loads; splash.js keeps ownership of drawing and handoff.
 const root = document.documentElement;
 const canvas = document.querySelector('.splash-mist');
-if (!canvas || !root.classList.contains('is-splash')) return;
+if (!canvas || !root.classList.contains('is-splash') || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
 
-// How many points of the ghost's trail the shader looks at.
+// Preserve the existing draw interface, including uniforms that this restrained opening no longer needs.
 const KEEP = 24;
 const VERTEX = 'attribute vec2 corner; void main() { gl_Position = vec4(corner, 0.0, 1.0); }';
-// Everything behind the ghost, in one pass: the night, the mist lit from the middle and by the ghost, the trail it
-// leaves in the mist, the ring of light at the landing, and the motes in the air.
 const FRAGMENT = `
 precision highp float;
 uniform vec2 view;
@@ -44,71 +40,75 @@ float fbm(vec2 p) {
 }
 
 void main() {
+ if (show <= 0.0) {
+  gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+  return;
+ }
  vec2 px = vec2(gl_FragCoord.x, view.y * density - gl_FragCoord.y) / density;
- vec2 c = px - view * 0.5;
+ vec2 uv = px / view;
+ float unit = max(280.0, min(view.x, view.y));
+ float light = 0.0;
+ vec2 ringCenter = view * vec2(0.5, 0.78);
+ float radius = clamp(view.x * 0.18, 110.0, 210.0);
 
- // The trail is mist lit from within where the ghost has just flown: it gathers softly behind the ghost, spreads and
- // fades as it ages, and breaks up into wisps. It is measured from the nearest point of the whole way, so its stretches
- // join without a seam. The mist parts around it, pushed aside the more the farther from the middle of the trail, so
- // nothing tears along its line.
- float band = 0.0;
- vec2 push = vec2(0.0);
- if (px.x > box.x && px.y > box.y && px.x < box.z && px.y < box.w) {
-  float best = 1e8, age = 9.0;
-  vec2 away = vec2(0.0);
-  for (int i = 0; i < ${KEEP - 1}; i++) {
-   if (float(i) >= count - 1.0) break;
-   vec3 a = trail[i], b = trail[i + 1];
-   vec2 ab = b.xy - a.xy;
-   float h = clamp(dot(px - a.xy, ab) / max(dot(ab, ab), 0.001), 0.0, 1.0);
-   vec2 d = px - a.xy - ab * h;
-   float dd = dot(d, d);
-   if (dd < best) {
-    best = dd;
-    age = mix(a.z, b.z, h);
-    away = d;
-   }
+ // Above this band the smoke envelope is exactly zero. Keep its full five-octave detail only where visible;
+ // skipping all twenty noise evaluations across the upper stage is the largest high-refresh saving.
+ // The ring bound also covers unusually short windows without cutting off its soft haze.
+ if (uv.y > 0.475 || abs(px.y - ringCenter.y) < radius * 0.36) {
+  // Fold broad, slowly opposing currents into fine wisps. The uneven envelope and stretched noise give the
+  // lower smoke depth without a solid grey floor.
+  vec2 p = vec2(px.x, px.y * 1.8) / (unit * 0.46);
+  vec2 warp = vec2(fbm(p + vec2(time * 0.11, 0.0)), fbm(p + vec2(5.2, 1.3) - vec2(time * 0.075, time * 0.04)));
+  float broad = fbm(p + warp * 2.0 + vec2(time * 0.055, -time * 0.045));
+  float fine = fbm(p * 2.4 + warp * 1.8 - vec2(time * 0.09, time * 0.03));
+  float veil = smoothstep(0.54, 0.86, uv.y + (broad - 0.5) * 0.13);
+  float floorFade = 1.0 - smoothstep(0.90, 1.15, uv.y);
+  float horizontal = 1.0 - smoothstep(0.14, 0.64, abs(uv.x - 0.5));
+  float fog = smoothstep(0.31, 0.76, broad * 0.62 + fine * 0.38) * veil * floorFade;
+  fog *= 0.42 + horizontal * 0.58;
+
+  // An elliptical ring gathers before emergence. Noise softens its silver-grey rim into smoke.
+  vec2 ringPoint = (px - ringCenter) / vec2(radius, radius * 0.18);
+  float ringDistance = length(ringPoint) - 1.0 - (fine - 0.5) * 0.08;
+  float ring = exp(-ringDistance * ringDistance / 0.014);
+  ring *= smoothstep(0.10, 0.45, time) * (0.52 + broad * 0.48);
+  float ringHaze = exp(-ringDistance * ringDistance / 0.16) * 0.035;
+  ringHaze *= smoothstep(0.10, 0.45, time);
+  light = fog * (0.28 + horizontal * 0.12) * mistAlpha + ring * 0.15 + ringHaze;
+ }
+
+ // A compact neutral halo follows the mascot, with an explicit cutoff so the corners stay pure black.
+ vec2 offset = px - ghost.xy;
+ float haloRadius = unit * 0.25 * max(ghost.z, 0.55);
+ if (ghost.w > 0.0 && dot(offset, offset) < haloRadius * haloRadius) {
+  float near = 1.0 - smoothstep(0.0, 1.0, length(offset) / haloRadius);
+  light += near * near * ghost.w * glowAlpha * 0.06;
+ }
+
+ // Sparse white motes near the mascot, rising slowly. Only their small circular cluster needs hash/trig work;
+ // empty cells (91 percent of the grid) also skip the sparkle's exponentials.
+ float sparkleRadius = unit * 0.27;
+ if (ghost.w > 0.0 && motes > 0.0 && time > 1.3 && dot(offset, offset) < sparkleRadius * sparkleRadius * 1.8225) {
+  vec2 q = px / 60.0 + vec2(0.0, time * 0.10);
+  vec2 cell = floor(q), f = fract(q);
+  float seed = hash(cell);
+  if (seed >= 0.91) {
+   vec2 dm = (f - vec2(hash(cell + 3.1), hash(cell + 7.7)) * 0.8 - 0.1) * 60.0;
+   float dotLight = exp(-dot(dm, dm) / 1.5);
+   float crossLight = exp(-abs(dm.x) * 2.8 - abs(dm.y) * 0.65) + exp(-abs(dm.y) * 2.8 - abs(dm.x) * 0.65);
+   float sparkleArea = 1.0 - smoothstep(0.25, 1.35, length(offset) / sparkleRadius);
+   float twinkle = 0.5 + 0.5 * sin(time * (1.1 + seed) + seed * 40.0);
+   float mote = (dotLight + crossLight * 0.35) * twinkle * twinkle * sparkleArea;
+   light += mote * smoothstep(1.3, 2.0, time) * ghost.w * motes * 0.8;
   }
-  float width = 32.0 + 110.0 * age;
-  band = exp(-best / (width * width)) * smoothstep(0.0, 0.14, age) * clamp(1.0 - age / life, 0.0, 1.0);
-  push = away / width * band;
-  band *= 0.55 + 0.7 * fbm((px + push * 20.0) / 72.0 + vec2(time * 0.5, -time * 0.3));
  }
 
- // The mist: noise folded into itself, drifting slowly, thicker where the trail hangs.
- vec2 p = (px + push * 60.0) / 300.0;
- vec2 warp = vec2(fbm(p + vec2(0.0, time * 0.06)), fbm(p + vec2(5.2, 1.3) - vec2(time * 0.05, 0.0)));
- float fog = smoothstep(0.32, 0.9, fbm(p * 1.4 + warp * 1.8 + vec2(time * 0.025, -time * 0.015)));
- fog = clamp(fog + band * 0.55, 0.0, 1.0);
-
- // The light: the middle of the stage, the ghost's own glow, the trail, and the ring that runs out when it lands.
- vec2 g = px - ghost.xy;
- float near = exp(-dot(g, g) / (170.0 * 170.0 * ghost.z * ghost.z)) * ghost.w;
- float middle = exp(-dot(c, c) / (440.0 * 440.0));
- float ring = 0.0;
- if (pulse > 0.0) {
-  float k = length(c) - pulse * 520.0;
-  ring = exp(-k * k / 3600.0) * max(0.0, 1.0 - pulse / 1.4);
- }
- float light = 0.35 + 0.65 * middle + 1.2 * near + 1.1 * band + 0.6 * ring;
-
- // Motes of light, rising slowly and twinkling, brighter where the light is.
- vec2 q = px / 52.0 + vec2(0.0, time * 0.22);
- vec2 cell = floor(q), f = fract(q);
- float seed = hash(cell);
- vec2 dm = (f - vec2(hash(cell + 3.1), hash(cell + 7.7)) * 0.8 - 0.1) * 52.0;
- float mote = step(0.86, seed) * exp(-dot(dm, dm) / 3.0) * (0.5 + 0.5 * sin(time * (1.3 + seed * 2.4) + seed * 40.0)) * (0.35 + light * 0.5);
-
- vec3 color = mix(base, night, show);
- // The mist takes its deep tone where little light reaches it and its lit tone where much does.
- color = mix(color, mix(deep, lit, clamp(light * 0.55, 0.0, 1.0)), clamp(fog * mistAlpha * show, 0.0, 1.0));
- color = mix(color, glow, clamp((near * 0.55 + band * trailGlow + ring * 0.3 + middle * 0.1) * glowAlpha * show, 0.0, 1.0));
- color = mix(color, core, clamp(mote * motes * show, 0.0, 1.0));
- color *= 1.0 - shade * show * smoothstep(0.55, 1.35, length(c / (view * 0.5)));
- gl_FragColor = vec4(color, 1.0);
+ // One scalar feeds all three channels: no theme colour can introduce a hue, and show=0 is exactly black.
+ light = clamp(light * show, 0.0, 1.0);
+ gl_FragColor = vec4(vec3(light), 1.0);
 }`;
 
-const gl = canvas.getContext('webgl', { antialias: false, depth: false, stencil: false, powerPreference: 'high-performance' });
+const gl = canvas.getContext('webgl', { alpha: false, antialias: false, depth: false, stencil: false, powerPreference: 'high-performance' });
 if (!gl) return;
 const parallel = gl.getExtension('KHR_parallel_shader_compile');
 const program = gl.createProgram();
@@ -123,9 +123,7 @@ gl.linkProgram(program);
 
 window.SplashMist = {
  gl, program, keep: KEEP,
- // Whether the shader is compiled yet; without the parallel compile, asking waits for it.
  done: () => !parallel || gl.getProgramParameter(program, parallel.COMPLETION_STATUS_KHR),
- // Only once done: whether it compiled at all, and if not, why.
  failed: () => gl.getProgramParameter(program, gl.LINK_STATUS) ? '' : gl.getProgramInfoLog(program) || shaders.map(s => gl.getShaderInfoLog(s)).join(' ') || 'link failed',
 };
 })();

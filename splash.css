@@ -1,0 +1,76 @@
+@font-face {
+  font-family: "Ghosty Rounded";
+  src: url("assets/fonts/nunito-latin-700-normal.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 700;
+  font-display: block;
+}
+
+/* All overrides are restricted to the opening. Neither app theme is recoloured. */
+.is-splash .splash {
+  --splash-size: clamp(220px, 34vh, 320px);
+  --splash-night: rgb(0, 0, 0);
+  --splash-mist-deep: rgb(35, 35, 35);
+  --splash-mist-lit: rgb(220, 220, 220);
+  --splash-glow: rgb(225, 225, 225);
+  --splash-core: rgb(255, 255, 255);
+  --splash-mist-alpha: .95;
+  --splash-glow-alpha: .12;
+  --splash-trail: 0;
+  --splash-motes: .55;
+  --splash-shade: .65;
+  --splash-glow-rgb: 255, 255, 255;
+  color: #fff;
+  color-scheme: dark;
+}
+
+.is-splash .titlebar { background: #000; color: #fff; }
+.is-splash.is-splash-fading .welcome { visibility: visible; }
+.splash-bg { background: #000; }
+.splash-fly {
+  top: 46%;
+  width: var(--splash-size);
+  height: var(--splash-size);
+  margin: calc(var(--splash-size) / -2) 0 0 calc(var(--splash-size) / -2);
+}
+.splash-ghost-body, .splash splash-ghost { width: 100%; height: 100%; }
+.splash-ghost-body { filter: drop-shadow(0 0 13px rgb(255 255 255 / .09)); }
+.splash-mist { opacity: 0; }
+.splash-fly, .splash-word { will-change: transform, opacity; }
+.splash-word {
+  top: calc(46% + var(--splash-size) / 2 + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  color: #fff;
+  font-family: "Ghosty Rounded", ui-rounded, sans-serif;
+  font-size: clamp(36px, 5vh, 48px);
+  font-weight: 700;
+  letter-spacing: .055em;
+  opacity: 0;
+  text-shadow: 0 0 22px rgb(255 255 255 / .13);
+}
+.splash-haze span { color: transparent; text-shadow: 0 0 9px rgb(255 255 255 / .4); }
+
+/* Soft neutral floor fog also covers unavailable/late WebGL. No coloured theme tokens. */
+.splash-aura {
+  inset: auto -15% -10%;
+  width: 130%; height: 45%; margin: 0;
+  background:
+    radial-gradient(ellipse at 34% 63%, rgb(220 220 220 / .16), transparent 47%),
+    radial-gradient(ellipse at 67% 69%, rgb(230 230 230 / .18), transparent 42%),
+    radial-gradient(ellipse at 50% 85%, rgb(190 190 190 / .16), transparent 65%);
+  filter: blur(15px);
+  animation: splash-smoke-prepare 360ms ease-out both;
+}
+@keyframes splash-smoke-prepare { from { opacity: 0; } to { opacity: .8; } }
+.splash-aura::after {
+  content: ""; position: absolute; left: 35%; top: 35%; width: 30%; height: 14%;
+  border: 2px solid rgb(255 255 255 / .4); border-radius: 50%;
+  box-shadow: 0 0 18px rgb(255 255 255 / .18), inset 0 0 14px rgb(255 255 255 / .15);
+}
+.splash.is-static .splash-fly, .splash.is-static .splash-aura { opacity: 1; }
+.splash.is-static .splash-word { visibility: visible; opacity: 1; }
+.splash.is-static .splash-mist { display: none; }
+@media (prefers-reduced-motion: reduce) {
+  .splash * { animation: none !important; }
+}
