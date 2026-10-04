@@ -7,6 +7,10 @@ const FRESH = 10 * 60 * 1000;
 const MODES = ['ask', 'auto', 'full'];
 const DEFAULT_MODE = 'ask';
 const CHECK_DELAY = 400;
+// These fields/rows were fixed app copy before backend-supplied providers. Bound only their display projection.
+const PROVIDERS_PER_PAGE = 16;
+const LABEL_CHARS = 256, HINT_CHARS = 2048, LINK_CHARS = 2048;
+const providerText = (value, max = LABEL_CHARS) => value.length > max ? `${value.slice(0, max - 1).replace(/[\uD800-\uDBFF]$/, '')}…` : value;
 const PAGE = { duration: 460, easing: 'cubic-bezier(0.32, 0.72, 0, 1)' };
 
 const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -17,16 +21,18 @@ const hostOf = url => { try { return new URL(url).host; } catch { return ''; } }
 // knows none by itself. A provider's section is drawn from what the backend says about it, in the same rows as ever:
 // a field for an API key, a row to sign in with an account.
 function keyRow(index, method) {
- const link = method.url && /^https:\/\//.test(method.url) ? ` <a href="${escapeHtml(method.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(hostOf(method.url))}</a>.` : '';
+ // Never shorten a clickable destination into a different URL. Oversized links stay in the backend data only.
+ const link = method.url.length > LINK_CHARS ? ` ${escapeHtml(I18n.t('settings.link.omitted'))}`
+  : method.url && /^https:\/\//.test(method.url) ? ` <a href="${escapeHtml(method.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(providerText(hostOf(method.url)))}</a>.` : '';
  return `
   <div class="settings-row">
    <div class="settings-text">
-    <label class="settings-label" for="settings-key-${index}">${escapeHtml(method.label || I18n.t('settings.key.label'))}</label>
-    <p class="settings-hint"><span>${escapeHtml(method.hint || '')}</span>${link}</p>
+    <label class="settings-label" for="settings-key-${index}">${escapeHtml(providerText(method.label || I18n.t('settings.key.label')))}</label>
+    <p class="settings-hint"><span>${escapeHtml(providerText(method.hint || '', HINT_CHARS))}</span>${link}</p>
    </div>
    <div class="settings-control">
     <div class="settings-key-box">
-     <input id="settings-key-${index}" class="settings-key" type="password" placeholder="${escapeHtml(method.placeholder || I18n.t('settings.key.label'))}" autocomplete="off" spellcheck="false">
+     <input id="settings-key-${index}" class="settings-key" type="password" placeholder="${escapeHtml(providerText(method.placeholder || I18n.t('settings.key.label')))}" autocomplete="off" spellcheck="false">
      <button type="button" class="settings-key-eye" aria-label="${escapeHtml(I18n.t('settings.key.show'))}" aria-pressed="false">${Glyphs.eye}</button>
     </div>
     <p class="settings-status" role="status"></p>
@@ -38,13 +44,13 @@ function accountRow(method) {
  return `
   <div class="settings-row">
    <div class="settings-text">
-    <span class="settings-label">${escapeHtml(method.label || '')}</span>
-    <p class="settings-hint">${escapeHtml(method.hint || '')}</p>
+    <span class="settings-label">${escapeHtml(providerText(method.label || ''))}</span>
+    <p class="settings-hint">${escapeHtml(providerText(method.hint || '', HINT_CHARS))}</p>
    </div>
    <div class="settings-control settings-account">
     <div class="settings-account-row">
      <span class="settings-account-who"></span>
-     <button type="button" class="settings-button is-primary" data-action="login">${escapeHtml(method.action || I18n.t('settings.account.login'))}</button>
+     <button type="button" class="settings-button is-primary" data-action="login">${escapeHtml(providerText(method.action || I18n.t('settings.account.login')))}</button>
      <button type="button" class="settings-button" data-action="cancel">${escapeHtml(I18n.t('settings.account.cancel'))}</button>
      <button type="button" class="settings-button" data-action="logout">${escapeHtml(I18n.t('settings.account.logout'))}</button>
     </div>
@@ -57,7 +63,7 @@ function section(index, name, rows) {
  return `
   <section class="provider" aria-labelledby="settings-provider-${index}">
    <header class="provider-head">
-    <h3 class="provider-name" id="settings-provider-${index}">${escapeHtml(name)}</h3>
+    <h3 class="provider-name" id="settings-provider-${index}">${escapeHtml(providerText(name))}</h3>
     <span class="provider-models"></span>
     <span class="provider-state"></span>
    </header>
@@ -109,6 +115,7 @@ class Settings {
   this.dialog = dialog;
   this.list = dialog.querySelector('.settings-providers');
   this.providers = [];
+  this.providerIndex = new Map();
   this.status = Object.create(null);
   this.authVersions = new Map();
   this.messages = new Map();
@@ -153,6 +160,7 @@ class Settings {
    this.timer = Object.create(null);
    this.typed = Object.create(null);
    this.providers = [];
+   this.providerIndex.clear();
    this.status = Object.create(null);
    this.build();
   });
@@ -269,14 +277,14 @@ class Settings {
   return this.connected(provider) && !this.status[provider]?.checking;
  }
 
- // A provider's name as the backend gives it, and the heading its models go under in the picker.
+ // Display labels only; full names, groups and opaque identities remain in this.providers.
  nameOf(provider) {
-  return this.providers.find(item => item.id === provider)?.name || provider;
+  return providerText(this.providerIndex.get(provider)?.name || provider);
  }
 
  groupOf(provider) {
-  const item = this.providers.find(entry => entry.id === provider);
-  return item?.group || item?.name || provider;
+  const item = this.providerIndex.get(provider);
+  return providerText(item?.group || item?.name || provider);
  }
 
  // The providers in the backend's order.
@@ -287,8 +295,8 @@ class Settings {
  // The picker offers the models the backend listed, in its providers' order. No model is known to the app by itself:
  // with none listed there is none, and the picker leads to the settings instead.
  collect() {
-  const order = this.order, rank = provider => { const at = order.indexOf(provider); return at < 0 ? order.length : at; };
-  this.models = this.models.slice().sort((a, b) => rank(a.provider) - rank(b.provider));
+  const order = new Map(this.order.map((provider, index) => [provider, index]));
+  this.models = this.models.slice().sort((a, b) => (order.get(a.provider) ?? order.size) - (order.get(b.provider) ?? order.size));
   this.paint();
  }
 
@@ -389,6 +397,7 @@ class Settings {
   if (check !== this.providerCheck || !Backend.available) return;
   if (Array.isArray(providers)) {
    this.providers = providersOf(providers);
+   this.providerIndex = new Map(this.providers.map(item => [item.id, item]));
    const status = Object.create(null), ids = new Set(this.order);
    for (const provider of this.providers) {
     const token = this.authVersions.get(provider.id);
@@ -430,13 +439,22 @@ class Settings {
  }
 
  build() {
-  const backend = Backend.available;
-  this.list.innerHTML = this.providers.map((provider, index) => section(index, provider.name, provider.methods.map(method =>
-   method.type === 'oauth' ? accountRow(method) : keyRow(index, method)).join(''))).join('')
-   || `<p class="settings-status" role="status" data-tone="${backend ? '' : 'error'}">${escapeHtml(backend ? I18n.t('settings.backend.empty') : Backend.explain(Backend.unavailable()).message)}</p>`;
+  const backend = Backend.available, total = this.providers.length;
+  this.providerPage = Math.max(0, Math.min(this.providerPage || 0, Math.ceil(total / PROVIDERS_PER_PAGE) - 1));
+  const start = this.providerPage * PROVIDERS_PER_PAGE, shown = this.providers.slice(start, start + PROVIDERS_PER_PAGE);
+  const navigation = total > PROVIDERS_PER_PAGE ? `<nav aria-label="${escapeHtml(I18n.t('settings.providers'))}">
+   <p>${escapeHtml(I18n.t('settings.providers.range', { start: start + 1, end: start + shown.length, total }))}</p>
+   <button type="button" class="settings-button settings-provider-prev"${start ? '' : ' disabled'}>${escapeHtml(I18n.t('settings.providers.prev'))}</button>
+   <button type="button" class="settings-button settings-provider-next"${start + shown.length < total ? '' : ' disabled'}>${escapeHtml(I18n.t('settings.providers.next'))}</button>
+  </nav>` : '';
+  this.list.innerHTML = navigation + (shown.map((provider, index) => section(start + index, provider.name, provider.methods.map(method =>
+   method.type === 'oauth' ? accountRow(method) : keyRow(start + index, method)).join(''))).join('')
+   || `<p class="settings-status" role="status" data-tone="${backend ? '' : 'error'}">${escapeHtml(backend ? I18n.t('settings.backend.empty') : Backend.explain(Backend.unavailable()).message)}</p>`);
+  this.list.querySelector('.settings-provider-prev')?.addEventListener('click', () => this.pageProviders(-1));
+  this.list.querySelector('.settings-provider-next')?.addEventListener('click', () => this.pageProviders(1));
   // IDs are opaque strings, not DOM IDs/selectors (even whitespace and NUL must round-trip).
   [...this.list.querySelectorAll('.provider')].forEach((node, index) => {
-   node.dataset.provider = this.providers[index].id;
+   node.dataset.provider = shown[index].id;
    for (const child of node.querySelectorAll('.settings-key, .settings-status, .settings-account')) child.dataset.provider = node.dataset.provider;
   });
   this.inputs = Object.create(null);
@@ -458,11 +476,18 @@ class Settings {
     else if (action === 'logout') this.auth('auth.logout', provider);
    });
   }
-  for (const provider of this.order) {
+  for (const { id: provider } of shown) {
    const message = this.messages.get(provider), error = this.status[provider]?.error;
    this.setStatus(provider, message?.text ?? error ?? '', message?.tone ?? (error ? 'error' : ''));
   }
   this.paint();
+ }
+
+ pageProviders(delta) {
+  this.providerPage += delta;
+  this.build();
+  const direction = delta > 0 ? 'next' : 'prev', button = this.list.querySelector(`.settings-provider-${direction}`);
+  (button?.disabled ? this.list.querySelector(`.settings-provider-${delta > 0 ? 'prev' : 'next'}`) : button)?.focus();
  }
 
  paint() {
@@ -482,7 +507,7 @@ class Settings {
    box.querySelector('.settings-account-who').textContent = status.waiting ? I18n.t('settings.account.waiting') : who;
   }
   for (const [provider, input] of Object.entries(this.inputs || {})) {
-   if (!input.value) input.placeholder = this.status[provider]?.keySaved ? I18n.t('settings.key.saved') : (this.providers.find(item => item.id === provider)?.methods || []).find(method => method.type === 'apiKey')?.placeholder || I18n.t('settings.key.label');
+   if (!input.value) input.placeholder = this.status[provider]?.keySaved ? I18n.t('settings.key.saved') : providerText((this.providers.find(item => item.id === provider)?.methods || []).find(method => method.type === 'apiKey')?.placeholder || I18n.t('settings.key.label'));
   }
  }
 
@@ -550,6 +575,8 @@ class Settings {
   else if (opening) this.page('general', true);
   if (!reason) return;
   const target = provider || this.providers[0]?.id || '';
+  const at = this.providers.findIndex(item => item.id === target), page = Math.floor(at / PROVIDERS_PER_PAGE);
+  if (at >= 0 && page !== this.providerPage) { this.providerPage = page; this.build(); }
   this.setStatus(target, reason, 'error');
   const field = this.accounts?.[target]?.querySelector('[data-action="login"]') || this.inputs?.[target];
   field?.scrollIntoView({ block: 'center' });

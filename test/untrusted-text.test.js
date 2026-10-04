@@ -107,6 +107,19 @@ test('an approval card shows a hostile tool name, arguments and presentation as 
  for (const hostile of HOSTILE) assert.ok(presented.el.textContent.includes(hostile));
 });
 
+test('approval fallback does not amplify nested JSON with indentation or hide argument suffixes', () => {
+ const { window } = page();
+ let nested = { script: `echo ${'x'.repeat(8192)}; important-final-command` };
+ for (let i = 0; i < 500; i++) nested = { child: nested };
+ const args = { nested, final: 'all arguments remain visible' }, original = JSON.stringify(args);
+ const info = window.ApprovalCard.present(null, 'custom_tool', args);
+ assert.equal(info.code, original, 'stock uses compact JSON; pretty printing adds quadratic whitespace');
+ assert.equal(JSON.stringify(args), original, 'presentation must not alter backend arguments');
+ const card = new window.ApprovalCard(info);
+ assert.equal([...card.el.walk()].find(node => node.className === 'approval-code').textContent, original);
+ assert.ok(card.el.textContent.includes('important-final-command'));
+});
+
 test('a hostile backend error and provider name are shown as text under the reply', () => {
  const { window, doc } = page();
  const chat = Object.assign(Object.create(window.Chat.prototype), { settings: { open() {} } });

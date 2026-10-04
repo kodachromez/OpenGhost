@@ -8,6 +8,8 @@ const PERIODS = [['today', 1], ['week', 7], ['month', 30], ['all', 0]];
 // A cycling chart palette in display order, not provider branding.
 const TONES = ['turquoise', 'lilac', 'orange', 'blue'];
 const CHART_DAYS = 30;
+// Stock had four fixed providers. Keep the backend's arbitrary provider list out of an unbounded DOM.
+const PROVIDERS_PER_PAGE = 16;
 const REFRESH = 60000;
 const COUNT_TIME = 700;
 const ENTER_TIME = 1400;
@@ -74,11 +76,27 @@ function resetText(at) {
  return I18n.t('usage.reset.at', { when });
 }
 
+// A bounded chart projection, not a filtered ledger: the remaining providers keep their entire share in Other.
+function chartParts(values, amount) {
+ const parts = [];
+ let rest = 0, count = 0;
+ for (const [index, provider] of ORDER.entries()) {
+  const tokens = amount(values[provider]);
+  if (!tokens) continue;
+  // Keep the same cohort in legends, individual days, period bars and tooltips, even on a sparse day.
+  if (index < PROVIDERS_PER_PAGE) parts.push({ provider, tokens });
+  else { rest += tokens; count++; }
+ }
+ if (count) parts.push({ provider: null, tokens: rest, count });
+ return parts;
+}
+const partName = part => part.count ? I18n.t('usage.otherProviders', { count: part.count }) : nameOf(part.provider);
+
 // A thin bar split between the providers in their colors, each as wide as its share.
 function split(totals) {
- const parts = ORDER.filter(provider => totals[provider]?.tokens);
+ const parts = chartParts(totals, item => item?.tokens || 0);
  if (!parts.length) return '<span class="usage-split is-empty"></span>';
- return `<span class="usage-split">${parts.map(provider => `<i class="t-${toneOf(provider)}" style="flex-grow:${totals[provider].tokens}"></i>`).join('')}</span>`;
+ return `<span class="usage-split">${parts.map(part => `<i class="t-${toneOf(part.provider)}" style="flex-grow:${part.tokens}"></i>`).join('')}</span>`;
 }
 
 // A limit window as a row: its name, a meter of how much is used, the share, and when it starts over.
@@ -122,6 +140,8 @@ class UsageSettings {
   root.addEventListener('click', event => {
    const nav = event.target.closest('.usage-nav');
    if (nav && !nav.disabled) this.step(Number(nav.dataset.step));
+   const providers = event.target.closest('.usage-provider-nav');
+   if (providers && !providers.disabled) this.pageProviders(Number(providers.dataset.step));
   });
  }
 
@@ -172,7 +192,8 @@ class UsageSettings {
  // What the backend knows of each connected account: plan, limits and balance.
  refresh() {
   if (!Backend.can('usage.limits')) { this.limits = Object.create(null); return; }
-  for (const provider of this.settings.order) {
+  // Only visible account sections need polling; paging asks for the next set without dropping retained data.
+  for (const provider of this.shownProviders || this.settings.order.slice(0, PROVIDERS_PER_PAGE)) {
    if (!this.connected(provider)) { delete this.limits[provider]; continue; }
    this.loadLimits(provider);
   }
@@ -195,13 +216,22 @@ class UsageSettings {
   const all = periods[periods.length - 1].totals;
   ORDER = [...new Set([...this.settings.order, ...Object.keys(all)])];
   const providers = ORDER.filter(provider => all[provider] || this.connected(provider));
+  this.providerPage = Math.max(0, Math.min(this.providerPage || 0, Math.ceil(providers.length / PROVIDERS_PER_PAGE) - 1));
+  const start = this.providerPage * PROVIDERS_PER_PAGE;
+  this.shownProviders = providers.slice(start, start + PROVIDERS_PER_PAGE);
+  const nav = (step, label, disabled) => `<button type="button" class="settings-button usage-provider-nav" data-step="${step}"${disabled ? ' disabled' : ''}>${escapeHtml(I18n.t(label))}</button>`;
+  const navigation = providers.length > PROVIDERS_PER_PAGE ? `<nav aria-label="${escapeHtml(I18n.t('settings.providers'))}">
+   <p>${escapeHtml(I18n.t('settings.providers.range', { start: start + 1, end: start + this.shownProviders.length, total: providers.length }))}</p>
+   ${nav(-1, 'settings.providers.prev', !start)}${nav(1, 'settings.providers.next', start + this.shownProviders.length >= providers.length)}
+  </nav>` : '';
   if (!this.scopes().includes(this.scope)) this.scope = '';
   const month = this.scope ? Usage.between(`${this.scope}-01`, `${this.scope}-31`) : null;
   this.root.innerHTML = `
    <p class="settings-lead">${escapeHtml(I18n.t('usage.lead'))}</p>
    ${this.summary(periods)}
-   ${providers.map(provider => month ? this.monthSection(provider, month[provider]) : this.section(provider, periods)).join('')}`;
-  for (const provider of providers) {
+   ${navigation}
+   ${this.shownProviders.map(provider => month ? this.monthSection(provider, month[provider]) : this.section(provider, periods)).join('')}`;
+  for (const provider of this.shownProviders) {
    this.paintLimits(provider, animate);
    this.paintBalance(provider);
   }
@@ -217,15 +247,23 @@ class UsageSettings {
   for (const el of this.root.querySelectorAll('.usage-period-value')) this.countUp(el, Number(el.dataset.value));
  }
 
+ pageProviders(delta) {
+  this.providerPage += delta;
+  this.render(false);
+  if (this.visible) this.refresh();
+  const button = this.root.querySelector(`.usage-provider-nav[data-step="${delta}"]`);
+  (button?.disabled ? this.root.querySelector(`.usage-provider-nav[data-step="${-delta}"]`) : button)?.focus();
+ }
+
  summary(periods) {
   const scope = this.scope, scopes = this.scopes(), at = scopes.indexOf(scope);
   const days = scope ? Usage.month(scope) : Usage.daily(CHART_DAYS), sums = days.map(day => Object.values(day.providers).reduce((sum, n) => sum + n, 0));
   const shown = scope ? Usage.between(`${scope}-01`, `${scope}-31`) : Usage.totals(CHART_DAYS);
   const top = Math.max(1, ...sums), since = Usage.since, total = sums.reduce((sum, n) => sum + n, 0);
   // The legend names the providers of the days on the chart, each with its share of them.
-  const legend = ORDER.filter(provider => shown[provider]?.tokens).map(provider => `<span class="usage-key t-${toneOf(provider)}"><i></i>${escapeHtml(nameOf(provider))}<b>${escapeHtml(compact(shown[provider].tokens))}</b></span>`).join('');
+  const legend = chartParts(shown, item => item?.tokens || 0).map(part => `<span class="usage-key t-${toneOf(part.provider)}"><i></i>${escapeHtml(partName(part))}<b>${escapeHtml(compact(part.tokens))}</b></span>`).join('');
   const columns = days.map((day, k) => {
-   const parts = ORDER.filter(provider => day.providers[provider]).map(provider => `<i class="t-${toneOf(provider)}" style="flex-grow:${day.providers[provider]}"></i>`).join('');
+   const parts = chartParts(day.providers, value => value || 0).map(part => `<i class="t-${toneOf(part.provider)}" style="flex-grow:${part.tokens}"></i>`).join('');
    const height = sums[k] ? Math.max(0.04, sums[k] / top) : 0;
    return `<span class="usage-day${sums[k] ? '' : ' is-empty'}" data-k="${k}" style="--h:${height.toFixed(3)};--k:${k}"><span class="usage-day-bar">${parts}</span></span>`;
   }).join('');
@@ -420,7 +458,7 @@ class UsageSettings {
  fillTip(k) {
   const tip = this.root.querySelector('.usage-tip'), day = this.days?.[k];
   if (!tip || !day) return;
-  const rows = ORDER.filter(provider => day.providers[provider]).map(provider => `<span class="usage-tip-row t-${toneOf(provider)}"><i></i>${escapeHtml(nameOf(provider))}<b>${escapeHtml(compact(day.providers[provider]))}</b></span>`).join('');
+  const rows = chartParts(day.providers, value => value || 0).map(part => `<span class="usage-tip-row t-${toneOf(part.provider)}"><i></i>${escapeHtml(partName(part))}<b>${escapeHtml(compact(part.tokens))}</b></span>`).join('');
   const date = new Intl.DateTimeFormat(I18n.lang, { weekday: 'short', month: 'short', day: 'numeric' }).format(dateOf(day.day));
   tip.innerHTML = `<span class="usage-tip-head">${escapeHtml(date)}</span><span class="usage-tip-total">${escapeHtml(this.sums[k] ? I18n.t('usage.tokens', { n: full(this.sums[k]) }) : I18n.t('usage.idle'))}</span>${rows}`;
  }

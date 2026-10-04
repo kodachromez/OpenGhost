@@ -72,6 +72,60 @@ test('pinned-file hint and rejection wording identify local limits, not model co
  assert.equal(general.message, 'The local pinned-file limit is 20 files.');
 });
 
+test('backend provider fan-out has bounded usage sections/charts, reachable pages and unchanged accounting', async () => {
+ const requests = [];
+ const window = load(['usage.js', 'settings-usage.js'], {
+  ChatStore: { read: async () => null, write: async () => {} },
+  MutationObserver: class { observe() {} }, CSS: { escape: value => value },
+  Backend: { can: () => true, request: async (method, params) => { requests.push({ method, params }); return null; } },
+ });
+ await window.Usage.ready;
+ const ids = Array.from({ length: 40 }, (_, i) => `provider-${i}`);
+ for (const provider of ids) window.Usage.record({ provider, model: 'm', input: 100, output: 20, requests: 1 });
+ await tick();
+ const before = JSON.stringify(window.Usage.totals(0));
+ const listeners = {}, tip = {};
+ const root = { addEventListener: (name, fn) => { listeners[name] = fn; }, querySelector: selector => selector === '.usage-tip' ? tip : null };
+ const settings = { order: ids, providers: ids.map(id => ({ id })), connected: () => true, nameOf: id => id };
+ const usage = new window.UsageSettings({ root, settings, dialog: {} });
+ usage.render(false);
+ assert.equal((root.innerHTML.match(/class="provider usage-provider/g) || []).length, 16);
+ assert.equal((root.innerHTML.match(/class="usage-key /g) || []).length, 17, '16 named providers and one Other group');
+ assert.match(root.innerHTML, /Providers 1–16 of 40/);
+ assert.match(root.innerHTML, /Other providers \(24\)/);
+ assert.match(root.innerHTML, /data-value="4800" title="4,800 tokens"/);
+ const splits = [...root.innerHTML.matchAll(/<span class="usage-split">([\s\S]*?)<\/span>/g)];
+ assert.equal(splits.length, 4);
+ for (const [, html] of splits) {
+  const shares = [...html.matchAll(/flex-grow:(\d+)/g)].map(match => Number(match[1]));
+  assert.equal(shares.length, 17);
+  assert.equal(shares.at(-1), 2880);
+  assert.equal(shares.reduce((a, b) => a + b, 0), 4800, 'Other retains omitted providers, not just visible-page totals');
+ }
+ assert.equal(usage.sums.at(-1), 4800);
+ usage.fillTip(usage.days.length - 1);
+ assert.equal((tip.innerHTML.match(/class="usage-tip-row /g) || []).length, 17);
+ assert.match(tip.innerHTML, /Other providers \(24\)/);
+ usage.visible = true;
+ const clickNext = () => listeners.click({ target: { closest: selector => selector === '.usage-provider-nav' ? { dataset: { step: '1' } } : null } });
+ clickNext();
+ assert.match(root.innerHTML, /Providers 17–32 of 40/);
+ assert.equal(requests.length, 16, 'only displayed accounts are polled');
+ assert.equal(requests[0].params.provider, 'provider-16');
+ clickNext();
+ assert.match(root.innerHTML, /Providers 33–40 of 40/);
+ assert.match(root.innerHTML, /data-provider="provider-39"/);
+ assert.equal((root.innerHTML.match(/class="provider usage-provider/g) || []).length, 8);
+ assert.equal(requests.length, 24);
+ assert.equal(JSON.stringify(window.Usage.totals(0)), before, 'paging and chart aggregation never rewrite the ledger');
+ assert.equal(settings.order.length, 40);
+ usage.days.at(-1).providers = { 'provider-39': 120 };
+ usage.fillTip(usage.days.length - 1);
+ assert.match(tip.innerHTML, /Other providers \(1\)/, 'sparse days use the same named/Other cohort as the legend');
+ assert.doesNotMatch(tip.innerHTML, /provider-39/);
+ await tick();
+});
+
 test('usage applies one generic palette to every provider while preserving reported totals, cache and model names', async () => {
  const window = load(['usage.js', 'settings-usage.js'], {
   ChatStore: { read: async () => null, write: async () => {} },

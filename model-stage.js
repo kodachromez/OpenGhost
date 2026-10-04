@@ -142,12 +142,17 @@ class ModelStage {
  // Models come grouped by provider, under a small label once there is more than one provider.
  build() {
   this.list.setAttribute('aria-label', I18n.t('model'));
-  const models = this.settings.models, providers = [...new Set(models.map(model => model.provider))];
+  // Backend provider counts are no longer fixed. Index once rather than scanning every model for every provider.
+  const providers = new Map();
+  for (const model of this.settings.models) {
+   if (!providers.has(model.provider)) providers.set(model.provider, []);
+   providers.get(model.provider).push(model);
+  }
   const slots = [];
   this.rows = [];
   this.groups = [];
-  for (const provider of providers) {
-   if (providers.length > 1) {
+  for (const [provider, models] of providers) {
+   if (providers.size > 1) {
     const label = document.createElement('div');
     label.className = 'model-group';
     label.dataset.provider = provider;
@@ -155,7 +160,7 @@ class ModelStage {
     this.groups.push(label);
     slots.push(slot(label));
    }
-   for (const model of models.filter(item => item.provider === provider)) {
+   for (const model of models) {
     const name = model.name || model.id, info = meta(model);
     const row = document.createElement('button');
     row.type = 'button';

@@ -164,7 +164,9 @@ ApprovalCard.present = (presentation, tool, args) => {
  const given = presentation && typeof presentation === 'object' ? presentation : null;
  if (!given) {
   let code = '';
-  try { code = JSON.stringify(args ?? {}, null, 2); } catch {}
+  // Match stock's compact fallback: indentation can expand a small nested payload quadratically.
+  // Keep every argument (including command suffixes), rather than truncating what the user approves.
+  try { code = JSON.stringify(args ?? {}); } catch {}
   return { kind: 'command', title: text(tool) || I18n.t('approve.command'), effect: 'run', places: [], code, reveal: 'command' };
  }
  return {

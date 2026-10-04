@@ -20,6 +20,8 @@ class Node {
  }
  addEventListener(name, fn) { this.listeners[name] = fn; }
  setAttribute() {}
+ focus() { this.focused = true; }
+ scrollIntoView() {}
  querySelectorAll(selector) {
   const selectors = selector.split(',').map(s => s.trim());
   const matches = node => selectors.some(s => {
@@ -54,6 +56,11 @@ class List extends Node {
    }
    return section;
   });
+  for (const [tag, direction] of html.matchAll(/<button[^>]*class="settings-button settings-provider-(prev|next)"[^>]*>/g)) {
+   const button = new Node(`settings-button settings-provider-${direction}`);
+   button.disabled = tag.includes(' disabled');
+   this.children.push(button);
+  }
  }
 }
 
@@ -122,6 +129,70 @@ test('API key placeholders are neutral unless supplied by the backend; saved-key
  }
  assert.equal(settings.inputs.p.placeholder, 'settings.key.label');
  assert.equal(settings.inputs.custom.placeholder, 'Backend "key"');
+});
+
+test('backend-only provider/auth copy is bounded at render time, without changing names, IDs or link destinations', async () => {
+ const huge = `${'x'.repeat(254)}😀${'<label>& '.repeat(1024)}`, url = `https://example.invalid/${'a'.repeat(4096)}/final`;
+ const catalog = [{ ...provider('opaque:id'), name: huge, group: huge, methods: [
+  { type: 'apiKey', label: huge, hint: huge, placeholder: huge, url },
+  { type: 'oauth', label: huge, hint: huge, action: huge },
+ ] }];
+ const original = JSON.stringify(catalog);
+ const { settings, list } = await page(catalog);
+ assert.ok(list.html.length < 16000, 'bound text before HTML escaping');
+ assert.ok(settings.nameOf('opaque:id').length <= 256);
+ assert.ok(settings.nameOf('opaque:id').endsWith('…'));
+ assert.equal(settings.nameOf('opaque:id'), `${'x'.repeat(254)}…`, 'do not split a surrogate pair at the display boundary');
+ assert.ok(settings.groupOf('opaque:id').length <= 256);
+ assert.ok(settings.inputs['opaque:id'].placeholder.length <= 256, 'paint must not restore the unlimited placeholder');
+ assert.match(list.html, /settings.link.omitted/);
+ assert.doesNotMatch(list.html, /href=/, 'a truncated URL must never become a different executable link');
+ assert.equal(settings.providers[0].name, huge);
+ assert.equal(settings.providers[0].group, huge);
+ assert.equal(settings.providers[0].methods[0].url, url);
+ assert.equal(settings.providers[0].methods[1].action, huge);
+ assert.equal(JSON.stringify(catalog), original);
+});
+
+test('large provider catalogs page the DOM, not backend identities, auth state or pending key edits', async () => {
+ const catalog = Array.from({ length: 40 }, (_, i) => provider(`p${i}`));
+ const { settings, list, next, type, debounce } = await page(catalog);
+ assert.equal(settings.providers.length, 40);
+ assert.equal(settings.order.length, 40);
+ assert.equal(list.querySelectorAll('.provider').length, 16);
+ assert.equal(list.querySelector('.settings-provider-prev').disabled, true);
+ type('p0', 'pending-key');
+ list.querySelector('.settings-provider-next').listeners.click();
+ assert.equal(settings.providerPage, 1);
+ assert.equal(list.querySelectorAll('.provider')[0].dataset.provider, 'p16');
+ assert.equal(list.querySelector('.settings-provider-next').focused, true);
+ assert.equal(settings.inputs.p0, undefined);
+ debounce();
+ const save = next('auth.setKey');
+ assert.equal(save.params.provider, 'p0');
+ assert.equal(save.params.key, 'pending-key');
+ save.resolve({ connected: false, error: 'still needs attention' });
+ await tick();
+ list.querySelector('.settings-provider-next').listeners.click();
+ assert.equal(list.querySelectorAll('.provider').length, 8);
+ assert.equal(list.querySelector('.settings-provider-next').disabled, true);
+ assert.equal(list.querySelector('.settings-provider-prev').focused, true);
+ assert.ok(settings.inputs.p39, 'the final provider remains reachable');
+ settings.pageProviders(-1);
+ settings.pageProviders(-1);
+ assert.equal(settings.inputs.p0.value, 'pending-key');
+ assert.equal(settings.statuses.p0[0].textContent, 'still needs attention');
+ settings.dialog.open = true;
+ settings.page = () => {};
+ settings.open('targeted error', 'p39');
+ assert.equal(settings.providerPage, 2, 'opening settings for an off-page provider selects its page');
+ assert.equal(settings.statuses.p39[0].textContent, 'targeted error');
+ const refresh = settings.refreshAll();
+ next('auth.providers').resolve([provider('remaining')]);
+ await refresh;
+ assert.equal(settings.providerPage, 0, 'a shrinking catalog cannot strand the current page');
+ assert.equal(list.querySelectorAll('.provider').length, 1);
+ assert.equal(list.querySelector('.settings-provider-next'), null);
 });
 
 test('overlapping key saves: latest success wins, including repeated key text; late errors are ignored', async () => {
