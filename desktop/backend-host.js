@@ -5,8 +5,8 @@
 // It reads no method, keeps none of the agent's state and never calls a model itself. With no backend configured it
 // says so, and the page shows that in the chat instead of answering.
 //
-// A backend is configured by OPENGHOST_BACKEND, either a path to an executable or a JSON array of the executable and its
-// arguments, or else by backend.json in the app's user data folder: { "command": ["/path/to/backend", "--abp"] }.
+// Trusted local code, not a sandboxed plugin. OPENGHOST_BACKEND or backend.json selects an executable, never a shell
+// command line. See docs/backend-interface.md for command syntax, precedence, inherited environment/cwd and portability.
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -63,27 +63,40 @@ function reap(sid) {
 }
 
 function parseCommand(value) {
- if (Array.isArray(value)) {
-  if (!value.length || !value.every(part => typeof part === 'string' && part)) throw new Error('A backend command is a list of strings');
-  return { file: value[0], args: value.slice(1) };
+ if (typeof value === 'string') {
+  const text = value.trim();
+  if (text.startsWith('[')) {
+   try { value = JSON.parse(text); }
+   catch { throw new Error('command contains malformed JSON; expected an array of strings'); }
+  } else value = [text];
  }
- if (typeof value !== 'string' || !value.trim()) return null;
- const text = value.trim();
- return text.startsWith('[') ? parseCommand(JSON.parse(text)) : { file: text, args: [] };
+ if (!Array.isArray(value) || !value.length) throw new Error('command must be an executable string or a nonempty array of strings');
+ const [file, ...args] = value;
+ if (typeof file !== 'string' || !file.trim() || file.includes('\0')) throw new Error('command executable must be a nonblank string without NUL characters');
+ if (args.some(arg => typeof arg !== 'string' || arg.includes('\0'))) throw new Error('command arguments must be strings without NUL characters (empty strings are allowed)');
+ return { file, args };
 }
 
-// Where the backend comes from: the environment first, then the user's backend.json. Null when none is configured.
+// Blank/unset environment falls back to the file; invalid nonblank configuration is an error, never a fallback.
+// Null means no environment override and no config file, not an invalid command.
 function configured({ env = process.env, userData = '' } = {}) {
- if (env.OPENGHOST_BACKEND) return parseCommand(env.OPENGHOST_BACKEND);
+ const override = env.OPENGHOST_BACKEND;
+ if (override !== undefined && !(typeof override === 'string' && !override.trim())) {
+  try { return parseCommand(override); }
+  catch (error) { throw new Error(`OPENGHOST_BACKEND: ${error.message}`); }
+ }
  if (!userData) return null;
- let saved;
  try {
-  saved = JSON.parse(fs.readFileSync(path.join(userData, 'backend.json'), 'utf8'));
+  const text = fs.readFileSync(path.join(userData, 'backend.json'), 'utf8');
+  let saved;
+  try { saved = JSON.parse(text); }
+  catch { throw new Error('invalid JSON; expected an object with a command field'); }
+  if (!saved || typeof saved !== 'object' || Array.isArray(saved)) throw new Error('expected an object with a command field');
+  return parseCommand(saved.command);
  } catch (error) {
   if (error.code === 'ENOENT') return null;
-  throw error;
+  throw new Error(`backend.json: ${error.message}`);
  }
- return parseCommand(saved?.command);
 }
 
 class BackendHost {
@@ -113,7 +126,8 @@ class BackendHost {
   if (!this.command || this.child) return this.status;
   let child;
   try {
-   child = spawn(this.command.file, this.command.args, { cwd: this.cwd, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, detached: POSIX });
+   // No shell or environment filtering: the configured backend runs with the app's user privileges and environment.
+   child = spawn(this.command.file, this.command.args, { cwd: this.cwd, shell: false, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, detached: POSIX });
   } catch (error) {
    this.setState({ state: 'error', error: error.message });
    return this.status;

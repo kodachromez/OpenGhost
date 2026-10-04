@@ -337,6 +337,8 @@ Existing transcripts are returned and re-saved wholesale, not projected to a dis
 
 **Recommendation:** document trusted-local-backend execution, supported command forms, inherited environment/cwd and platform differences; validate configuration consistently; preserve direct spawning and narrow IPC. Do not claim provider isolation means the configured executable is sandboxed. Windows/macOS spawning/cleanup were source-reviewed only, not run here.
 
+**Resolution (fixed):** Commands now consistently reject malformed/blank executables and invalid arguments while permitting empty arguments. Blank env overrides fall back to the file; invalid nonblank overrides fail with source-specific errors. Direct spawning remains shell-free. The [configuration/trust contract](../backend-interface.md#connecting-a-backend) documents literal syntax, PATH/relative-path/platform behavior, home cwd, full environment inheritance and trusted user-level execution—not sandboxing. IPC and provider policy are unchanged. Validation: `node --test test/backend-config.test.js test/backend-host.test.js` — 19 passed on Linux; Windows/macOS execution not tested.
+
 ## 3. Stale backend search and responsibility audit
 
 Searches covered tracked app JS/HTML, desktop code, package/lockfile, imports/script tags, and the built ASAR; historical docs/tests were distinguished from shipped behavior. No exhaustive third-party Chromium security audit is implied.

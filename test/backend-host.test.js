@@ -3,9 +3,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
-const { BackendHost, configured, parseCommand, sessionMembers } = require('../desktop/backend-host');
+const { BackendHost, sessionMembers } = require('../desktop/backend-host');
 
 const FIXTURE = path.join(__dirname, 'fixtures', 'scripted-backend.js');
 const quiet = { error() {} };
@@ -30,25 +29,6 @@ function host(extra = {}) {
  });
  return { backend, messages, statuses, next };
 }
-
-test('commands come from a path or a JSON array', () => {
- assert.deepEqual(parseCommand('/opt/ghosty'), { file: '/opt/ghosty', args: [] });
- assert.deepEqual(parseCommand('["/opt/ghosty", "--abp"]'), { file: '/opt/ghosty', args: ['--abp'] });
- assert.equal(parseCommand(''), null);
- assert.throws(() => parseCommand('[1]'));
-});
-
-test('the environment comes before backend.json, and neither means no backend', () => {
- const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'og-backend-'));
- try {
-  assert.equal(configured({ env: {}, userData: dir }), null);
-  fs.writeFileSync(path.join(dir, 'backend.json'), JSON.stringify({ command: ['/bin/b', '-x'] }));
-  assert.deepEqual(configured({ env: {}, userData: dir }), { file: '/bin/b', args: ['-x'] });
-  assert.deepEqual(configured({ env: { OPENGHOST_BACKEND: '/bin/a' }, userData: dir }), { file: '/bin/a', args: [] });
- } finally {
-  fs.rmSync(dir, { recursive: true, force: true });
- }
-});
 
 test('with no command the host reports none and sends nothing', () => {
  const backend = new BackendHost({ log: quiet });

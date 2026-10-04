@@ -261,7 +261,7 @@ function startBackend() {
   onMessage: message => toPage('backend:message', message),
   onStatus: status => toPage('backend:status', status),
  });
- if (error) backend.setState({ state: 'error', error: `backend.json: ${error}` });
+ if (error) backend.setState({ state: 'error', error });
  else backend.start();
 }
 

@@ -140,9 +140,12 @@ npm ci
 npm start
 ```
 
-`npm start` runs the app straight from the code. On this branch it needs a backend to answer: point
-`OPENGHOST_BACKEND` at one (`OPENGHOST_BACKEND='["/path/to/backend", "--abp"]' npm start`), or see
-[docs/backend-interface.md](docs/backend-interface.md). `npm test` runs the unit and boundary tests, and
+`npm start` runs the app straight from the code. On this branch it needs a **trusted local backend** to answer:
+set `OPENGHOST_BACKEND` to an executable path or JSON array (POSIX-shell example:
+`OPENGHOST_BACKEND='["/path/to/backend", "--abp"]' npm start`), not a shell command line. The backend is not sandboxed;
+it inherits the app's environment and starts in your home folder. See the
+[configuration and trust contract](docs/backend-interface.md#connecting-a-backend) for file configuration and platform details.
+`npm test` runs the unit and boundary tests, and
 `npm run test:e2e` runs the app headless against a scripted test backend. To make an installer, run the command for your system on that system:
 
 - Windows: `npm run dist` makes `dist/OpenGhost-<version>-Setup.exe`

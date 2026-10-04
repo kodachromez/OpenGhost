@@ -22,19 +22,58 @@ as far as this branch implements it. This document is what the frontend actually
 
 ## Connecting a backend
 
+### Configuration and command syntax
+
 The host starts a backend only when one is configured, in this order:
 
-1. `OPENGHOST_BACKEND`: a path to an executable, or a JSON array of the executable and its arguments,
-   for example `OPENGHOST_BACKEND='["/opt/ghosty/bin/ghosty", "abp"]' npm start`.
-2. `backend.json` in the app's user data folder (`~/.config/OpenGhost/` on Linux):
-   `{ "command": ["/opt/ghosty/bin/ghosty", "abp"] }`.
+1. A nonblank `OPENGHOST_BACKEND`: an executable string, or a JSON array of the executable and its arguments.
+   POSIX-shell example: `OPENGHOST_BACKEND='["/opt/ghosty/bin/ghosty", "abp"]' npm start`.
+2. `backend.json` in Electron's `app.getPath('userData')` (normally `~/.config/OpenGhost/` on Linux,
+   `~/Library/Application Support/OpenGhost/` on macOS, `%APPDATA%\OpenGhost\` on Windows):
+   `{ "command": ["/opt/ghosty/bin/ghosty", "abp"] }`. The `command` field accepts the same executable string or
+   array form; a JSON-encoded array string also works.
 
-With neither, nothing is started: the UI works, and chat/settings explain how to configure the backend. Spawn and
-configuration errors, initialization failures, and exit codes/signals are shown rather than a generic disconnected message.
+Unset, empty and whitespace-only environment values fall back to the file. A nonblank override wins even if the
+file is invalid; an invalid override reports `OPENGHOST_BACKEND: ...` and never falls back. A missing file means no
+backend. An existing file must be a JSON object with a valid `command`; missing/blank/wrong-type commands, malformed
+JSON and read failures report `backend.json: ...`, not “no backend”. With neither source, nothing is started: the UI
+works, and chat/settings explain how to configure the backend. Spawn errors, initialization failures, and exit
+codes/signals are shown too.
 
-The process starts in the user's home folder with the app's environment. **stdout carries protocol only**; logs go to
-stderr, which the host prints with a `[backend]` prefix. Non-JSON lines are dropped and logged. Parsed values reach the
-renderer RPC peer for envelope validation, so a malformed response with a matching ID can fail its call immediately.
+- A plain string is the **whole executable name/path**, with outer whitespace trimmed. Internal spaces are literal:
+  `/opt/My Backend/backend` works without embedded quotes; `/opt/backend --flag` names one executable, not a command
+  with an argument. Use an array for arguments.
+- Arrays must be nonempty. The first element must be a nonblank executable string; subsequent elements must be
+  strings, including valid empty arguments (`["/opt/backend", ""]`). Array elements retain all whitespace. Neither
+  executable nor arguments may contain NUL characters.
+- A trimmed string beginning `[` is parsed as a JSON array and must be valid JSON. For a literal executable name
+  beginning `[` (or with significant outer whitespace), use an array, e.g. `["[backend]"]`.
+- The host uses direct `spawn` with **no shell**: no word splitting, quote removal, tilde/variable expansion, globbing,
+  pipes, redirection or command substitution. Quotes, backslashes, `$HOME`, `~` and shell metacharacters are literal
+  after JSON decoding. JSON still requires its normal escaping (e.g. `["C:\\Tools\\backend.exe", "--abp"]`).
+- Bare names use the app's inherited `PATH`. Relative paths such as `./bin/backend` resolve from the **user's home
+  folder**, not the repository, app install folder, or `backend.json` directory. Prefer absolute executable paths for
+  portable launch behavior; desktop launches may inherit a different `PATH` from terminal launches. Paths, executable
+  formats and permissions follow the host OS. On Windows, `.cmd`/`.bat` files are not directly executable this way:
+  explicitly configure a suitable interpreter if needed. The host does not select a shell/interpreter automatically.
+  Choosing a shell explicitly is permitted trusted configuration; that shell's own interpretation then applies.
+
+### Trust and inherited process state
+
+**The configured backend is trusted local code, not a sandboxed plugin.** It runs with the app user's privileges,
+filesystem/network access and the **entire app process environment at spawn time**, including API keys, proxy settings,
+`PATH` and runtime injection variables (e.g. `NODE_OPTIONS`) if present. Nothing is scrubbed or allowlisted. Treat both
+configuration sources and the selected executable/interpreter as code you trust; no ownership/permission vetting or
+executable allowlist is imposed. Provider isolation and Ask/Auto/Full are not a backend sandbox or privilege boundary.
+The backend may also request the frontend's browser host tools; the renderer bridge cannot change its command.
+
+The app explicitly sets the process working directory to `os.homedir()`. A turn's `cwd` is protocol data and does not
+change the spawn directory; the backend decides how to use it. (A standalone `BackendHost` without `cwd` inherits the
+parent process cwd.) **stdout carries protocol only**; logs go to stderr, which the host prints with a `[backend]`
+prefix without secret redaction. Do not log credentials or other secrets.
+
+Non-JSON lines are dropped and logged. Parsed values reach the renderer RPC peer for envelope validation, so a malformed
+response with a matching ID can fail its call immediately.
 Lines are limited to 64 MiB of UTF-8 bytes, excluding LF but including whitespace/CR. Oversized input is discarded
 through its next newline before decoding or parsing. Outbound messages have the same limit; the host rejects sends
 that would exceed 64 MiB + 1 byte in Node's stdin write queue (including newlines). Accepted writes drain in order;
