@@ -336,9 +336,12 @@ as `> ` lines. `userContext` accompanies starts and retries; steering sends inpu
 
 The start response acknowledges acceptance, **not completion**. Return it within the request deadline; events may
 arrive before that response, but do not replace it. Stream through `turn.completed`. The `turnId` must be a nonempty
-string and must agree with an early `turn.started`. The backend must return the session incarnation in `sessionVersion`; the start path copies it when
-present, whereas `session.get` explicitly validates that it is a string. Do not rely on permissive response handling
-to omit version guards.
+string and must agree with an early `turn.started`. Every start acknowledgement must also return a nonempty string
+`sessionVersion`. For an existing-session start it must exactly match the requested incarnation; for a create-only
+start (`sessionVersion: null`) it identifies the newly created incarnation. The frontend validates both identities
+before adopting the returned version, and rejects acknowledgements if the local turn or incarnation changed while
+waiting. Missing, malformed or mismatched versions fail closed and require reconciliation, even if completion events
+arrived first; they never replace the current version or authorize an automatic resend.
 
 Before dispatching start/retry/steer, the frontend durably saves its chat index and display checkpoint with the relevant
 client IDs. Storage failure prevents dispatch. The backend must durably record accepted input and its display-event

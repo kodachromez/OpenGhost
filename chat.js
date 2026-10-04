@@ -909,8 +909,15 @@ class Chat {
   if (!Backend.available) throw Backend.unavailable();
   turn.dispatched = true; // After this point, failure is uncertain until recovery or turn.completed.
   const result = await Backend.request('turn.start', params, { signal: turn.controller.signal });
-  if (result?.sessionVersion) conv.sessionVersion = result.sessionVersion;
+  turn.controller.signal.throwIfAborted();
+  if (typeof result?.sessionVersion !== 'string' || !result.sessionVersion
+   || params.sessionVersion !== null && result.sessionVersion !== params.sessionVersion
+   || conv.sessionVersion !== params.sessionVersion || conv.turn !== turn) {
+   turn.invalidStart = true;
+   throw new BackendError({ code: 'invalid_turn', message: 'The backend did not identify a valid matching session version for the accepted turn.' });
+  }
   this.acknowledgeTurn(conv, turn, result);
+  conv.sessionVersion = result.sessionVersion;
   return turn.done;
  }
 
@@ -1322,8 +1329,8 @@ class Chat {
   }
   window.browserPanel?.drive(conv, false);
   if (turn.next) collapse(turn.next.el);
-  // Reconcile an uncertain outcome before Send or Retry, rather than implicitly starting again.
-  const uncertain = !turn.completed && (turn.dispatched || turn.remote);
+  // Reconcile an uncertain outcome before Send or Retry. Early completion cannot validate a bad start version.
+  const uncertain = turn.invalidStart || !turn.completed && (turn.dispatched || turn.remote);
   if (!uncertain) {
    for (const item of conv.messages) if (item.backendTurn === turn.id) delete item.pendingTurn;
   } else if (!turn.quiet) conv.reconciled = false;
