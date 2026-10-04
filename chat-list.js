@@ -491,21 +491,11 @@ class ChatList {
  remove(id) {
   const item = this.rows.get(id);
   clearTimeout(item.timer);
-  const done = () => {
-   this.chat.remove(id);
-   this.library.remove(id);
-  };
-  if (reducedMotion()) { done(); return; }
-  const row = item.row, height = row.offsetHeight;
-  row.__removing = true;
-  row.inert = true;
-  row.style.overflow = 'hidden';
-  if (this.hovered === row) this.hover(null);
-  row.animate([
-   { height: `${height}px`, opacity: 1, transform: 'none' },
+  const row = item.row;
+  return this.removeItem(row, [
+   { height: `${row.offsetHeight}px`, opacity: 1, transform: 'none' },
    { height: '0px', marginBottom: '0px', opacity: 0, transform: 'translateX(-10px)' },
-  ], REMOVE).finished.then(done, done);
-  this.wake(REMOVE.duration);
+  ], () => this.chat.remove(id));
  }
 
  askDeleteFolder(group) {
@@ -529,18 +519,39 @@ class ChatList {
 
  removeFolder(group) {
   clearTimeout(group.timer);
-  const done = () => this.chat.removeFolder(group.path, this.library.removeFolder(group.path));
-  if (reducedMotion()) { done(); return; }
   const section = group.section;
-  section.__removing = true;
-  section.inert = true;
-  section.style.overflow = 'hidden';
-  if (this.hovered && section.contains(this.hovered)) this.hover(null);
-  section.animate([
+  return this.removeItem(section, [
    { height: `${section.offsetHeight}px`, opacity: 1, transform: 'none' },
    { height: '0px', marginTop: '0px', opacity: 0, transform: 'translateX(-10px)' },
-  ], REMOVE).finished.then(done, done);
-  this.wake(REMOVE.duration);
+  ], () => this.chat.removeFolder(group.path));
+ }
+
+ async removeItem(node, frames, remove) {
+  // Serialize confirmations, including overlapping chat/folder deletions and the reduced-motion path.
+  if (this.deleting) return;
+  this.deleting = true;
+  node.__removing = true;
+  node.inert = true;
+  const overflow = node.style.overflow;
+  node.style.overflow = 'hidden';
+  if (this.hovered && node.contains(this.hovered)) this.hover(null);
+  let animation;
+  try {
+   if (!reducedMotion()) {
+    animation = node.animate(frames, REMOVE);
+    this.wake(REMOVE.duration);
+    await animation.finished.catch(() => {});
+   }
+   await remove();
+  } catch (error) {
+   animation?.cancel();
+   node.__removing = false;
+   node.inert = false;
+   node.style.overflow = overflow;
+   window.alert(Backend.explain(error).message);
+  } finally {
+   this.deleting = false;
+  }
  }
 
  hover(target) {

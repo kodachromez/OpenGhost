@@ -83,6 +83,8 @@ Single-chat deletion sends only the parent session ID, not `<id>:mini`; recursiv
 
 **Recommendation:** capture session IDs before index removal; specify parent/side deletion semantics, acknowledgement/error handling, and durable deletion intent. Do not make successful-looking local deletion imply backend erasure.
 
+**Resolution (chat/folder deletion):** deletion now snapshots child IDs and awaits exact parent/mini `session.delete` acknowledgements before removing each chat locally. Errors (including offline/unsupported deletion) restore the row/folder and display the failure for retry; unrelated sessions are untouched, overlapping deletes are serialized, and new work on a deleting chat is blocked. Partial folder failure retains failed/unattempted children. Focused regression coverage: `test/deletion.test.js`; idempotent exact-ID deletion contract: `docs/backend-interface.md`. Mini-chat Clear and durable offline deletion queues remain out of scope.
+
 ### F04 — HIGH: session persistence/reload has no reconciliation path
 
 **Evidence:** `chat.js:714–746,973–995,1093–1096,1189–1197`; `library.js:237–269`; `script.js:43–47`; `desktop/main.js:185–196`; interface “Not in this version”.

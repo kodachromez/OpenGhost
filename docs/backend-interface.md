@@ -142,6 +142,12 @@ type UserContext = { instructions: string, files: { id, name, size, kind: 'text'
 type BrowserState = { open: boolean, tabs: { n: number, title: string, url: string, active: boolean }[], signedIn: { host: string, at: number }[] }
 ```
 
+**Chat/folder deletion.** `session.delete` deletes only the exact `sessionId` and acknowledges after erasure; an absent
+session succeeds with `null` so retry is safe. The frontend explicitly deletes both `<chat id>` and `<chat id>:mini`,
+then removes that chat's local records. Folder deletion snapshots its children and commits each acknowledged chat;
+a failure preserves the failed/unattempted records and the folder, displays the error, and allows retry. Offline or
+unsupported deletion fails visibly rather than deleting locally. Mini-chat Clear is unchanged.
+
 **Model switch.** Picking another model in a chat with history sends `session.configure({ model, provider, thinking })`
 and shows it the way 1.3.0 showed its model-switch compaction: if the backend sends `compaction.started` /
 `compaction.completed` meanwhile, the line reads "Compacting the conversation for <new model>". If the request fails,

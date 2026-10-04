@@ -224,7 +224,7 @@ class Chat {
  // its own window; the chat shows that as it would its own compaction.
  switchModel(id) {
   const conv = this.active;
-  if (!conv?.record || conv.turn || id === this.modelOf(conv)) return;
+  if (!conv?.record || conv.turn || conv.deleting || id === this.modelOf(conv)) return;
   if (!this.hasHistory(conv) || !Backend.available) { this.setModel(id); return; }
   const turn = this.begin(conv, this.config(conv));
   turn.switch = this.modelOf(conv);
@@ -243,7 +243,7 @@ class Chat {
  // nothing is being written.
  get canCompact() {
   const conv = this.active;
-  return !!conv?.record && !conv.turn && !conv.locked && Backend.can('compaction.manual') && this.hasHistory(conv);
+  return !!conv?.record && !conv.turn && !conv.locked && !conv.deleting && Backend.can('compaction.manual') && this.hasHistory(conv);
  }
 
  // Whether the chat on screen has anything to count: a message in it, and no reply being written.
@@ -425,22 +425,40 @@ class Chat {
   return done;
  }
 
- remove(id) {
-  const conv = this.conversations.get(id), record = this.library.chat(id);
-  if (conv) {
-   this.abort(conv);
-   this.conversations.delete(id);
+ async remove(id) {
+  const record = this.library.chat(id);
+  if (!record) return;
+  if (!Backend.available) throw Backend.unavailable();
+  if (!Backend.can('sessions.delete')) throw new BackendError({ code: 'unsupported', message: 'The backend does not support deleting sessions.' });
+  // These IDs belong to the selected record, never the chat currently on screen. Delete is idempotent, including
+  // for a mini session that was never opened. Refuse an imported ID collision rather than erase another chat.
+  const sessionIds = [id, `${id}:mini`];
+  if (this.library.chat(sessionIds[1]) || (id.endsWith(':mini') && this.library.chat(id.slice(0, -5)))) {
+   throw new Error('Cannot delete: the mini session ID belongs to another chat.');
   }
-  if (record && Backend.can('sessions.delete')) Backend.request('session.delete', { sessionId: conv ? this.sessionOf(conv) : id }).catch(() => {});
+  const conv = this.conversations.get(id);
+  if (conv) conv.deleting = true;
+  try {
+   if (conv) this.abort(conv);
+   for (const sessionId of sessionIds) await Backend.request('session.delete', { sessionId });
+  } finally {
+   if (conv) conv.deleting = false;
+  }
+  this.conversations.delete(id);
   if (this.active?.id === id) {
    const folder = record && !this.library.isHome(record) && this.library.folders.find(item => samePath(item.path, record.folder));
    this.newChat(folder ? { path: folder.path, name: folder.name } : null);
   }
   conv?.list.remove();
+  this.library.remove(id);
  }
 
- removeFolder(path, ids) {
-  for (const id of ids) this.remove(id);
+ async removeFolder(path) {
+  const ids = this.library.inFolder({ path }).map(record => record.id);
+  // Commit each acknowledged deletion separately: a failed child and all unattempted children stay available to retry.
+  for (const id of ids) await this.remove(id);
+  if (this.library.inFolder({ path }).length) throw new Error('The folder changed during deletion. Please try again.');
+  this.library.removeFolder(path);
   const gone = folder => folder && samePath(folder.path, path);
   if (this.active && !this.active.record && gone(this.active.folder)) this.newChat(null);
   if (this.draft && gone(this.draft.folder)) this.draft.folder = null;
@@ -501,8 +519,9 @@ class Chat {
  }
 
  send(text, attachments = []) {
-  const conv = this.active, config = this.config(conv);
-  if (conv.locked) return false;
+  const conv = this.active;
+  if (conv.locked || conv.deleting) return false;
+  const config = this.config(conv);
   this.anchor = null;
   // With a backend but no model it offers, the settings say how to connect one. With no backend at all the message goes
   // into the chat, and the chat says no backend is connected.
@@ -1296,7 +1315,7 @@ class Chat {
  }
 
  retry(conv, view) {
-  if (conv.turn) return;
+  if (conv.turn || conv.deleting) return;
   const config = this.config(conv);
   if (Backend.available && !config.ready) {
    this.settings.open(I18n.t('settings.key.needed'), config.provider);
