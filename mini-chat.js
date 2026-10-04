@@ -164,6 +164,7 @@ class MiniChat {
 
  // Clearing asks twice, the way deleting a chat does: the first press opens the lid and turns it red for a moment.
  onClear() {
+  if (this.wiping) return;
   if (!this.armed) {
    this.armed = true;
    this.clearButton.setAttribute('armed', '');
@@ -186,13 +187,21 @@ class MiniChat {
 
  // The messages lift away together; then the mini chat is empty and says so again.
  async wipe() {
+  if (this.wiping) return;
+  this.wiping = true;
   const list = this.chat.active?.list;
   const leave = list?.childElementCount && !reducedMotion() ? list.animate([{ opacity: 1, transform: 'none' }, { opacity: 0, transform: 'translateY(-10px) scale(0.985)' }], WIPE) : null;
-  await leave?.finished.catch(() => {});
-  await this.chat.clear();
-  leave?.cancel();
-  this.sync();
-  this.input.focus();
+  try {
+   await Promise.all([leave?.finished.catch(() => {}), this.chat.clear()]);
+  } catch (error) {
+   leave?.cancel();
+   alert(Backend.explain(error).message);
+  } finally {
+   leave?.cancel();
+   this.wiping = false;
+   this.sync();
+   this.input.focus();
+  }
  }
 
  submit() {

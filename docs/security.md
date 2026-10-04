@@ -268,8 +268,9 @@ Ordinary display saves are best-effort. Page-exit flushes and waiting for alread
 prove every pending renderer change reached disk or survived power loss. Local file-removal errors can also be ignored.
 
 Full chat deletion awaits backend acknowledgements for both main and mini IDs before removing local records. Folder
-deletion commits acknowledged children individually and retains failures for retry. **Mini-chat Clear instead clears
-local display immediately and attempts backend deletion best-effort without awaiting success.** Acknowledgement is a
+deletion commits acknowledged children individually and retains failures for retry. **Mini-chat Clear awaits deletion
+of only the mini session before clearing its local display/cache; failures preserve the chat and surface an error.**
+The parent session is untouched. Acknowledgement is a
 backend claim, not verified secure erasure of backend files, backups, provider-held data or logs. Local removal is not
 secure disk wiping, and generated/project files are not recursively deleted.
 

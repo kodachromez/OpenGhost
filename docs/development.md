@@ -281,7 +281,7 @@ Saved chats reconcile through `session.get` and `sessions.recovery` before conti
 
 For recovery changes, test reload during a turn, events racing the snapshot, duplicate/late events, failed checkpoints, main/mini separation and terminal behavior. Test actual backend-restart durability against a compatible backend, not the in-memory fixture.
 
-`chat-lock.js`/`lock-ui.js` protect local titles and display caches only. They do not protect backend history, credentials, workspaces, browser state or standing context. Keep that scope explicit. Parent-chat deletion requires backend acknowledgements for both main and mini session IDs before removing local records; folder failures retain retryable children. Mini-chat Clear has different best-effort backend deletion behavior—inspect that path rather than assuming the parent semantics.
+`chat-lock.js`/`lock-ui.js` protect local titles and display caches only. They do not protect backend history, credentials, workspaces, browser state or standing context. Keep that scope explicit. Parent-chat deletion requires backend acknowledgements for both main and mini session IDs before removing local records; folder failures retain retryable children. Mini-chat Clear awaits deletion of only the mini session before resetting its local cache; errors preserve the chat and are shown to the user. Repeated Clear and close/reopen wait for the pending deletion; the parent is never cleared.
 
 ## Debugging backend startup, crashes and configuration
 

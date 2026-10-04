@@ -197,8 +197,9 @@ releases its own directory when empty; generated/user files are not recursively 
 
 Full chat deletion waits for `session.delete` acknowledgements for both main and mini IDs before removing local
 records. Offline/unsupported deletion fails visibly. Folder deletion commits children one at a time and keeps
-failed/unattempted records. **Mini-chat Clear is different:** it clears local display state and resets the version
-to create-only immediately; backend deletion is attempted only when advertised, without awaiting success.
+failed/unattempted records. **Mini-chat Clear deletes only the mini session:** it waits for backend acknowledgement
+before clearing local display state/cache and resetting the version to create-only. Failure preserves the mini chat
+and surfaces an error. Repeated Clear and close/reopen wait for the pending deletion; the parent remains untouched.
 
 ## 6. Starting turns, reload and recovery
 
@@ -470,9 +471,6 @@ Lifecycle in [`desktop/main.js`](../desktop/main.js) and [`desktop/backend-host.
 - **Delivery and side effects:** unacknowledged IPC writes, Stop before acceptance, reload during a reverse request
   and already-issued browser actions can have uncertain outcomes. Recovery/identity guards are not exactly-once
   transport or side-effect rollback.
-- **Mini-chat asymmetry:** Clear does not await backend deletion. Also, `SideChat.resume(conv, config)` currently
-  forwards only those two arguments, while `Chat.resume` requires a retry intent; the main-chat Retry path cannot
-  be assumed to work identically in mini chats. These are current implementation limitations, not promised behavior.
 - **Browser context:** [the ABP contract](backend-interface.md#host-tools) documents the full `BrowserState` emitted by
   `BrowserPanel.snapshot()`. Tab positions and submission hints are not stable targets or authentication authority;
   use stable tab/page identities as described in [Browser host-tool lifecycle](browser-host-tools.md).

@@ -119,7 +119,7 @@ Rendering goes through `StreamView` -> `Markdown`, then local `Diagram`, `Tex`, 
 - Stop aborts locally at once, denies pending approvals, cancels browser steps/waits, and requests `turn.cancel` when the remote ID is known. Late text/tools/completion must not revive the turn.
 - Inputs sent during a normal turn use serialized `turn.steer` calls in user input order, even if attachments finish in another order. RPC acceptance is not the placement event: `input.accepted` moves the bubble into the reply. Rejected/unconfirmed inputs stay visible with an error and are not automatically resent.
 - Inputs during manual compaction or a model switch wait, then are combined in order into a new `turn.start` input. This is not ordinary steering.
-- Main-chat Retry before dispatch can reuse the original input/preparation context held in memory. After an uncertain dispatch it must reconcile first. An accepted failed turn is retried with `turn.retry` naming the exact `failedTurnId` and matching session incarnation. Respect `retryable: false`, `action: 'none'`, and invalid-request errors.
+- Main/mini-chat Retry before dispatch can reuse the original input/preparation context held in memory. After an uncertain dispatch it must reconcile first. An accepted failed turn is retried with `turn.retry` naming the exact `failedTurnId` and matching session incarnation. Respect `retryable: false`, `action: 'none'`, and invalid-request errors.
 - Manual compaction requires `compaction.manual` and a recovered, idle chat with history. `session.compact` and model-switch `session.configure` carry a client operation identity for their compaction/usage events. The backend decides what to summarize and whether switching requires compaction.
 
 ## Persistence, recovery, locking, and deletion
@@ -166,7 +166,7 @@ This protects the **local view/display cache only**. It does not encrypt backend
 
 Folder deletion commits each acknowledged child separately; failed/unattempted children and the folder remain retryable. `ChatList.removeItem` serializes confirmations and restores UI on error. Removing a project grouping does not recursively delete the user's project. A home workspace is released only when empty and underneath the designated Chats directory.
 
-Mini-chat Clear is a different path: `SideChat.clear` clears its local view/cache and requests backend deletion best-effort when supported. Do not assume it has the parent-chat deletion acknowledgement semantics.
+Mini-chat Clear deletes only `<chat id>:mini`, never the parent. `SideChat.clear` requires backend availability and `sessions.delete`, blocks new work and shares an in-flight deletion. It waits for recovery/turn cleanup and the deletion acknowledgement before resetting local state/cache to a new incarnation. Failure preserves the mini chat and is shown by `MiniChat.wipe`, which restores its animation; close/reopen waits for pending Clear.
 
 ## Model, provider, and authentication UI
 
@@ -298,7 +298,7 @@ For code changes, run the relevant focused tests while iterating and `npm test` 
 | Session recovery/checkpoints/retry/steering | `session-recovery.test.js`, `retry-steering.test.js` |
 | Correlation/sequence/terminal behavior | `event-ordering.test.js`, `turn-identity.test.js`, `cancellation.test.js` |
 | Display allowlist, saved records, local locks | `legacy-display.test.js`, `lock-ui.test.js`, `session-recovery.test.js` |
-| Chat/folder deletion | `deletion.test.js` |
+| Chat/folder deletion and mini Clear | `deletion.test.js`, `mini-chat-clear.test.js` |
 | Model metadata/canonical configuration | `model-capabilities.test.js` |
 | Dynamic providers/auth races/opaque IDs | `provider-auth.test.js` |
 | Browser targeting/readiness/input/read continuation | `browser-lifecycle.test.js`, `cancellation.test.js`, `turn-identity.test.js`, plus `e2e/browser-lifecycle.mjs` |

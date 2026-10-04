@@ -223,7 +223,7 @@ implementations should send booleans):
 |---|---|
 | `auth.providers` | Reads `auth.providers` for provider settings. Without it there are no provider connection rows. |
 | `compaction.manual` | Offers manual compaction for an idle, reconciled chat with history. |
-| `sessions.delete` | Enables backend deletion for chat/folder deletion and the best-effort mini-chat Clear request. |
+| `sessions.delete` | Required for acknowledged chat/folder deletion and mini-chat Clear. |
 | `sessions.recovery` | Required for starting/retrying turns and continuing saved sessions through `session.get`. Without it chats are display-only. |
 | `usage.limits` | Reads `account.limits` for connected providers in Settings → Usage. |
 
@@ -357,7 +357,7 @@ turn.retry({
 }) → { turnId: string }
 ```
 
-Main-chat Retry distinguishes three cases:
+Main-chat and mini-chat Retry distinguish three cases:
 
 1. **Never dispatched:** an offline, input-preparation or checkpoint failure retains the original full input/preparation
    context in memory. An explicit retry sends `turn.start`, not `turn.retry`; display attachment previews are never
@@ -372,9 +372,9 @@ Retry requires retained context and an unchanged session incarnation. `retryable
 `invalid_request` and `invalid_params` suppress the turn-error Retry action. The separate reconciliation notice offers
 a recovery Retry that calls `session.get`.
 
-**Current mini-chat limitation:** reconciliation uses the same `session.get` path, but `SideChat.resume` does not forward
-the retry intent to `Chat.resume`. Once reconciled, the mini-chat Retry action does not dispatch a replacement
-`turn.start`/`turn.retry`. Backend implementers must not assume that this UI path sends a retry request.
+`SideChat.resume` forwards the same retry intent to `Chat.resume`: reconciled mini-chat Retry dispatches
+`turn.start` for retained undelivered input or `turn.retry` for an accepted failure, using `<chat id>:mini` and the
+same session/turn identity checks. The parent session is not retried.
 
 ### Steering
 
@@ -519,10 +519,11 @@ that chat's local records. Folder deletion snapshots its children and commits ea
 failed/unattempted records and the folder, shows the error and permits retry. Offline/unsupported deletion fails
 visibly rather than silently removing those records.
 
-**Mini-chat Clear is different:** it stops the local turn, sends `session.delete` only when `sessions.delete` is set,
-and clears the local mini-chat cache immediately without awaiting acknowledgment; RPC failures are ignored. It resets
-the local version to `null`. If backend deletion did not complete, a following create-only start must conflict rather
-than overwrite the backend session. Clear is not an acknowledged backend-erasure guarantee.
+**Mini-chat Clear deletes only `<chat id>:mini`, never the parent.** It requires backend availability and
+`sessions.delete`, blocks new work, settles recovery/stopped-turn saves, and awaits `session.delete` before wiping
+local messages/cache. Repeated Clear shares the pending deletion; close/reopen also waits for it. Failure (including
+offline, unsupported deletion or timeout) keeps the mini chat and shows the error, restoring the Clear animation.
+Only success resets the version to `null` and clears the old sequence/accounting state for a new create-only start.
 
 ## Sequencing, event identity and rendering
 
@@ -816,7 +817,7 @@ The implementing sources and focused existing tests are:
 |---|---|---|
 | Envelopes, negotiation, deadlines, client lifetime | `backend-protocol.js`, `backend-client.js`, `desktop/preload.js` | `test/backend-envelope.test.js`, `test/backend-client.test.js`, `test/backend-lifecycle.test.js` |
 | Process configuration and transport | `desktop/backend-host.js`, `desktop/main.js` | `test/backend-config.test.js`, `test/backend-host.test.js`, `test/backend-transport.test.js` |
-| Turns, recovery, ordering, deletion | `chat.js`, `library.js` | `test/session-recovery.test.js`, `test/retry-steering.test.js`, `test/event-ordering.test.js`, `test/turn-identity.test.js`, `test/deletion.test.js` |
+| Turns, recovery, ordering, deletion | `chat.js`, `library.js` | `test/session-recovery.test.js`, `test/retry-steering.test.js`, `test/event-ordering.test.js`, `test/turn-identity.test.js`, `test/deletion.test.js`, `test/mini-chat-clear.test.js` |
 | Catalog, auth, accounting | `settings.js`, `settings-usage.js`, `usage.js` | `test/provider-auth.test.js`, `test/model-capabilities.test.js`, `test/usage.test.js` |
 | Reverse requests and display/input boundary | `approval-card.js`, `host-tools.js`, `browser-panel.js`, `desktop/browser.js`, `attachment-reader.js`, `user-context.js` | `test/cancellation.test.js`, `test/browser-lifecycle.test.js`, `test/legacy-display.test.js`, `test/lock-ui.test.js`, `test/untrusted-text.test.js` |
 

@@ -26,7 +26,7 @@ function node() {
   },
  };
 }
-async function setup(t) {
+async function setup(t, mini = false) {
  const transport = fakeTransport();
  const window = vm.createContext({
   console, setTimeout, clearTimeout, DOMException, AbortController, navigator: { language: 'en' },
@@ -42,7 +42,8 @@ async function setup(t) {
  t.after(() => Backend.close({ state: 'exited' }));
  const config = { id: 'm', model: 'm', ready: true }, record = { id: 'S' };
  const conv = { id: 'S', record, messages: [], list: node(), reconciled: true, sessionVersion: 'V', tokens: 0 };
- const chat = Object.create(window.Chat.prototype), saves = [];
+ window.Chat.prototype.sessionParams = async () => ({ model: 'm', userContext: { instructions: 'context' } });
+ const chat = Object.create((mini ? window.SideChat : window.Chat).prototype), saves = [];
  Object.assign(chat, {
   active: conv, nodes: new Map(), config: () => config,
   library: { chat: () => record, saveMessages: (_id, messages) => saves.push(clone(messages)), update() {} },
@@ -50,8 +51,10 @@ async function setup(t) {
   checkpoint: async () => { saves.push(clone(conv.messages)); },
   assistantMessage: () => ({ el: { ...node(), isConnected: false }, stream: { push() {}, finish: async () => {} } }),
   userMessage: node, toolbar: node, restore() {}, dismissGhost() {}, showGhost() {},
-  onChange() {}, followBottom() {}, sessionParams: async () => ({ model: 'm', userContext: { instructions: 'context' } }),
+  onChange() {}, followBottom() {},
+  origin: { id: 'S', record }, state: { seen: 0 },
  });
+ const sessionId = chat.sessionOf(conv);
  const calls = method => transport.sent.filter(call => call.method === method);
  const reply = (method, result, error) => {
   const call = calls(method).at(-1);
@@ -60,7 +63,7 @@ async function setup(t) {
   return call;
  };
  let seq = 0;
- const event = (method, params = {}) => chat.onEvent(conv, method, { sessionId: 'S', turnId: conv.turn?.remote, seq: ++seq, ...params });
+ const event = (method, params = {}) => chat.onEvent(conv, method, { sessionId, turnId: conv.turn?.remote, seq: ++seq, ...params });
  const run = (prompt = { text: 'original', attachments: [] }) => {
   const done = chat.run(conv, prompt, config);
   const turn = conv.turn;
@@ -78,11 +81,14 @@ async function setup(t) {
   await tick();
  };
  const ready = () => { Backend.state = 'ready'; Backend.capabilities = { sessions: { recovery: true } }; };
- return { chat, conv, Backend, transport, calls, reply, event, run, start, finish, ready, saves };
+ return { chat, conv, Backend, transport, calls, reply, event, run, start, finish, ready, saves, sessionId };
 }
 
-for (const reason of ['unavailable', 'preparation', 'checkpoint']) test(`Retry of a known-undelivered ${reason} failure starts the original input, not history`, async t => {
- const f = await setup(t), attachment = deferred();
+for (const mini of [false, true]) {
+const label = mini ? 'Mini-chat' : 'Main-chat';
+for (const reason of ['unavailable', 'preparation', 'checkpoint']) test(`${label} Retry of a known-undelivered ${reason} failure starts the original input, not history`, async t => {
+ const f = await setup(t, mini), attachment = deferred();
+ const version = f.conv.sessionVersion = mini ? null : 'V';
  const prompt = { text: 'keep my intent', attachments: [{ name: 'note.txt', ready: attachment.promise }] };
  if (reason === 'unavailable') f.Backend.close({ state: 'none' });
  const checkpoint = f.chat.checkpoint;
@@ -105,6 +111,9 @@ for (const reason of ['unavailable', 'preparation', 'checkpoint']) test(`Retry o
  assert.equal(call.params.input.attachments[0].text, 'full attachment, not display preview');
  assert.equal(call.params.userContext.instructions, 'context');
  assert.notEqual(call.params.clientTurnId, turn.id);
+ assert.equal(call.params.sessionId, f.sessionId);
+ assert.equal(call.params.sessionVersion, version);
+ if (mini) assert.deepEqual(call.params.side, { parent: 'S', parentBusy: false, moved: false });
  assert.equal(f.calls('turn.retry').length, 0);
  assert.equal(f.conv.messages.filter(entry => entry.role === 'user').length, 1);
  f.reply('turn.start', { turnId: 'T', sessionVersion: 'V' });
@@ -112,8 +121,8 @@ for (const reason of ['unavailable', 'preparation', 'checkpoint']) test(`Retry o
  await f.finish();
 });
 
-test('Retry of an accepted failed turn names that exact turn and keeps the target across an undelivered retry', async t => {
- const f = await setup(t), { view } = await f.start();
+test(`${label} Retry of an accepted failed turn names that exact turn and keeps the target across an undelivered retry`, async t => {
+ const f = await setup(t, mini), { turn, view } = await f.start();
  f.event('message.started', { messageId: 'partial' });
  f.event('message.delta', { messageId: 'partial', text: 'already produced output' });
  await f.finish({ code: 'network', message: 'provider failed' });
@@ -127,7 +136,9 @@ test('Retry of an accepted failed turn names that exact turn and keeps the targe
  await tick();
  const params = f.calls('turn.retry')[0].params;
  assert.equal(params.failedTurnId, 'T');
- assert.equal(params.sessionId, 'S');
+ assert.equal(params.sessionId, f.sessionId);
+ assert.notEqual(params.clientTurnId, turn.id);
+ if (mini) assert.deepEqual(params.side, { parent: 'S', parentBusy: false, moved: false });
  assert.equal(params.sessionVersion, 'V');
  assert.equal('input' in params, false);
  assert.ok(params.clientTurnId);
@@ -137,8 +148,8 @@ test('Retry of an accepted failed turn names that exact turn and keeps the targe
  await f.finish();
 });
 
-test('lost start response recovers by its saved client identity; Retry never blindly resends', async t => {
- const f = await setup(t), { turn, view, done } = f.run();
+test(`${label} lost start response recovers by its saved client identity; Retry never blindly resends`, async t => {
+ const f = await setup(t, mini), { turn, view, done } = f.run();
  await tick();
  f.Backend.close({ state: 'exited' });
  await done;
@@ -149,9 +160,10 @@ test('lost start response recovers by its saved client identity; Retry never bli
  f.chat.retry(f.conv, view);
  await tick();
  assert.equal(f.calls('session.get')[0].params.clientTurnId, turn.id);
+ assert.equal(f.calls('session.get')[0].params.sessionId, f.sessionId);
  f.reply('session.get', { exists: true, sessionVersion: 'V', revision: 1, turn: {
   clientTurnId: turn.id, turnId: 'ACCEPTED', input: { text: 'original', attachments: [] },
-  events: [{ method: 'turn.completed', params: { sessionId: 'S', turnId: 'ACCEPTED', seq: 1, status: 'error', error: { message: 'failed after acceptance' } } }],
+  events: [{ method: 'turn.completed', params: { sessionId: f.sessionId, turnId: 'ACCEPTED', seq: 1, status: 'error', error: { message: 'failed after acceptance' } } }],
  } });
  await tick();
  assert.equal(f.calls('turn.start').length, 1);
@@ -161,14 +173,20 @@ test('lost start response recovers by its saved client identity; Retry never bli
  const action = f.conv.list.querySelector('.message-actions').children.find(item => item.textContent === 'chat.retry');
  action.click();
  await tick();
- assert.equal(f.calls('turn.retry')[0].params.failedTurnId, 'ACCEPTED');
+ const params = f.calls('turn.retry')[0].params;
+ assert.equal(params.failedTurnId, 'ACCEPTED');
+ assert.equal(params.sessionId, f.sessionId);
+ assert.equal(params.sessionVersion, 'V');
+ assert.ok(params.clientTurnId);
+ assert.notEqual(params.clientTurnId, turn.id);
+ assert.equal('input' in params, false);
  f.reply('turn.retry', { turnId: 'T2' });
  await tick();
  await f.finish();
 });
 
-test('invalid start acknowledgement and missing backend history fail closed rather than guessing a retry', async t => {
- const f = await setup(t), { view, done } = f.run();
+test(`${label} invalid start acknowledgement and missing backend history fail closed rather than guessing a retry`, async t => {
+ const f = await setup(t, mini), { view, done } = f.run();
  await tick();
  f.reply('turn.start', {});
  await done;
@@ -184,8 +202,8 @@ test('invalid start acknowledgement and missing backend history fail closed rath
  assert.equal(f.calls('turn.retry').length, 0);
 });
 
-test('Retry requires context and matching session incarnation and honors explicit no-retry errors', async t => {
- const f = await setup(t);
+test(`${label} Retry requires context and matching session incarnation and honors explicit no-retry errors`, async t => {
+ const f = await setup(t, mini);
  for (const error of [{ retryable: false }, { action: 'none' }, { code: 'invalid_params' }, { code: 'invalid_request' }]) {
   const view = { el: node(), retryIntent: { failedTurnId: 'T' }, retryVersion: 'V' };
   f.chat.fail(f.conv, view, error);
@@ -198,6 +216,8 @@ test('Retry requires context and matching session incarnation and honors explici
  assert.equal(f.calls('turn.retry').length, 0);
  assert.equal(f.calls('turn.start').length, 0);
 });
+
+}
 
 for (const error of [false, true]) test(`steering ${error ? 'RPC error' : 'accepted:false'} is visible and not silently retried`, async t => {
  const f = await setup(t), { turn } = await f.start();

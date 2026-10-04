@@ -1778,7 +1778,7 @@ class SideChat extends Chat {
 
  send(text, attachments = []) {
   const conv = this.active;
-  if (!conv?.record) return false;
+  if (!conv?.record || conv.deleting) return false;
   if (conv.turn) return super.send(text, attachments);
   const mark = this.behind ? { role: 'moved' } : null, seen = this.state.seen;
   if (mark) {
@@ -1817,36 +1817,56 @@ class SideChat extends Chat {
   return this.driving = super.run(conv, prompt, config, bubble);
  }
 
- resume(conv, config) {
-  return this.driving = super.resume(conv, config);
+ resume(conv, config, intent) {
+  return this.driving = super.resume(conv, config, intent);
+ }
+
+ reconcile(conv) {
+  if (conv.deleting) return conv.recovering || Promise.resolve();
+  return super.reconcile(conv);
  }
 
  recoverTurn(conv, snapshot) {
   return this.driving = super.recoverTurn(conv, snapshot);
  }
 
- // Resolves once no reply is being written here and what the last one wrote is on its way to the disk.
+ // A reopened mini chat must wait for both the last reply's saves and any pending Clear.
  idle() {
-  return Promise.resolve(this.driving).catch(() => {});
+  return Promise.allSettled([this.driving, this.clearing]);
  }
 
- // Starts the mini chat over: its messages go, from the screen and from the disk.
+ // Delete only the mini session, then reset its view/cache. A failed delete keeps the chat intact.
  clear() {
+  if (this.clearing) return this.clearing;
   const conv = this.active;
   if (!conv?.record) return Promise.resolve();
-  this.abort(conv);
-  if (Backend.can('sessions.delete')) Backend.request('session.delete', { sessionId: this.sessionOf(conv) }).catch(() => {});
-  conv.messages = [];
-  conv.tokens = 0;
-  conv.sessionVersion = null; // Clear explicitly starts over; the backend still enforces create-only acceptance.
-  conv.revision = undefined;
-  this.state.seen = 0;
-  this.waiting = null;
-  conv.list.replaceChildren();
-  this.main.classList.add('is-empty');
-  this.syncBottom();
-  this.onChange();
-  return this.library.clear(conv.id);
+  conv.deleting = true;
+  this.clearing = (async () => {
+   if (!Backend.available) throw Backend.unavailable();
+   if (!Backend.can('sessions.delete')) throw new BackendError({ code: 'unsupported', message: 'The backend does not support deleting sessions.' });
+   await conv.recovering;
+   this.abort(conv);
+   await Promise.resolve(this.driving).catch(() => {});
+   await Backend.request('session.delete', { sessionId: this.sessionOf(conv) });
+   conv.messages = [];
+   conv.tokens = 0;
+   conv.sessionVersion = null; // The next turn explicitly creates a new incarnation.
+   conv.reconciled = true;
+   conv.revision = conv.eventSeq = undefined;
+   conv.eventTurns = [];
+   conv.recoveryNotice = null;
+   this.state.seen = 0;
+   this.waiting = null;
+   conv.list.replaceChildren();
+   this.main.classList.add('is-empty');
+   this.syncBottom();
+   this.onChange();
+   await this.library.clear(conv.id);
+  })().finally(() => {
+   conv.deleting = false;
+   this.clearing = null;
+  });
+  return this.clearing;
  }
 }
 

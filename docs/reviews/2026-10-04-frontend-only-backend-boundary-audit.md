@@ -83,7 +83,9 @@ Single-chat deletion sends only the parent session ID, not `<id>:mini`; recursiv
 
 **Recommendation:** capture session IDs before index removal; specify parent/side deletion semantics, acknowledgement/error handling, and durable deletion intent. Do not make successful-looking local deletion imply backend erasure.
 
-**Resolution (chat/folder deletion):** deletion now snapshots child IDs and awaits exact parent/mini `session.delete` acknowledgements before removing each chat locally. Errors (including offline/unsupported deletion) restore the row/folder and display the failure for retry; unrelated sessions are untouched, overlapping deletes are serialized, and new work on a deleting chat is blocked. Partial folder failure retains failed/unattempted children. Focused regression coverage: `test/deletion.test.js`; idempotent exact-ID deletion contract: `docs/backend-interface.md`. Mini-chat Clear and durable offline deletion queues remain out of scope.
+**Resolution (chat/folder deletion):** deletion now snapshots child IDs and awaits exact parent/mini `session.delete` acknowledgements before removing each chat locally. Errors (including offline/unsupported deletion) restore the row/folder and display the failure for retry; unrelated sessions are untouched, overlapping deletes are serialized, and new work on a deleting chat is blocked. Partial folder failure retains failed/unattempted children. Focused regression coverage: `test/deletion.test.js`; idempotent exact-ID deletion contract: `docs/backend-interface.md`. Durable offline deletion queues remain out of scope.
+
+**Follow-up resolution (mini-chat Clear):** `SideChat.clear` no longer deletes best-effort and wipes immediately. It awaits only `<id>:mini` deletion before resetting the local view/cache, preserving the parent. Failed/offline/unsupported/timed-out deletes keep the mini chat and show the error; the animation is restored. Clear is single-flight, blocks new work, drains existing recovery/turn saves, and participates in close/reopen settling. `test/mini-chat-clear.test.js` covers acknowledgement ordering, failures/retry, duplicate confirmations, parent isolation and fresh-incarnation continuation. Main-chat/folder deletion is unchanged.
 
 ### F04 — HIGH: session persistence/reload has no reconciliation path
 
@@ -213,6 +215,10 @@ Approvals are generic enough to name unknown tools and display JSON fallback arg
 **Recommendation:** distinguish retry-start from retry-accepted-turn; correlate retries explicitly and define idempotency. Honor steering acceptance/errors and preserve input order. Abort/drain pending steering work when its turn ends.
 
 **Resolution:** Retry now preserves undelivered input, targets accepted failures by `failedTurnId`, and reconciles uncertain dispatches without resending; missing identity/context and explicit no-retry errors fail closed. Steering is serialized, reports rejection/errors, and aborts/drains on turn end with unconfirmed inputs visibly retained. Contract: `docs/backend-interface.md`; focused regressions: `test/retry-steering.test.js` plus session-recovery coverage. Approval/mode behavior is unchanged.
+
+**Follow-up resolution (mini-chat Retry):** `SideChat.resume` had dropped the retry-intent argument, making the reconciled Retry action a no-op. It now forwards that intent unchanged to `Chat.resume`. Main/mini variants in `test/retry-steering.test.js` cover undelivered `turn.start`, exact accepted/recovered `failedTurnId` retries, matching `sessionVersion`, fresh `clientTurnId`, uncertain-dispatch reconciliation and fail-closed guards. The shared main-chat Retry implementation is unchanged.
+
+**Scoped mini-chat follow-up validation:** `node --test --test-name-pattern='Main-chat|Mini-chat|mini Clear' test/retry-steering.test.js test/mini-chat-clear.test.js` — 24 passed; `node --test --test-name-pattern='mini sessions' test/session-recovery.test.js` — 1 passed. The existing deletion regressions yielded 17 passed and 1 pre-existing failure at `test/deletion.test.js:228` (`canCompact`: expected `false`, got `undefined`), independently reproduced on baseline `9955177` and left unchanged. No full-suite/E2E run for this scoped fix.
 
 ### F13 — MEDIUM: model/capability defaults invent backend behavior
 
