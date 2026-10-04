@@ -2,8 +2,8 @@
 'use strict';
 
 // The card that asks before the agent acts. It leads with what the step is for in plain words, says what it does to the
-// computer (worked out by the app, so a harmless-sounding sentence can't hide a deletion) and where, and keeps the
-// command or the changes one click away. Opening them once keeps them open on the next cards.
+// computer and where, and keeps the command or the changes one click away. Opening them once keeps them open on the next
+// cards. What it shows comes from the backend's approval.request (its `presentation`, see ApprovalCard.present).
 const PREVIEW_LINES = 14;
 const LEAVE = { duration: 300, easing: 'cubic-bezier(0.32, 0.72, 0, 1)', fill: 'forwards' };
 const REVEAL = { duration: 420, easing: 'cubic-bezier(0.32, 0.72, 0, 1)' };
@@ -152,6 +152,31 @@ class ApprovalCard {
   ], LEAVE).finished.then(() => el.remove(), () => el.remove());
  }
 }
+
+// What a card shows for a backend's approval.request: its own presentation when it sent one, with every field checked,
+// or else the tool's name and its arguments as they came.
+const KINDS = new Set(['command', 'file', 'web']);
+const EFFECTS = new Set(['read', 'change', 'delete', 'install', 'system', 'online', 'record', 'run']);
+const REVEALS = new Set(['command', 'content', 'changes']);
+const text = value => typeof value === 'string' ? value : '';
+
+ApprovalCard.present = (presentation, tool, args) => {
+ const given = presentation && typeof presentation === 'object' ? presentation : null;
+ if (!given) {
+  let code = '';
+  try { code = JSON.stringify(args ?? {}, null, 2); } catch {}
+  return { kind: 'command', title: text(tool) || I18n.t('approve.command'), effect: 'run', places: [], code, reveal: 'command' };
+ }
+ return {
+  kind: KINDS.has(given.kind) ? given.kind : 'command',
+  title: text(given.title) || text(tool) || I18n.t('approve.command'),
+  effect: EFFECTS.has(given.effect) ? given.effect : 'run',
+  badge: !!given.badge,
+  places: (Array.isArray(given.places) ? given.places : []).filter(item => item && PLACES[item.kind]).map(item => ({ kind: item.kind, label: text(item.label), title: text(item.title) })),
+  code: text(given.code), removed: text(given.removed), added: text(given.added), quote: text(given.quote),
+  reveal: REVEALS.has(given.reveal) ? given.reveal : undefined,
+ };
+};
 
 window.ApprovalCard = ApprovalCard;
 })();

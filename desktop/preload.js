@@ -5,7 +5,7 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 contextBridge.exposeInMainWorld('openghost', {
  desktop: true,
  platform: process.platform,
- // Where a dropped or picked file lives on disk, so the agent can open it again later.
+ // Where a dropped or picked file lives on disk, so a backend on this computer can open it again later.
  pathOf: file => {
   try { return webUtils.getPathForFile(file) || ''; } catch { return ''; }
  },
@@ -23,31 +23,21 @@ contextBridge.exposeInMainWorld('openghost', {
   write: (key, value) => ipcRenderer.invoke('store:write', key, value),
   remove: key => ipcRenderer.invoke('store:remove', key),
  },
- tools: {
-  run: (id, name, args, cwd) => ipcRenderer.invoke('tool:run', id, name, args, cwd),
-  cancel: id => ipcRenderer.invoke('tool:cancel', id),
-  environment: () => ipcRenderer.invoke('tool:environment'),
- },
  browser: {
   onEvent: callback => ipcRenderer.on('browser:event', (event, data) => callback(data)),
   shown: value => ipcRenderer.send('browser:shown', value),
+  // The browser's host tools, run on the panel's own webviews when the backend asks for them.
+  run: (id, name, args) => ipcRenderer.invoke('browser:run', id, name, args),
+  cancel: id => ipcRenderer.invoke('browser:cancel', id),
  },
- llm: {
-  start: (id, request) => ipcRenderer.send('llm:start', id, request),
-  abort: id => ipcRenderer.send('llm:abort', id),
-  onEvent: callback => ipcRenderer.on('llm:event', (event, data) => callback(data)),
-  models: (provider, key) => ipcRenderer.invoke('llm:models', provider, key),
- },
- // The keys come from the main process's memory, read before the window opened, so asking for them never waits on the disk.
- keys: {
-  read: () => ipcRenderer.sendSync('keys:read'),
-  write: (provider, key) => ipcRenderer.invoke('keys:write', provider, key),
- },
- auth: {
-  login: () => ipcRenderer.invoke('auth:login'),
-  cancel: () => ipcRenderer.invoke('auth:cancel'),
-  logout: () => ipcRenderer.invoke('auth:logout'),
-  status: () => ipcRenderer.invoke('auth:status'),
-  limits: () => ipcRenderer.invoke('auth:limits'),
+ // A YouTube video's name and channel for its card, from YouTube's oEmbed.
+ videoInfo: id => ipcRenderer.invoke('media:video-info', id),
+ // The external backend: JSON-RPC 2.0 messages both ways (ABP v0, docs/backend-interface.md), and its process's state.
+ // This is the only way the page reaches an agent; there is no model, key or tool code on this side.
+ backend: {
+  send: message => ipcRenderer.send('backend:send', message),
+  onMessage: callback => ipcRenderer.on('backend:message', (event, message) => callback(message)),
+  onStatus: callback => ipcRenderer.on('backend:status', (event, status) => callback(status)),
+  status: () => ipcRenderer.invoke('backend:status'),
  },
 });

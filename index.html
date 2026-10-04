@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <!-- Only the app's own script files run: text from a model, a site or a file can never become code here.
-       The page itself calls DeepSeek alone; the other providers are called from the main process. -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https: http:; media-src 'self' data: blob:; font-src 'self' data:; connect-src https://api.deepseek.com; object-src 'none'; base-uri 'none'; form-action 'none'">
+       The page reaches no network at all: every model call is the external backend's, through backend-client.js. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https: http:; media-src 'self' data: blob:; font-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>OpenGhost</title>
   <link rel="icon" href="desktop/icon.png">
@@ -144,6 +144,7 @@
   <script src="splash-mist.js"></script>
 
   <script src="i18n.js"></script>
+  <script src="backend-client.js"></script>
   <script src="liquid-glass.js"></script>
   <script src="icon-button.js"></script>
   <script src="sidebar-toggle.js"></script>
@@ -163,8 +164,6 @@
   <script src="composer-text.js"></script>
   <script src="send-button.js"></script>
   <script src="scroll-button.js"></script>
-  <script src="deepseek.js"></script>
-  <script src="providers.js"></script>
   <script src="tex.js"></script>
   <script src="highlight.js"></script>
   <script src="markdown.js"></script>
@@ -191,8 +190,8 @@
   <script src="user-context.js"></script>
   <script src="chat-lock.js"></script>
   <script src="library.js"></script>
-  <script src="agent-tools.js"></script>
-  <script src="agent-prompt.js"></script>
+  <script src="render-guide.js"></script>
+  <script src="host-tools.js"></script>
   <script src="approval-card.js"></script>
   <script src="stats-card.js"></script>
   <script src="chat.js"></script>

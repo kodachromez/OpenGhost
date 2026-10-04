@@ -106,7 +106,7 @@ class MiniChat {
   });
   // Menus outside a modal dialog can't be reached, so the mini chat's plus and mode have their own, inside it.
   this.addMenu = new AddMenu({ button: $('.composer-add'), host: dialog, attachments: this.attachments, input: this.input, anchor: '--mini-add' });
-  if (AgentTools.available) {
+  if (window.openghost?.desktop) {
    const mode = $('.composer-mode');
    mode.hidden = false;
    this.mode = new ModePicker({ button: mode, host: dialog, anchor: '--mini-mode', settings, onChange: () => this.chat.onModeChange() });
@@ -224,7 +224,7 @@ class MiniChat {
   if (this.destroyed) return;
   this.destroyed = true;
   this.chat.stop();
-  MiniChat.settling = this.chat.idle();
+  MiniChat.settling = this.chat.idle().then(() => this.chat.dispose());
   clearTimeout(this.disarmTimer);
   this.text.destroy();
   this.addMenu.destroy();

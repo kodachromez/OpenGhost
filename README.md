@@ -1,5 +1,13 @@
 # OpenGhost
 
+> **This branch (`frontend-only-rust-backend`) is the OpenGhost 1.3.0 interface without its backend.** The agent loop,
+> the model and provider clients, the prompts, the tools and the provider keys are gone; the UI talks to an external
+> backend through one interface, ready for a backend written in Rust. With no backend connected the app opens and
+> works as an interface, and a message gets "No backend is connected". See
+> [docs/frontend-only.md](docs/frontend-only.md) for what was removed and
+> [docs/backend-interface.md](docs/backend-interface.md) for the interface. The rest of this README describes
+> OpenGhost 1.3.0 as released, with its own agent.
+
 **v1.3.0 beta**
 
 [Windows version 1.3.0](https://github.com/ANDRETRIPOL/OpenGhost/releases/download/v1.3.0/OpenGhost-1.3.0-Setup.exe)
@@ -35,7 +43,7 @@ Nothing in OpenGhost is assembled from ready parts. There is no UI framework ins
 - **The text.** The Markdown renderer that draws a reply while it is still being written, the code highlighter and the math.
 - **The interface.** Every control, its motion and its glass, in plain JavaScript and CSS.
 
-The app stands on two things only: Electron, which gives it a window, and Anthropic's official SDK, which talks to Claude.
+In 1.3.0 the app stood on two things only: Electron, which gives it a window, and Anthropic's official SDK, which talks to Claude. On this branch it stands on Electron alone: the agent is an external backend.
 
 ## It shows what it explains
 
@@ -130,7 +138,10 @@ npm ci
 npm start
 ```
 
-`npm start` runs the app straight from the code. To make an installer, run the command for your system on that system:
+`npm start` runs the app straight from the code. On this branch it needs a backend to answer: point
+`OPENGHOST_BACKEND` at one (`OPENGHOST_BACKEND='["/path/to/backend", "--abp"]' npm start`), or see
+[docs/backend-interface.md](docs/backend-interface.md). `npm test` runs the unit and boundary tests, and
+`npm run test:e2e` runs the app headless against a scripted test backend. To make an installer, run the command for your system on that system:
 
 - Windows: `npm run dist` makes `dist/OpenGhost-<version>-Setup.exe`
 - macOS: `npm run dist:mac` makes `dist/OpenGhost-<version>-mac.dmg`

@@ -2,15 +2,12 @@
 'use strict';
 
 // Settings → Usage. On top, the tokens sent and written back today, over 7 and 30 days and all the time, each split by provider,
-// and a column for each of the last 30 days. Below, a section for every provider in use: for the ChatGPT sign-in its plan and
-// limits as ChatGPT counts them, for DeepSeek the balance on the account, and for each the tokens, the cache and the models.
+// and a column for each of the last 30 days. Below, a section for every provider in use: its plan, limits and balance as the
+// backend reports them (account.limits), and the tokens, the cache and the models from the app's own count.
 const PERIODS = [['today', 1], ['week', 7], ['month', 30], ['all', 0]];
-const ORDER = ['chatgpt', 'openai', 'anthropic', 'deepseek'];
-const TONES = { chatgpt: 'turquoise', openai: 'lilac', anthropic: 'orange', deepseek: 'blue' };
-const PLANS = {
- free: 'Free', go: 'Go', plus: 'Plus', prolite: 'Pro 5x', pro: 'Pro 20x', team: 'Team', business: 'Business',
- self_serve_business_usage_based: 'Business', enterprise: 'Enterprise', enterprise_cbp_usage_based: 'Enterprise', edu: 'Edu',
-};
+// Each provider gets a color of its own, the first ones as they always had theirs.
+const TONES = ['turquoise', 'lilac', 'orange', 'blue'];
+const KNOWN_TONES = { chatgpt: 'turquoise', 'openai-codex': 'turquoise', openai: 'lilac', anthropic: 'orange', deepseek: 'blue' };
 const CHART_DAYS = 30;
 const REFRESH = 60000;
 const COUNT_TIME = 700;
@@ -27,7 +24,11 @@ const escapeHtml = text => String(text).replace(/[&<>"]/g, c => ({ '&': '&amp;',
 const compact = n => new Intl.NumberFormat(I18n.lang, { notation: 'compact', maximumFractionDigits: n < 1000 ? 0 : 1 }).format(n);
 const full = n => new Intl.NumberFormat(I18n.lang).format(n);
 const easeOut = t => 1 - (1 - t) ** 3;
-const nameOf = provider => I18n.t(`usage.name.${provider}`);
+// The providers in the order the backend lists them, then any the count still holds that it no longer lists.
+let ORDER = [];
+let names = provider => provider;
+const nameOf = provider => names(provider);
+const toneOf = provider => KNOWN_TONES[provider] || TONES[Math.max(0, ORDER.indexOf(provider)) % TONES.length];
 const dateOf = day => { const [y, m, d] = day.split('-').map(Number); return new Date(y, m - 1, d); };
 const monthName = key => new Intl.DateTimeFormat(I18n.lang, { month: 'long', year: 'numeric' }).format(dateOf(`${key}-01`));
 
@@ -51,7 +52,7 @@ function spring(s, goal, [k, c], dt) {
  return true;
 }
 
-// A limit's window named by how long it runs: 5 hours, week, month; whatever ChatGPT sends, even a length no plan has today.
+// A limit's window named by how long it runs: 5 hours, week, month; whatever the backend sends, even a length no plan has today.
 function windowName(seconds) {
  if (seconds >= 27 * DAY && seconds <= 32 * DAY) return I18n.t('usage.window.month');
  if (seconds === 7 * DAY) return I18n.t('usage.window.week');
@@ -78,7 +79,7 @@ function resetText(at) {
 function split(totals) {
  const parts = ORDER.filter(provider => totals[provider]?.tokens);
  if (!parts.length) return '<span class="usage-split is-empty"></span>';
- return `<span class="usage-split">${parts.map(provider => `<i class="t-${TONES[provider]}" style="flex-grow:${totals[provider].tokens}"></i>`).join('')}</span>`;
+ return `<span class="usage-split">${parts.map(provider => `<i class="t-${toneOf(provider)}" style="flex-grow:${totals[provider].tokens}"></i>`).join('')}</span>`;
 }
 
 // A limit window as a row: its name, a meter of how much is used, the share, and when it starts over.
@@ -99,8 +100,8 @@ class UsageSettings {
   this.root = root;
   this.settings = settings;
   this.dialog = dialog;
-  this.limits = { state: 'idle', data: null };
-  this.balance = null;
+  this.limits = {};
+  names = provider => this.settings.nameOf(provider);
   this.visible = false;
   this.timer = 0;
   this.entering = 0;
@@ -166,40 +167,33 @@ class UsageSettings {
  }
 
  connected(provider) {
-  return provider === 'chatgpt' ? !!this.settings.account.connected : this.settings.connected(provider);
+  return this.settings.connected(provider);
  }
 
+ // What the backend knows of each connected account: plan, limits and balance.
  refresh() {
-  this.loadLimits();
-  this.loadBalance();
- }
-
- async loadLimits() {
-  const auth = window.openghost?.auth;
-  if (!auth?.limits || !this.settings.account.connected) {
-   this.limits = { state: 'idle', data: null };
-   return;
+  if (!Backend.can('usage.limits')) { this.limits = {}; return; }
+  for (const provider of this.settings.order) {
+   if (!this.connected(provider)) { delete this.limits[provider]; continue; }
+   this.loadLimits(provider);
   }
-  if (this.limits.state !== 'ready') this.limits = { state: 'loading', data: null };
-  const reply = await auth.limits().catch(() => null);
-  if (!this.visible) return;
-  const fresh = this.limits.state !== 'ready';
-  this.limits = reply?.limits ? { state: 'ready', data: reply.limits } : { state: 'error', data: this.limits.data };
-  this.paintLimits(fresh);
  }
 
- async loadBalance() {
-  const key = this.settings.keys.deepseek;
-  if (!key) { this.balance = null; return; }
-  const list = await DeepSeek.balance(key).catch(() => null);
-  if (!this.visible || !list) return;
-  this.balance = list;
-  this.paintBalance();
+ async loadLimits(provider) {
+  const was = this.limits[provider];
+  if (was?.state !== 'ready') this.limits[provider] = { state: 'loading', data: null };
+  const data = await Backend.request('account.limits', { provider }).catch(() => undefined);
+  if (!this.visible) return;
+  const fresh = was?.state !== 'ready';
+  this.limits[provider] = data !== undefined ? { state: 'ready', data } : { state: 'error', data: was?.data || null };
+  this.paintLimits(provider, fresh);
+  this.paintBalance(provider);
  }
 
  render(animate) {
   const periods = PERIODS.map(([name, days]) => ({ name, totals: Usage.totals(days) }));
   const all = periods[periods.length - 1].totals;
+  ORDER = [...new Set([...this.settings.order, ...Object.keys(all)])];
   const providers = ORDER.filter(provider => all[provider] || this.connected(provider));
   if (!this.scopes().includes(this.scope)) this.scope = '';
   const month = this.scope ? Usage.between(`${this.scope}-01`, `${this.scope}-31`) : null;
@@ -207,8 +201,10 @@ class UsageSettings {
    <p class="settings-lead">${escapeHtml(I18n.t('usage.lead'))}</p>
    ${this.summary(periods)}
    ${providers.map(provider => month ? this.monthSection(provider, month[provider]) : this.section(provider, periods)).join('')}`;
-  this.paintLimits(animate);
-  this.paintBalance();
+  for (const provider of providers) {
+   this.paintLimits(provider, animate);
+   this.paintBalance(provider);
+  }
   // Drawn anew under the pointer, the chart gets its highlight and tip back where they were.
   if (this.pointed >= 0) {
    this.fillTip(this.pointed);
@@ -227,9 +223,9 @@ class UsageSettings {
   const shown = scope ? Usage.between(`${scope}-01`, `${scope}-31`) : Usage.totals(CHART_DAYS);
   const top = Math.max(1, ...sums), since = Usage.since, total = sums.reduce((sum, n) => sum + n, 0);
   // The legend names the providers of the days on the chart, each with its share of them.
-  const legend = ORDER.filter(provider => shown[provider]?.tokens).map(provider => `<span class="usage-key t-${TONES[provider]}"><i></i>${escapeHtml(nameOf(provider))}<b>${escapeHtml(compact(shown[provider].tokens))}</b></span>`).join('');
+  const legend = ORDER.filter(provider => shown[provider]?.tokens).map(provider => `<span class="usage-key t-${toneOf(provider)}"><i></i>${escapeHtml(nameOf(provider))}<b>${escapeHtml(compact(shown[provider].tokens))}</b></span>`).join('');
   const columns = days.map((day, k) => {
-   const parts = ORDER.filter(provider => day.providers[provider]).map(provider => `<i class="t-${TONES[provider]}" style="flex-grow:${day.providers[provider]}"></i>`).join('');
+   const parts = ORDER.filter(provider => day.providers[provider]).map(provider => `<i class="t-${toneOf(provider)}" style="flex-grow:${day.providers[provider]}"></i>`).join('');
    const height = sums[k] ? Math.max(0.04, sums[k] / top) : 0;
    return `<span class="usage-day${sums[k] ? '' : ' is-empty'}" data-k="${k}" style="--h:${height.toFixed(3)};--k:${k}"><span class="usage-day-bar">${parts}</span></span>`;
   }).join('');
@@ -322,47 +318,54 @@ class UsageSettings {
  frame(provider, body) {
   const on = this.connected(provider);
   return `
-   <section class="provider usage-provider t-${TONES[provider]}${on ? '' : ' is-off'}" data-provider="${provider}">
+   <section class="provider usage-provider t-${toneOf(provider)}${on ? '' : ' is-off'}" data-provider="${escapeHtml(provider)}">
     <header class="provider-head">
      <h3 class="provider-name">${escapeHtml(nameOf(provider))}</h3>
      <span class="usage-account" data-slot="account" hidden><span class="usage-account-label"></span><span class="usage-account-value"></span></span>
      ${on ? '' : `<span class="provider-state">${escapeHtml(I18n.t('usage.off'))}</span>`}
     </header>
-    ${provider === 'chatgpt' && on ? '<div class="usage-limits"></div>' : ''}
+    ${on && this.hasLimits(provider) ? '<div class="usage-limits"></div>' : ''}
     ${body}
    </section>`;
  }
 
- // The subscription's limits, each window as ChatGPT counts it; while they load, two quiet rows hold their place.
- paintLimits(animate) {
-  const box = this.root.querySelector('.usage-limits');
+ // Whether a provider has limits to show: the backend says so for the provider, or sent some already.
+ hasLimits(provider) {
+  const data = this.limits[provider]?.data;
+  return !!this.settings.providers.find(item => item.id === provider)?.limits || !!(data?.windows?.length || data?.models?.length);
+ }
+
+ // The plan's limits, each window as the provider counts it; while they load, two quiet rows hold their place.
+ paintLimits(provider, animate) {
+  const box = this.root.querySelector(`.usage-provider[data-provider="${CSS.escape(provider)}"] .usage-limits`);
+  const { state, data } = this.limits[provider] || { state: 'loading', data: null };
+  if (data?.plan) this.account(provider, I18n.t('usage.plan'), data.plan.charAt(0).toUpperCase() + data.plan.slice(1));
   if (!box) return;
-  const { state, data } = this.limits;
-  if (data?.plan) this.account('chatgpt', I18n.t('usage.plan'), PLANS[data.plan] || data.plan.charAt(0).toUpperCase() + data.plan.slice(1));
   if (!data) {
    box.innerHTML = state === 'error' ? `<p class="usage-note">${escapeHtml(I18n.t('usage.limits.error'))}</p>`
     : '<div class="usage-limit is-waiting"><span></span></div><div class="usage-limit is-waiting"><span></span></div>';
    return;
   }
   const rows = [
-   ...data.windows.map(span => limitRow(span)),
-   ...data.models.flatMap(model => model.windows.map(span => limitRow(span, `${model.name} · ${windowName(span.seconds)}`, ' is-model'))),
+   ...(data.windows || []).map(span => limitRow(span)),
+   ...(data.models || []).flatMap(model => (model.windows || []).map(span => limitRow(span, `${model.name} · ${windowName(span.seconds)}`, ' is-model'))),
   ];
   const credits = data.credits ? `<p class="usage-note">${escapeHtml(data.credits.unlimited ? I18n.t('usage.credits.unlimited') : I18n.t('usage.credits', { n: data.credits.balance }))}</p>` : '';
   box.innerHTML = (rows.length ? rows.join('') : `<p class="usage-note">${escapeHtml(I18n.t('usage.limits.none'))}</p>`) + credits;
   box.classList.toggle('is-filling', !!animate && !reducedMotion());
  }
 
- // DeepSeek's own figure for what is left on the account.
- paintBalance() {
-  if (!this.balance?.length) return;
-  const amount = this.balance.map(item => new Intl.NumberFormat(I18n.lang, { style: 'currency', currency: item.currency }).format(item.total)).join(' · ');
-  this.account('deepseek', I18n.t('usage.balance'), amount);
+ // The provider's own figure for what is left on the account.
+ paintBalance(provider) {
+  const balances = this.limits[provider]?.data?.balances;
+  if (!balances?.length) return;
+  const amount = balances.map(item => new Intl.NumberFormat(I18n.lang, { style: 'currency', currency: item.currency }).format(item.total)).join(' · ');
+  this.account(provider, I18n.t('usage.balance'), amount);
  }
 
  // A fact about the account at the right of the provider's name: a quiet label and its value.
  account(provider, label, value) {
-  const slot = this.root.querySelector(`.usage-provider[data-provider="${provider}"] [data-slot="account"]`);
+  const slot = this.root.querySelector(`.usage-provider[data-provider="${CSS.escape(provider)}"] [data-slot="account"]`);
   if (!slot) return;
   slot.querySelector('.usage-account-label').textContent = label;
   slot.querySelector('.usage-account-value').textContent = value;
@@ -403,7 +406,7 @@ class UsageSettings {
  fillTip(k) {
   const tip = this.root.querySelector('.usage-tip'), day = this.days?.[k];
   if (!tip || !day) return;
-  const rows = ORDER.filter(provider => day.providers[provider]).map(provider => `<span class="usage-tip-row t-${TONES[provider]}"><i></i>${escapeHtml(nameOf(provider))}<b>${escapeHtml(compact(day.providers[provider]))}</b></span>`).join('');
+  const rows = ORDER.filter(provider => day.providers[provider]).map(provider => `<span class="usage-tip-row t-${toneOf(provider)}"><i></i>${escapeHtml(nameOf(provider))}<b>${escapeHtml(compact(day.providers[provider]))}</b></span>`).join('');
   const date = new Intl.DateTimeFormat(I18n.lang, { weekday: 'short', month: 'short', day: 'numeric' }).format(dateOf(day.day));
   tip.innerHTML = `<span class="usage-tip-head">${escapeHtml(date)}</span><span class="usage-tip-total">${escapeHtml(this.sums[k] ? I18n.t('usage.tokens', { n: full(this.sums[k]) }) : I18n.t('usage.idle'))}</span>${rows}`;
  }

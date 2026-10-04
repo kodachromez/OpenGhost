@@ -2,22 +2,11 @@
 'use strict';
 
 const STORAGE = { effort: 'deepseek.effort', mode: 'openghost.mode', model: 'openghost.model', catalog: 'openghost.catalog' };
-const KEYS = { openai: 'openai.apiKey', anthropic: 'anthropic.apiKey', deepseek: 'deepseek.apiKey' };
-// The order providers appear in, in the settings and in the model picker.
-const ORDER = ['chatgpt', 'openai', 'anthropic', 'deepseek'];
-// The provider the app starts with: the settings ask for its key when nothing is connected, and new chats take its first
-// model until the user picks another.
-const FIRST_PROVIDER = 'deepseek';
 const EFFORTS = ['none', 'low', 'high', 'max'];
 const DEFAULT_EFFORT = 'high';
 const DEFAULT_CONTEXT = 1000000;
-// How long a provider's list of models counts as fresh. Opening the model picker after that reads the lists again.
+// How long the backend's list of models counts as fresh. Opening the model picker after that reads the list again.
 const FRESH = 10 * 60 * 1000;
-const LINKS = {
- openai: ['https://platform.openai.com/api-keys', 'platform.openai.com'],
- anthropic: ['https://console.anthropic.com/settings/keys', 'console.anthropic.com'],
- deepseek: ['https://platform.deepseek.com/api_keys', 'platform.deepseek.com'],
-};
 const MODES = ['ask', 'auto', 'full'];
 const DEFAULT_MODE = 'ask';
 const CHECK_DELAY = 400;
@@ -25,50 +14,53 @@ const PAGE = { duration: 460, easing: 'cubic-bezier(0.32, 0.72, 0, 1)' };
 
 const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 const escapeHtml = text => String(text).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+const hostOf = url => { try { return new URL(url).host; } catch { return ''; } };
 
-function keyRow(provider) {
- const [href, host] = LINKS[provider];
- const note = I18n.has(`settings.${provider}.note`) ? ` ${escapeHtml(I18n.t(`settings.${provider}.note`))}` : '';
+// Providers, their sign-in methods and their models all come from the backend (auth.providers, models.list); the app
+// knows none by itself. A provider's section is drawn from what the backend says about it, in the same rows as ever:
+// a field for an API key, a row to sign in with an account.
+function keyRow(provider, method) {
+ const link = method.url && /^https:\/\//.test(method.url) ? ` <a href="${escapeHtml(method.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(hostOf(method.url))}</a>.` : '';
  return `
   <div class="settings-row">
    <div class="settings-text">
-    <label class="settings-label" for="settings-key-${provider}">${escapeHtml(I18n.t(`settings.${provider}.key`))}</label>
-    <p class="settings-hint"><span>${escapeHtml(I18n.t(`settings.${provider}.hint`))}</span> <a href="${href}" target="_blank" rel="noopener noreferrer">${host}</a>.${note}</p>
+    <label class="settings-label" for="settings-key-${escapeHtml(provider)}">${escapeHtml(method.label || I18n.t('settings.key.label'))}</label>
+    <p class="settings-hint"><span>${escapeHtml(method.hint || '')}</span>${link}</p>
    </div>
    <div class="settings-control">
     <div class="settings-key-box">
-     <input id="settings-key-${provider}" class="settings-key" data-provider="${provider}" type="password" placeholder="${provider === 'anthropic' ? 'sk-ant-…' : 'sk-…'}" autocomplete="off" spellcheck="false">
+     <input id="settings-key-${escapeHtml(provider)}" class="settings-key" data-provider="${escapeHtml(provider)}" type="password" placeholder="${escapeHtml(method.placeholder || 'sk-…')}" autocomplete="off" spellcheck="false">
      <button type="button" class="settings-key-eye" aria-label="${escapeHtml(I18n.t('settings.key.show'))}" aria-pressed="false">${Glyphs.eye}</button>
     </div>
-    <p class="settings-status" data-provider="${provider}" role="status"></p>
+    <p class="settings-status" data-provider="${escapeHtml(provider)}" role="status"></p>
    </div>
   </div>`;
 }
 
-function accountRow() {
+function accountRow(provider, method) {
  return `
   <div class="settings-row">
    <div class="settings-text">
-    <span class="settings-label">${escapeHtml(I18n.t('settings.chatgpt.label'))}</span>
-    <p class="settings-hint">${escapeHtml(I18n.t('settings.chatgpt.hint'))}</p>
+    <span class="settings-label">${escapeHtml(method.label || '')}</span>
+    <p class="settings-hint">${escapeHtml(method.hint || '')}</p>
    </div>
-   <div class="settings-control settings-account">
+   <div class="settings-control settings-account" data-provider="${escapeHtml(provider)}">
     <div class="settings-account-row">
      <span class="settings-account-who"></span>
-     <button type="button" class="settings-button is-primary" data-action="login">${escapeHtml(I18n.t('settings.chatgpt.login'))}</button>
-     <button type="button" class="settings-button" data-action="cancel">${escapeHtml(I18n.t('settings.chatgpt.cancel'))}</button>
-     <button type="button" class="settings-button" data-action="logout">${escapeHtml(I18n.t('settings.chatgpt.logout'))}</button>
+     <button type="button" class="settings-button is-primary" data-action="login">${escapeHtml(method.action || I18n.t('settings.account.login'))}</button>
+     <button type="button" class="settings-button" data-action="cancel">${escapeHtml(I18n.t('settings.account.cancel'))}</button>
+     <button type="button" class="settings-button" data-action="logout">${escapeHtml(I18n.t('settings.account.logout'))}</button>
     </div>
-    <p class="settings-status" data-provider="chatgpt" role="status"></p>
+    <p class="settings-status" data-provider="${escapeHtml(provider)}" role="status"></p>
    </div>
   </div>`;
 }
 
 function section(id, name, rows) {
  return `
-  <section class="provider" data-provider="${id}" aria-labelledby="provider-${id}">
+  <section class="provider" data-provider="${escapeHtml(id)}" aria-labelledby="provider-${escapeHtml(id)}">
    <header class="provider-head">
-    <h3 class="provider-name" id="provider-${id}">${escapeHtml(name)}</h3>
+    <h3 class="provider-name" id="provider-${escapeHtml(id)}">${escapeHtml(name)}</h3>
     <span class="provider-models"></span>
     <span class="provider-state"></span>
    </header>
@@ -76,15 +68,25 @@ function section(id, name, rows) {
   </section>`;
 }
 
+// A model as the backend lists it (ABP Model), as the picker and the effort control use it.
+const modelOf = model => ({
+ id: `${model.provider}:${model.id}`,
+ provider: String(model.provider),
+ api: String(model.id),
+ name: model.name || String(model.id),
+ context: Number(model.contextWindow) || 0,
+ efforts: Array.isArray(model.thinkingLevels) && model.thinkingLevels.length ? model.thinkingLevels.map(String) : EFFORTS.slice(),
+ defaultEffort: model.defaultThinking || '',
+ vision: model.vision !== false,
+});
+
 class Settings {
  constructor(dialog) {
   this.dialog = dialog;
   this.list = dialog.querySelector('.settings-providers');
-  this.unsaved = new Set();
-  this.keys = this.readKeys();
-  this.account = { connected: false };
-  this.catalog = this.readCatalog();
-  this.models = [];
+  this.providers = [];
+  this.status = {};
+  this.models = this.readCatalog();
   this.efforts = EFFORTS.slice();
   localStorage.removeItem('deepseek.model');
   this.model = localStorage.getItem(STORAGE.model) || '';
@@ -94,22 +96,22 @@ class Settings {
   this.effort = typeof effort === 'string' && effort ? effort : DEFAULT_EFFORT;
   const mode = localStorage.getItem(STORAGE.mode);
   this.mode = MODES.includes(mode) ? mode : DEFAULT_MODE;
-  this.checks = {};
-  this.checked = new Set();
-  // Keys saved in an earlier session count as working until a check says otherwise.
-  this.accepted = new Set(Object.keys(KEYS).filter(provider => this.keys[provider]));
+  this.typed = {};
+  this.timer = {};
   this.build();
   this.pager();
-  this.collect();
   dialog.addEventListener('dismiss', () => dialog.close());
   dialog.addEventListener('close', () => this.conceal());
   // Mid-transition of the theme a click lands on <html>, outside the dialog, and must not close it.
   dialog.addEventListener('cancel', event => {
    if (window.Theme?.moving) event.preventDefault();
   });
-  // A provider that found out something about one of its models asks for its list to be read again.
-  window.addEventListener('models-stale', event => { if (this.connected(event.detail)) this.refresh(event.detail).catch(() => {}); });
-  this.refreshAll();
+  // The backend says when what it offers has changed: a sign-in went through or lapsed, a provider listed new models.
+  Backend.on('ready', () => this.refreshAll());
+  Backend.on('closed', () => { this.providers = []; this.status = {}; this.build(); this.paint(); });
+  Backend.on('auth.changed', ({ provider, status }) => this.setProviderStatus(provider, status));
+  Backend.on('models.changed', () => this.refresh().catch(() => {}));
+  if (Backend.available) this.refreshAll();
  }
 
  // The sections on the left: one highlight glides to the chosen section, and its page rises into view.
@@ -176,50 +178,21 @@ class Settings {
   style.transition = '';
  }
 
+ // The models the backend listed last time, so the picker has them at once while the backend starts.
  readCatalog() {
-  let saved = {};
-  try { saved = JSON.parse(localStorage.getItem(STORAGE.catalog)) || {}; } catch {}
-  return { chatgpt: [], openai: [], anthropic: [], deepseek: [], ...saved };
+  try {
+   const saved = JSON.parse(localStorage.getItem(STORAGE.catalog));
+   if (saved?.version === 2 && Array.isArray(saved.models)) return saved.models;
+  } catch {}
+  return [];
  }
 
  saveCatalog() {
-  try { localStorage.setItem(STORAGE.catalog, JSON.stringify(this.catalog)); } catch {}
+  try { localStorage.setItem(STORAGE.catalog, JSON.stringify({ version: 2, models: this.models })); } catch {}
  }
 
- // The keys live in the OS keychain through the main process. Ones an earlier version kept in localStorage are the newest word,
- // so they move into the keychain once and leave localStorage only after it has them. Outside the desktop app they stay where they were.
- readKeys() {
-  const vault = window.openghost?.keys, keys = { ...(vault?.read() || {}) };
-  for (const [provider, name] of Object.entries(KEYS)) {
-   const old = localStorage.getItem(name);
-   if (!vault) { keys[provider] = old || ''; continue; }
-   if (!old) continue;
-   keys[provider] = old;
-   vault.write(provider, old).then(saved => { if (saved) localStorage.removeItem(name); }).catch(() => {});
-  }
-  return Object.fromEntries(Object.keys(KEYS).map(provider => [provider, keys[provider] || '']));
- }
-
- // A key that could not be saved still works until the app closes; the line under its field says so rather than lose it quietly.
- saveKey(provider, key) {
-  const vault = window.openghost?.keys;
-  if (!vault) {
-   if (key) localStorage.setItem(KEYS[provider], key);
-   else localStorage.removeItem(KEYS[provider]);
-   return;
-  }
-  vault.write(provider, key).then(saved => {
-   if (key !== this.keys[provider]) return;
-   if (saved) this.unsaved.delete(provider);
-   else throw new Error('not saved');
-  }).catch(() => {
-   if (key !== this.keys[provider]) return;
-   this.unsaved.add(provider);
-   this.setStatus(provider, I18n.t('settings.key.unsaved'), 'error');
-  });
- }
-
- // The eye beside a key shows it for a moment's check; closing the settings hides every key again.
+ // The eye beside a key shows what was typed for a moment's check; closing the settings hides every key again. A saved
+ // key is the backend's and never comes back to the app.
  reveal(provider, shown) {
   const input = this.inputs[provider], eye = input.nextElementSibling;
   input.type = shown ? 'text' : 'password';
@@ -233,18 +206,34 @@ class Settings {
  }
 
  connected(provider) {
-  return provider === 'chatgpt' ? !!this.account.connected : !!this.keys[provider];
+  return !!this.status[provider]?.connected;
  }
 
- // The badge turns green only once the provider has taken the key, so a mistyped key never looks connected.
+ // The badge turns green only once the backend says the provider took the key or the sign-in.
  working(provider) {
-  return this.connected(provider) && (provider === 'chatgpt' || this.accepted.has(provider));
+  return this.connected(provider) && !this.status[provider]?.checking;
  }
 
- // The picker offers the models of every connected provider, as each provider lists them. No model is known to the app
- // by itself: with nothing connected there is none, and the picker leads to the settings instead.
+ // A provider's name as the backend gives it, and the heading its models go under in the picker.
+ nameOf(provider) {
+  return this.providers.find(item => item.id === provider)?.name || provider;
+ }
+
+ groupOf(provider) {
+  const item = this.providers.find(entry => entry.id === provider);
+  return item?.group || item?.name || provider;
+ }
+
+ // The providers in the backend's order.
+ get order() {
+  return this.providers.map(item => item.id);
+ }
+
+ // The picker offers the models the backend listed, in its providers' order. No model is known to the app by itself:
+ // with none listed there is none, and the picker leads to the settings instead.
  collect() {
-  this.models = ORDER.filter(provider => this.connected(provider)).flatMap(provider => this.catalog[provider] || []);
+  const order = this.order, rank = provider => { const at = order.indexOf(provider); return at < 0 ? order.length : at; };
+  this.models = this.models.slice().sort((a, b) => rank(a.provider) - rank(b.provider));
   this.paint();
  }
 
@@ -259,27 +248,23 @@ class Settings {
   const named = id && this.models.find(item => item.api === id);
   if (named) return named.id;
   if (this.find(this.model)) return this.model;
-  // Before the user has picked one, new chats get the first model the app's first provider lists, or the first there is.
-  return (this.models.find(item => item.provider === FIRST_PROVIDER) || this.models[0])?.id || '';
+  return this.models[0]?.id || '';
  }
 
+ // What a turn tells the backend about its model: which one, and how hard it thinks. `ready` once the backend listed it.
  configFor(id) {
   const model = this.find(id);
-  const provider = model?.provider || FIRST_PROVIDER;
   const efforts = model?.efforts?.length ? model.efforts : EFFORTS;
   const effort = efforts.includes(this.effort) ? this.effort : [model?.defaultEffort, DEFAULT_EFFORT].find(level => efforts.includes(level)) || efforts[efforts.length - 1];
   return {
    id: model?.id || id,
-   provider,
+   provider: model?.provider || '',
    model: model?.api || id,
    name: model?.name || id,
-   key: this.keys[provider] || '',
-   ready: !!model && this.connected(provider),
+   ready: !!model,
    effort,
    efforts,
    vision: model?.vision !== false,
-   thinking: model?.thinking,
-   output: model?.output,
   };
  }
 
@@ -299,7 +284,8 @@ class Settings {
  }
 
  applyEfforts() {
-  const model = this.find(this.shown);
+  // Before the backend's models came in, the chat on screen had none; it has the one new chats get now.
+  const model = this.find(this.resolve(this.shown));
   const efforts = model?.efforts?.length ? model.efforts : EFFORTS;
   const same = efforts.length === this.efforts.length && efforts.every((level, i) => level === this.efforts[i]);
   this.efforts = efforts.slice();
@@ -334,112 +320,114 @@ class Settings {
   this.onModels?.();
  }
 
+ // Everything the backend offers, read anew: its providers with how each stands, then its models.
  async refreshAll() {
   this.read = Date.now();
-  await this.syncAccount();
-  await Promise.all([
-   ...Object.keys(KEYS).filter(provider => this.keys[provider]).map(provider => this.checkKey(provider)),
-   this.account.connected ? this.refresh('chatgpt').catch(() => {}) : null,
-  ]);
+  const providers = Backend.can('auth.providers') ? await Backend.request('auth.providers').catch(() => null) : [];
+  if (Array.isArray(providers)) {
+   this.providers = providers.filter(item => item && typeof item.id === 'string');
+   this.status = Object.fromEntries(this.providers.map(item => [item.id, item.status || {}]));
+   this.build();
+  }
+  await this.refresh().catch(() => {});
+  this.paint();
  }
 
- // Reads the providers' lists again once they are no longer fresh, quietly: a model a provider has added since shows up
- // the next time the picker opens, with no restart. A list that can't be read now leaves the last one in place.
+ // Reads the backend's models again once the list is no longer fresh, quietly: a model added since shows up the next
+ // time the picker opens, with no restart. A list that can't be read now leaves the last one in place.
  freshen() {
-  if (Date.now() - this.read < FRESH) return;
+  if (Date.now() - this.read < FRESH || !Backend.available) return;
   this.read = Date.now();
-  for (const provider of ORDER) if (this.connected(provider)) this.refresh(provider).catch(() => {});
+  this.refresh().catch(() => {});
  }
 
- // A sign-in can lapse while the app runs, so the settings ask how it stands each time they open.
- async syncAccount() {
-  const auth = window.openghost?.auth;
-  if (!auth || this.account.waiting) return;
-  const account = await auth.status().catch(() => null);
-  if (account && !this.account.waiting) this.setAccount(account);
- }
-
- // Loads a provider's models into the catalog; the last request for a provider wins.
- async refresh(provider) {
-  const token = (this.checks[provider] = (this.checks[provider] || 0) + 1);
-  const models = await Providers.models(provider, this.keys[provider]);
-  if (token !== this.checks[provider]) return false;
-  this.catalog[provider] = models;
+ // Loads the backend's models into the catalog; the last request wins.
+ async refresh() {
+  const token = (this.checks = (this.checks || 0) + 1);
+  const models = await Backend.request('models.list', {});
+  if (token !== this.checks || !Array.isArray(models)) return false;
+  this.models = models.filter(model => model?.id && model.provider).map(modelOf);
   this.saveCatalog();
   this.changed();
   return true;
  }
 
  build() {
-  this.list.innerHTML = [
-   section('openai', 'OpenAI', accountRow() + keyRow('openai')),
-   section('anthropic', 'Anthropic', keyRow('anthropic')),
-   section('deepseek', 'DeepSeek', keyRow('deepseek')),
-  ].join('');
+  const backend = Backend.available;
+  this.list.innerHTML = this.providers.map(provider => section(provider.id, provider.name || provider.id, (provider.methods || []).map(method =>
+   method?.type === 'oauth' ? accountRow(provider.id, method) : method?.type === 'apiKey' ? keyRow(provider.id, method) : '').join(''))).join('')
+   || `<p class="settings-status" role="status" data-tone="${backend ? '' : 'error'}">${escapeHtml(I18n.t(backend ? 'settings.backend.empty' : 'settings.backend.none'))}</p>`;
   this.inputs = {};
   for (const input of this.list.querySelectorAll('.settings-key')) {
    const provider = input.dataset.provider;
    this.inputs[provider] = input;
-   input.value = this.keys[provider];
+   input.value = this.typed[provider] || '';
    input.addEventListener('input', () => this.onKeyInput(provider));
    input.nextElementSibling.addEventListener('click', () => this.reveal(provider, input.type === 'password'));
   }
-  this.statuses = Object.fromEntries([...this.list.querySelectorAll('.settings-status')].map(node => [node.dataset.provider, node]));
-  this.accountBox = this.list.querySelector('.settings-account');
-  this.accountBox.addEventListener('click', event => {
-   const action = event.target.closest('[data-action]')?.dataset.action;
-   if (action === 'login') this.login();
-   else if (action === 'cancel') window.openghost?.auth?.cancel();
-   else if (action === 'logout') this.logout();
-  });
-  if (!window.openghost?.auth) this.accountBox.closest('.settings-row').hidden = true;
+  this.statuses = Object.fromEntries([...this.list.querySelectorAll('.settings-status[data-provider]')].map(node => [node.dataset.provider, node]));
+  this.accounts = Object.fromEntries([...this.list.querySelectorAll('.settings-account')].map(node => [node.dataset.provider, node]));
+  for (const [provider, box] of Object.entries(this.accounts)) {
+   box.addEventListener('click', event => {
+    const action = event.target.closest('[data-action]')?.dataset.action;
+    if (action === 'login') this.login(provider);
+    else if (action === 'cancel') this.auth('auth.cancel', provider);
+    else if (action === 'logout') this.auth('auth.logout', provider).then(() => this.setStatus(provider, ''));
+   });
+  }
+  this.paint();
  }
 
  paint() {
   if (!this.list) return;
   for (const node of this.list.querySelectorAll('.provider')) {
-   const id = node.dataset.provider;
-   // OpenAI is connected through either the ChatGPT sign-in or a key; a model both offer counts once.
-   const live = (id === 'openai' ? ['chatgpt', 'openai'] : [id]).filter(source => this.working(source));
-   const on = live.length > 0, count = new Set(live.flatMap(source => this.catalog[source] || []).map(model => model.api)).size;
+   const id = node.dataset.provider, on = this.working(id);
+   const count = this.models.filter(model => model.provider === id).length;
    const state = node.querySelector('.provider-state');
    state.textContent = I18n.t(on ? 'settings.connected' : 'settings.off');
    state.classList.toggle('is-on', on);
    node.querySelector('.provider-models').textContent = on && count ? I18n.t('settings.models', { count }) : '';
   }
-  const box = this.accountBox;
-  if (!box) return;
-  box.dataset.state = this.account.waiting ? 'waiting' : this.account.connected ? 'connected' : 'idle';
-  const who = [this.account.email, this.account.plan && I18n.t('settings.chatgpt.plan', { plan: this.account.plan.charAt(0).toUpperCase() + this.account.plan.slice(1) })].filter(Boolean).join(' · ');
-  box.querySelector('.settings-account-who').textContent = this.account.waiting ? I18n.t('settings.chatgpt.waiting') : who;
+  for (const [provider, box] of Object.entries(this.accounts || {})) {
+   const status = this.status[provider] || {}, account = status.account || {};
+   box.dataset.state = status.waiting ? 'waiting' : status.connected ? 'connected' : 'idle';
+   const who = [account.email, account.plan && I18n.t('settings.account.plan', { plan: account.plan.charAt(0).toUpperCase() + account.plan.slice(1) })].filter(Boolean).join(' · ');
+   box.querySelector('.settings-account-who').textContent = status.waiting ? I18n.t('settings.account.waiting') : who;
+  }
+  for (const [provider, input] of Object.entries(this.inputs || {})) {
+   if (!input.value) input.placeholder = this.status[provider]?.keySaved ? I18n.t('settings.key.saved') : (this.providers.find(item => item.id === provider)?.methods || []).find(method => method.type === 'apiKey')?.placeholder || 'sk-…';
+  }
  }
 
- setAccount(account) {
-  const was = this.account.connected;
-  this.account = { connected: !!account?.connected, email: account?.email || '', plan: account?.plan || '' };
-  if (account?.error) this.setStatus('chatgpt', account.error, 'error');
-  if (this.account.connected && !this.catalog.chatgpt.length) this.refresh('chatgpt').catch(() => {});
-  if (was !== this.account.connected) this.changed();
-  else this.paint();
- }
-
- async login() {
-  const auth = window.openghost?.auth;
-  if (!auth || this.account.waiting) return;
-  this.setStatus('chatgpt', '');
-  this.account = { ...this.account, waiting: true };
+ // How a provider stands, as the backend says: connected or not, waiting for a sign-in, the account, an error.
+ setProviderStatus(provider, status) {
+  if (!provider || !status) return;
+  const was = this.connected(provider);
+  this.status[provider] = status;
+  if (status.error) this.setStatus(provider, status.error.message || String(status.error), 'error');
+  if (was !== this.connected(provider)) this.refresh().catch(() => {});
   this.paint();
-  const account = await auth.login();
-  this.setAccount(account);
-  // The badge turning green and the account line say it all; a "signed in" line under them would only repeat it.
-  if (account?.connected) await this.refresh('chatgpt').catch(() => {});
  }
 
- async logout() {
-  const auth = window.openghost?.auth;
-  if (!auth) return;
-  this.setAccount(await auth.logout());
-  this.setStatus('chatgpt', '');
+ async auth(method, provider, extra = {}) {
+  try {
+   const status = await Backend.request(method, { provider, ...extra });
+   this.setProviderStatus(provider, status);
+   return status;
+  } catch (error) {
+   this.setStatus(provider, Backend.explain(error).message, 'error');
+   return null;
+  }
+ }
+
+ async login(provider) {
+  if (this.status[provider]?.waiting) return;
+  this.setStatus(provider, '');
+  this.status[provider] = { ...this.status[provider], waiting: true };
+  this.paint();
+  const status = await this.auth('auth.login', provider);
+  if (!status) this.status[provider] = { ...this.status[provider], waiting: false };
+  this.paint();
  }
 
  open(reason = '', provider = '') {
@@ -447,58 +435,38 @@ class Settings {
   if (opening) {
    this.dialog.showModal();
    this.dialog.focus();
-   this.syncAccount();
+   if (Backend.available) this.refreshAll();
   }
   // A missing key opens straight on Providers; otherwise the settings always open on General.
   if (reason) this.page('providers', opening);
   else if (opening) this.page('general', true);
-  if (reason) {
-   const target = provider || FIRST_PROVIDER;
-   this.setStatus(target, reason, 'error');
-   const field = target === 'chatgpt' ? this.accountBox.querySelector('[data-action="login"]') : this.inputs[target];
-   field?.scrollIntoView({ block: 'center' });
-   field?.focus();
-   return;
-  }
-  for (const provider of Object.keys(KEYS)) {
-   if (this.keys[provider] && !this.checked.has(provider)) this.checkKey(provider);
-  }
+  if (!reason) return;
+  const target = provider || this.providers[0]?.id || '';
+  this.setStatus(target, reason, 'error');
+  const field = this.accounts?.[target]?.querySelector('[data-action="login"]') || this.inputs?.[target];
+  field?.scrollIntoView({ block: 'center' });
+  field?.focus();
  }
 
+ // A key goes to the backend once the typing stops; the line under the field is for the check and for what went wrong.
+ // An emptied field takes the key away.
  onKeyInput(provider) {
   const key = this.inputs[provider].value.trim();
-  this.keys[provider] = key;
-  this.saveKey(provider, key);
-  clearTimeout(this.timer?.[provider]);
-  this.timer = { ...this.timer };
-  this.checked.delete(provider);
-  this.accepted.delete(provider);
-  if (!key) {
-   this.setStatus(provider, '');
-   this.changed();
-   return;
-  }
-  this.paint();
-  this.setStatus(provider, I18n.t('settings.key.checking'));
-  this.timer[provider] = setTimeout(() => this.checkKey(provider), CHECK_DELAY);
+  this.typed[provider] = key;
+  clearTimeout(this.timer[provider]);
+  this.setStatus(provider, key ? I18n.t('settings.key.checking') : '');
+  this.timer[provider] = setTimeout(() => this.saveKey(provider, key), CHECK_DELAY);
  }
 
- // A working key shows only in the badge; the line under the field is for the check in progress and for what went wrong.
- async checkKey(provider) {
-  const key = this.keys[provider];
-  this.setStatus(provider, I18n.t('settings.key.checking'));
-  try {
-   const current = await this.refresh(provider);
-   if (!current || key !== this.keys[provider]) return;
-   this.accepted.add(provider);
-   this.checked.add(provider);
-   if (this.unsaved.has(provider)) this.setStatus(provider, I18n.t('settings.key.unsaved'), 'error');
-   else this.setStatus(provider, '');
-  } catch (error) {
-   if (key !== this.keys[provider]) return;
-   this.accepted.delete(provider);
-   this.setStatus(provider, error.message, 'error');
+ async saveKey(provider, key) {
+  const status = await this.auth('auth.setKey', provider, { key: key || null });
+  if (key !== this.typed[provider]) return;
+  if (status && !status.error) this.setStatus(provider, '');
+  if (status && !status.error && key) {
+   this.typed[provider] = '';
+   this.inputs[provider].value = '';
   }
+  await this.refresh().catch(() => {});
   this.paint();
  }
 

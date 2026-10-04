@@ -27,7 +27,7 @@ const APPEAR = { duration: 320, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' };
 const PLAY = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.2 6.6a1 1 0 0 1 1.5-.86l8.3 5.4a1 1 0 0 1 0 1.72l-8.3 5.4a1 1 0 0 1-1.5-.86z" fill="currentColor"/></svg>';
 const PICTURE = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="2.5"/><circle cx="6" cy="6.8" r="1.1"/><path d="M2.6 11.4l3.2-2.9 2.4 2 2.2-2.2 3 3"/></svg>';
 
-const bridge = window.openghost?.tools || null;
+const lookup = window.openghost?.videoInfo || null;
 const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 const hostOf = url => { try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return ''; } };
 const videoId = url => YOUTUBE.exec(String(url || ''))?.[1] || '';
@@ -79,15 +79,10 @@ function keep(id, value) {
 function videoInfo(id) {
  if (asked.has(id)) return asked.get(id);
  const known = keptInfo()[id];
- const task = known ? Promise.resolve(known) : !bridge || !window.AgentTools ? Promise.resolve(null) : AgentTools.environment().then(env => {
-  if (!env?.home) return null;
-  const address = `https://www.youtube.com/oembed?url=${encodeURIComponent(`https://www.youtube.com/watch?v=${id}`)}&format=json`;
-  return bridge.run(`media-${id}-${Date.now()}`, 'fetch_url', { url: address }, env.home);
- }).then(result => {
-  if (!result || result.error || result.status !== 200 || !result.text) return null;
-  const data = JSON.parse(result.text), value = { title: String(data.title || ''), by: String(data.author_name || '') };
-  if (value.title) keep(id, value);
-  return value.title ? value : null;
+ const task = known ? Promise.resolve(known) : !lookup ? Promise.resolve(null) : lookup(id).then(value => {
+  if (!value?.title) return null;
+  keep(id, value);
+  return value;
  }).catch(() => null);
  asked.set(id, task);
  return task;

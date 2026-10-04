@@ -10,7 +10,6 @@ const CURSOR = { hide: 2600 };
 const TOAST_TIME = 4200;
 const EASE = 'cubic-bezier(0.32, 0.72, 0, 1)';
 const bridge = window.openghost?.browser || null;
-const tools = window.openghost?.tools || null;
 
 const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 const svg = body => `<svg viewBox="30 30 60 60" fill="none" stroke="currentColor" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
@@ -50,7 +49,6 @@ function normalize(value) {
 }
 
 const blank = url => !url || url === 'about:blank';
-const shortDate = time => new Date(time).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
 
 class BrowserPanel {
  constructor({ app, main, toggle }) {
@@ -500,15 +498,15 @@ class BrowserPanel {
  // then land in the page. So between the agent's steps the keyboard is back where the user was, and a step that types or
  // presses keys where the page's focus is gets the keyboard back first, exactly as it would have had it without the user:
  // what the agent does and sees stays the same, and Escape reaches the app during every other step.
- async run(name, args, { id, cwd }) {
-  if (!tools) return { error: 'The browser is only available in the desktop app' };
+ async run(name, args, { id }) {
+  if (!bridge?.run) return { error: 'The browser is only available in the desktop app' };
   const back = document.activeElement;
   try {
-   if (name === 'browser_tabs') return await this.tabsTool(args, { id, cwd });
+   if (name === 'browser_tabs') return await this.tabsTool(args, { id });
    const tab = await this.ensure();
    const keys = name === 'browser_press' || (name === 'browser_type' && (args.ref === undefined || args.ref === null || args.ref === ''));
    if (keys && this.lent === tab.view) tab.view.focus();
-   return await tools.run(id, name, { ...args, tab: tab.id }, cwd);
+   return await bridge.run(id, name, { ...args, tab: tab.id });
   } finally {
    this.giveBack(back);
   }
@@ -523,7 +521,11 @@ class BrowserPanel {
   back.focus({ preventScroll: true });
  }
 
- async tabsTool(args, { id, cwd }) {
+ cancel(id) {
+  bridge?.cancel?.(id);
+ }
+
+ async tabsTool(args, { id }) {
   const action = String(args.action || 'list').toLowerCase();
   const pick = () => {
    const tab = this.tabs[Math.round(Number(args.tab)) - 1];
@@ -535,13 +537,13 @@ class BrowserPanel {
     const tab = this.newTab('', { focus: false });
     if (!args.url) return { text: `Opened a new empty tab.\n\nTabs:\n${this.tabsText()}` };
     await this.ensure();
-    const result = await tools.run(id, 'browser_navigate', { url: args.url, tab: tab.id }, cwd);
+    const result = await bridge.run(id, 'browser_navigate', { url: args.url, tab: tab.id });
     return result.error ? result : { ...result, text: `Tabs:\n${this.tabsText()}\n\n${result.text}` };
    }
    if (action === 'switch') {
     this.select(pick());
     const tab = await this.ensure();
-    return tools.run(id, 'browser_snapshot', { tab: tab.id }, cwd);
+    return bridge.run(id, 'browser_snapshot', { tab: tab.id });
    }
    if (action === 'close') {
     this.close(pick());
@@ -553,19 +555,16 @@ class BrowserPanel {
   }
  }
 
- tabsLine() {
-  return this.tabs.length > 1 ? `Tabs: ${this.tabs.map((tab, k) => `${k + 1}. ${tab.title || hostOf(tab.url) || 'New tab'}${tab === this.active ? ' (this one)' : ''}`).join(' · ')}` : '';
- }
-
- // What the browser holds, for the note at the end of each request; a closed browser with nothing in it says nothing.
- context() {
+ // What the browser holds, for the backend with each turn (host.browser in turn.start): whether the panel is open, its tabs
+ // and the sites the user signed in to with it. A closed browser with nothing in it is null.
+ snapshot() {
   const tabs = this.tabs.filter(tab => !blank(tab.url));
-  if (!this.open && !tabs.length && !this.accounts.length) return '';
-  const lines = [`- The browser panel is ${this.open ? 'open, the user sees the page' : 'closed; the browser still works, the user can open it with the globe button'}.`];
-  if (tabs.length) lines.push(`- Open tabs:\n${this.tabsText().split('\n').map(line => `  ${line}`).join('\n')}`);
-  else lines.push('- No pages are open in it yet.');
-  if (this.accounts.length) lines.push(`- The user signed in with this browser to: ${this.accounts.map(item => `${item.host} (${shortDate(item.at)})`).join(', ')}. Logins stay between chats but can expire; check before relying on one.`);
-  return lines.join('\n');
+  if (!this.open && !tabs.length && !this.accounts.length) return null;
+  return {
+   open: !!this.open,
+   tabs: this.tabs.map((tab, k) => ({ n: k + 1, title: tab.title || '', url: blank(tab.url) ? '' : tab.url, active: tab === this.active })),
+   signedIn: this.accounts.map(item => ({ host: item.host, at: item.at })),
+  };
  }
 }
 

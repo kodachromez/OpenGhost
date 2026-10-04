@@ -70,7 +70,7 @@ document.querySelector('.titlebar-name').innerHTML = `${Glyphs.ghost}<span>OpenG
 const modeButton = document.querySelector('.composer-mode');
 const browserToggle = document.querySelector('.browser-toggle');
 let browserPanel = null;
-if (AgentTools.available) {
+if (window.openghost?.desktop) {
   modeButton.hidden = false;
   new ModePicker({ button: modeButton, settings, onChange: () => chat.onModeChange() });
   browserToggle.hidden = false;

@@ -2,10 +2,10 @@
 'use strict';
 
 // The app's own count of the tokens each provider was sent and wrote back, kept by day and model on this computer only.
-// Providers bill these same numbers. The count starts with the version that brought it: nothing was kept before.
+// The numbers come from the backend's `usage` events, already in the same words for every provider (ABP v0). The count
+// starts with the version that brought it: nothing was kept before.
 const KEY = 'usage';
 const SAVE_DELAY = 800;
-const PROVIDERS = ['chatgpt', 'openai', 'anthropic', 'deepseek'];
 // Per day and model: tokens sent, of them read from the provider's cache, written to it, tokens written back, requests.
 const [INPUT, CACHED, WRITTEN, OUTPUT, REQUESTS] = [0, 1, 2, 3, 4];
 
@@ -24,7 +24,6 @@ const empty = () => ({ input: 0, cached: 0, written: 0, output: 0, requests: 0, 
 class Usage {
  constructor(store) {
   this.store = store;
-  this.providers = PROVIDERS;
   this.data = { version: 1, since: 0, days: {}, names: {} };
   this.listeners = new Set();
   this.timer = 0;
@@ -33,21 +32,21 @@ class Usage {
   }).catch(() => {});
  }
 
- // One answer's tokens as every provider reports them, in the same words: sent, of them read from the provider's cache or
- // written to it, and written back. Null when the provider said nothing.
+ // One usage event's tokens: sent, of them read from the provider's cache or written to it, and written back. Null when
+ // it counts nothing.
  parts(usage) {
-  if (!usage) return null;
-  const input = usage.prompt_tokens || 0, output = usage.completion_tokens || 0;
+  const count = value => Math.max(0, Number(value) || 0);
+  const input = count(usage?.input), output = count(usage?.output);
   if (!input && !output) return null;
-  const cached = usage.cached_tokens ?? usage.prompt_cache_hit_tokens ?? usage.prompt_tokens_details?.cached_tokens ?? 0;
-  return { input, cached: Math.min(cached, input), written: usage.written_tokens || 0, output };
+  return { input, cached: Math.min(count(usage.cached), input), written: count(usage.written), output, requests: Math.max(1, count(usage.requests)) };
  }
 
- // One answer's tokens: what was sent (and how much of it the provider read from its cache or wrote to it) and what came back.
- record({ provider, model, name }, usage) {
-  const parts = this.parts(usage);
-  if (!parts || !PROVIDERS.includes(provider) || !model) return;
-  const { input, cached, written, output } = parts;
+ // One usage event from the backend: what was sent (and how much of it the provider read from its cache or wrote to it)
+ // and what came back, by provider and model.
+ record(usage) {
+  const parts = this.parts(usage), provider = String(usage?.provider || ''), model = String(usage?.model || ''), name = usage?.modelName;
+  if (!parts || !provider || !model || provider.includes('|')) return;
+  const { input, cached, written, output, requests } = parts;
   this.ready.then(() => {
    const data = this.data, id = `${provider}|${model}`;
    data.since ||= Date.now();
@@ -56,7 +55,7 @@ class Usage {
    row[CACHED] += cached;
    row[WRITTEN] += written;
    row[OUTPUT] += output;
-   row[REQUESTS] += 1;
+   row[REQUESTS] += requests;
    if (name) data.names[id] = name;
    this.save();
    for (const listener of this.listeners) listener();

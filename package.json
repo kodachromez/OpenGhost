@@ -8,6 +8,8 @@
   "scripts": {
     "start": "electron .",
     "shortcut": "electron . --create-shortcut",
+    "test": "node --test test/*.test.js",
+    "test:e2e": "node test/e2e/smoke.mjs",
     "dist": "electron-builder --win nsis --publish never",
     "dist:mac": "electron-builder --mac dmg --universal --publish never",
     "dist:linux": "electron-builder --linux tar.gz --publish never"
@@ -28,7 +30,9 @@
       "!dist/**",
       "!images/**",
       "!.github/**",
-      "!**/*.md"
+      "!**/*.md",
+      "!docs/**",
+      "!test/**"
     ],
     "asar": true,
     "win": {
@@ -58,8 +62,5 @@
       "category": "Utility",
       "artifactName": "OpenGhost-${version}-linux.${ext}"
     }
-  },
-  "dependencies": {
-    "@anthropic-ai/sdk": "^0.128.0"
   }
 }

@@ -1,13 +1,12 @@
 'use strict';
 
-const { app, BrowserWindow, Menu, dialog, ipcMain, nativeTheme, shell } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, nativeTheme, net, shell } = require('electron');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
-const Tools = require('./tools');
 const Browser = require('./browser');
-const LLM = require('./llm');
-const Keys = require('./keys');
 const Pdf = require('./pdf');
+const { BackendHost, configured } = require('./backend-host');
 
 const APP_ID = 'com.openghost.app';
 const ROOT = path.join(__dirname, '..');
@@ -22,6 +21,10 @@ const THEMES = {
  light: { background: '#ffffff', symbols: '#5c5c5c' },
 };
 const STORE_KEY = /^[a-z0-9-]+(\/[a-z0-9-]+)?$/;
+// A chat started without a project folder works in a folder of its own in here. It sits in the home folder, not next to the app:
+// an update replaces the app's own folder whole, and Documents and the desktop are often synced by OneDrive or iCloud.
+const CHATS = path.join(os.homedir(), 'OpenGhost', 'Chats');
+const YOUTUBE_ID = /^[\w-]{11}$/;
 
 process.env.ELECTRON_DISABLE_SECURITY_WARNINGS = 'true';
 app.setAppUserModelId(APP_ID);
@@ -94,6 +97,49 @@ async function removeStore(key) {
  await fs.promises.rm(file, { force: true });
 }
 
+const inChats = dir => {
+ const rest = path.relative(CHATS, dir);
+ return !!rest && !rest.startsWith('..') && !path.isAbsolute(rest);
+};
+
+// A deleted chat takes its own folder along only while nothing is in it: what was made there stays the user's.
+async function release(dir) {
+ if (typeof dir !== 'string' || !path.isAbsolute(dir) || !inChats(dir)) return false;
+ return fs.promises.rmdir(dir).then(() => true, () => false);
+}
+
+// The browser's host tools: the backend asks the page for them (host.tool), the page runs them here on its own webviews.
+const browserJobs = new Map();
+
+async function runBrowser(id, name, args, sender) {
+ if (typeof name !== 'string' || !name.startsWith('browser_')) return { error: `Unknown browser tool ${name}` };
+ const controller = new AbortController(), key = String(id || '');
+ if (key) browserJobs.set(key, () => controller.abort());
+ try {
+  return await Browser.run(name, args && typeof args === 'object' ? args : {}, sender, controller.signal);
+ } catch (error) {
+  return { error: error.message };
+ } finally {
+  browserJobs.delete(key);
+ }
+}
+
+const cancelBrowser = () => { for (const stop of browserJobs.values()) stop(); };
+
+// What YouTube tells about a video for its card: its name and who made it. Only YouTube's oEmbed is ever asked.
+async function videoInfo(id) {
+ if (typeof id !== 'string' || !YOUTUBE_ID.test(id)) return null;
+ const address = `https://www.youtube.com/oembed?url=${encodeURIComponent(`https://www.youtube.com/watch?v=${id}`)}&format=json`;
+ try {
+  const response = await net.fetch(address, { signal: AbortSignal.timeout(10000) });
+  if (!response.ok) return null;
+  const data = await response.json();
+  return { title: String(data.title || ''), by: String(data.author_name || '') };
+ } catch {
+  return null;
+ }
+}
+
 function external(url) {
  if (/^(https?|mailto):/i.test(url)) shell.openExternal(url);
 }
@@ -162,8 +208,8 @@ ipcMain.handle('folder:pick', async event => {
 });
 
 ipcMain.handle('folder:reveal', (event, folder) => typeof folder === 'string' && shell.openPath(folder));
-ipcMain.handle('folder:chats', () => Tools.CHATS);
-ipcMain.handle('folder:release', (event, folder) => fromApp(event) && Tools.release(folder));
+ipcMain.handle('folder:chats', () => CHATS);
+ipcMain.handle('folder:release', (event, folder) => fromApp(event) && release(folder));
 ipcMain.handle('store:read', (event, key) => readStore(key));
 ipcMain.handle('store:write', (event, key, value) => writeStore(key, value));
 ipcMain.handle('store:remove', (event, key) => removeStore(key));
@@ -188,13 +234,35 @@ ipcMain.handle('theme:set', (event, choice) => {
  }
  return nativeTheme.shouldUseDarkColors;
 });
-ipcMain.handle('tool:run', (event, id, name, args, cwd) => fromApp(event) ? Tools.runTool(id, name, args, cwd, event.sender) : { error: 'Not allowed' });
+ipcMain.handle('browser:run', (event, id, name, args) => fromApp(event) ? runBrowser(id, name, args, event.sender) : { error: 'Not allowed' });
+ipcMain.handle('browser:cancel', (event, id) => { if (fromApp(event)) browserJobs.get(String(id))?.(); });
 ipcMain.on('browser:shown', (event, value) => { if (fromApp(event)) Browser.setShown(value); });
-ipcMain.handle('tool:cancel', (event, id) => { if (fromApp(event)) Tools.cancel(id); });
-ipcMain.handle('tool:environment', event => fromApp(event) ? Tools.environment() : null);
 ipcMain.handle('pdf:read', (event, source) => fromApp(event) ? Pdf.read(source) : { text: '', reason: 'unreadable' });
-LLM.register(fromApp);
-Keys.register(fromApp);
+ipcMain.handle('media:video-info', (event, id) => fromApp(event) ? videoInfo(id) : null);
+
+// The backend: the page sends and gets JSON-RPC messages through here, and hears when the backend comes or goes.
+let backend = null;
+let page = null;
+const toPage = (channel, data) => { if (page && !page.isDestroyed()) page.send(channel, data); };
+ipcMain.on('backend:send', (event, message) => { if (fromApp(event)) backend?.send(message); });
+ipcMain.handle('backend:status', event => fromApp(event) && backend ? backend.status : { state: 'none' });
+
+function startBackend() {
+ let command = null, error = '';
+ try {
+  command = configured({ userData: app.getPath('userData') });
+ } catch (e) {
+  error = e.message;
+ }
+ backend = new BackendHost({
+  command,
+  cwd: os.homedir(),
+  onMessage: message => toPage('backend:message', message),
+  onStatus: status => toPage('backend:status', status),
+ });
+ if (error) backend.setState({ state: 'error', error: `backend.json: ${error}` });
+ else backend.start();
+}
 
 if (process.argv.includes('--create-shortcut')) {
  app.whenReady().then(() => {
@@ -212,20 +280,22 @@ if (process.argv.includes('--create-shortcut')) {
  });
  app.whenReady().then(() => {
   Browser.setup();
-  Keys.load();
+  startBackend();
   win = createWindow();
+  page = win.webContents;
   win.on('closed', () => {
    win = null;
-   Tools.cancelAll();
-   LLM.cancelAll();
+   page = null;
+   cancelBrowser();
    Pdf.cancelAll();
   });
  });
  app.on('window-all-closed', () => app.quit());
  app.on('before-quit', event => {
-  Tools.cancelAll();
-  if (!writes.size) return;
+  cancelBrowser();
+  if (!writes.size && !backend?.child) return;
   event.preventDefault();
-  Promise.allSettled([...writes.values()]).then(() => app.quit());
+  // The store is on disk and the backend has had its chance to shut down before the app goes.
+  Promise.allSettled([...writes.values()]).then(() => backend?.stop()).then(() => app.quit());
  });
 }

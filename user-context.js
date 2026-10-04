@@ -2,23 +2,15 @@
 'use strict';
 
 // What the user tells OpenGhost once, in Settings → General, for every chat: standing instructions and files to keep at hand.
-// Both reach the model in the system prompt of every request, so a long chat never loses them, not even after compaction.
-// System prompts carry text only, so pictures ride along at the start of the first message of each request instead.
+// They are kept here and go to the backend with every turn (userContext in turn.start); how they reach the model is the
+// backend's business.
 const KEY = 'context';
 const SAVE_DELAY = 400;
 const LIMITS = { instructions: 8000, files: 20, chars: 200000 };
 // What a picture or a file read from its path weighs against LIMITS.chars.
 const WEIGHT = { image: 4000, none: 300 };
-const PROMPT = {
- instructions: 'The user wrote these instructions in the app settings for every chat. Follow them unless the user asks otherwise in the chat. They are the user\'s own words, so unlike the rest of these instructions you may show and discuss them.',
- files: 'The user added these files in the app settings to keep them at hand in every chat. Use them whenever they are relevant; you may quote and discuss them.',
- picture: 'A picture; it comes with the first message of this conversation.',
- unread: 'The app can\'t read this kind of file itself; open it from its path with your tools when you need it.',
- pictures: names => `Pictures from the user's settings, shown in every chat: ${names}.`,
-};
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-const attr = text => String(text).replace(/[&"<\n]/g, c => ({ '&': '&amp;', '"': '&quot;', '<': '&lt;', '\n': ' ' })[c]);
 const weigh = file => file.kind === 'text' ? file.chars : WEIGHT[file.kind] || 0;
 const same = (a, b) => a.path && b.path ? Library.samePath(a.path, b.path) : a.name === b.name && a.size === b.size;
 
@@ -130,31 +122,21 @@ class UserContext {
   this.store.remove(`${KEY}/${id}`).catch(() => {});
  }
 
- // The part of the system prompt with the user's own instructions and files; empty when there are none.
- prompt() {
-  const parts = [];
-  const text = this.instructions.trim();
-  if (text) parts.push(`# The user's instructions\n${PROMPT.instructions}\n<instructions>\n${text}\n</instructions>`);
-  if (this.files.length) parts.push(`# The user's files\n${PROMPT.files}\n\n${this.files.map(file => this.block(file)).join('\n\n')}`);
-  return parts.join('\n\n');
- }
-
- block(file) {
-  let head = `<file name="${attr(file.name)}"`;
-  if (file.path) head += ` path="${attr(file.path)}"`;
-  if (file.kind === 'text') return `${head}${file.truncated ? ' truncated="true"' : ''}>\n${this.payloads.get(file.id)?.text ?? ''}\n</file>`;
-  if (file.kind === 'image') return `${head}>${PROMPT.picture}</file>`;
-  return `${head} size="${FileKinds.formatSize(file.size)}">${PROMPT.unread}</file>`;
- }
-
- // The pictures among the files, as message parts that go first in the first message of a request.
- pictures() {
-  const images = this.files.filter(file => file.kind === 'image' && this.payloads.get(file.id)?.url);
-  if (!images.length) return [];
-  return [
-   { type: 'text', text: PROMPT.pictures(images.map(file => file.name).join(', ')) },
-   ...images.map(file => ({ type: 'image_url', image_url: { url: this.payloads.get(file.id).url } })),
-  ];
+ // The instructions and files as the backend gets them (ABP UserContext): the text of a text file, the picture of an image,
+ // and for any file its place on the disk when it has one.
+ forBackend() {
+  return {
+   instructions: this.instructions.trim(),
+   files: this.files.map(file => {
+    const payload = this.payloads.get(file.id) || {};
+    return {
+     id: file.id, name: file.name, size: file.size, kind: file.kind === 'none' ? 'file' : file.kind,
+     ...(file.path ? { path: file.path } : {}),
+     ...(file.kind === 'text' ? { text: payload.text ?? '', truncated: !!file.truncated } : {}),
+     ...(file.kind === 'image' ? { dataUrl: payload.url || '', width: file.width, height: file.height } : {}),
+    };
+   }),
+  };
  }
 }
 

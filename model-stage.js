@@ -27,7 +27,6 @@ const MARK = 30;
 const ROOM = { top: 52, right: 68, bottom: 10 };
 // Many models turn the list into a drum: rows away from its middle drift right, tilt and shrink a little.
 const DRUM = { reach: 320, shift: 34, tilt: 3.2, shrink: 0.07 };
-const GROUPS = { chatgpt: 'ChatGPT', openai: 'OpenAI API', anthropic: 'Anthropic', deepseek: 'DeepSeek' };
 
 const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 const escapeHtml = text => text.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
@@ -152,7 +151,7 @@ class ModelStage {
     const label = document.createElement('div');
     label.className = 'model-group';
     label.dataset.provider = provider;
-    label.textContent = GROUPS[provider] || provider;
+    label.textContent = this.settings.groupOf(provider);
     this.groups.push(label);
     slots.push(slot(label));
    }
