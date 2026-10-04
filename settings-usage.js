@@ -184,7 +184,8 @@ class UsageSettings {
   const data = await Backend.request('account.limits', { provider }).catch(() => undefined);
   if (!this.visible) return;
   const fresh = was?.state !== 'ready';
-  this.limits[provider] = data !== undefined ? { state: 'ready', data } : { state: 'error', data: was?.data || null };
+  // null is the backend's settled "no limits for this account" (account.limits returns AccountLimits | null), not a load still under way.
+  this.limits[provider] = data !== undefined ? { state: 'ready', data: data ?? {} } : { state: 'error', data: was?.data || null };
   this.paintLimits(provider, fresh);
   this.paintBalance(provider);
  }
@@ -336,9 +337,10 @@ class UsageSettings {
 
  // The plan's limits, each window as the provider counts it; while they load, two quiet rows hold their place.
  paintLimits(provider, animate) {
-  const box = this.root.querySelector(`.usage-provider[data-provider="${CSS.escape(provider)}"] .usage-limits`);
+  const box = this.limitsBox(provider);
   const { state, data } = this.limits[provider] || { state: 'loading', data: null };
-  if (data?.plan) this.account(provider, I18n.t('usage.plan'), data.plan.charAt(0).toUpperCase() + data.plan.slice(1));
+  // As with the limits themselves, a plan is shown only for an account still connected, never one kept from before a sign-out.
+  if (data?.plan && this.connected(provider)) this.account(provider, I18n.t('usage.plan'), data.plan.charAt(0).toUpperCase() + data.plan.slice(1));
   if (!box) return;
   if (!data) {
    box.innerHTML = state === 'error' ? `<p class="usage-note">${escapeHtml(I18n.t('usage.limits.error'))}</p>`
@@ -352,6 +354,19 @@ class UsageSettings {
   const credits = data.credits ? `<p class="usage-note">${escapeHtml(data.credits.unlimited ? I18n.t('usage.credits.unlimited') : I18n.t('usage.credits', { n: data.credits.balance }))}</p>` : '';
   box.innerHTML = (rows.length ? rows.join('') : `<p class="usage-note">${escapeHtml(I18n.t('usage.limits.none'))}</p>`) + credits;
   box.classList.toggle('is-filling', !!animate && !reducedMotion());
+ }
+
+ // The provider's limits box; a section drawn before it was known to have limits gets one when they first arrive.
+ limitsBox(provider) {
+  const section = this.root.querySelector(`.usage-provider[data-provider="${CSS.escape(provider)}"]`);
+  if (!section) return null;
+  let box = section.querySelector('.usage-limits');
+  if (!box && this.connected(provider) && this.hasLimits(provider)) {
+   box = document.createElement('div');
+   box.className = 'usage-limits';
+   section.querySelector('.provider-head').after(box);
+  }
+  return box;
  }
 
  // The provider's own figure for what is left on the account.
