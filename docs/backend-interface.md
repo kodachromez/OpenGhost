@@ -226,6 +226,13 @@ instead of doing the step; if the user sends a message instead, it returns `stat
 Whether a browser step needs approval is the backend's call, made with `approval.request` before `host.tool`.
 `data.refs` names the snapshot's numbered elements, for wording approval cards.
 
+**Turn identity.** Both requests belong to the turn named by `turnId`, which must be the session's running turn. One
+for a turn that ended or was stopped is answered as cancelled (`deny`/`cancelled`, `status: 'cancelled'`); one naming
+another turn, or with no `turnId`, fails with `stale_turn` before a card shows or a step runs, as does a second
+request with an `approvalId` or `toolCallId` already asked in that turn. A request that arrives before `turn.start`
+has answered waits for the turn's id. A browser step still running when its turn ends is cancelled. A reverse request
+reusing the JSON-RPC `id` of one still being answered fails with `duplicate_request` (`-32600`) and is not run.
+
 ## Provider, model and account types
 
 ```ts

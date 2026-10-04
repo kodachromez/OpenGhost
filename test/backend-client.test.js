@@ -97,6 +97,21 @@ test('reverse requests are answered by their handler, and $/cancelRequest aborts
  assert.equal(transport.last().error.code, -32601);
 });
 
+test('a reverse request reusing the id of one still being answered is refused and its handler does not run', async () => {
+ const { transport, Backend } = await connected();
+ const calls = [];
+ let finish;
+ Backend.handle('host.tool', params => { calls.push(params.name); return new Promise(resolve => { finish = resolve; }); });
+ transport.deliver({ id: 'b1', method: 'host.tool', params: { name: 'first' } });
+ transport.deliver({ id: 'b1', method: 'host.tool', params: { name: 'second' } });
+ await tick();
+ assert.deepEqual(calls, ['first']);
+ assert.equal(transport.last().error.data.code, 'duplicate_request');
+ finish({ content: [] });
+ await tick();
+ assert.deepEqual(transport.last(), { jsonrpc: '2.0', id: 'b1', result: { content: [] } });
+});
+
 test('a handler that throws answers with the ABP error', async () => {
  const { window, transport, Backend } = await connected();
  Backend.handle('host.tool', () => { throw new window.BackendError({ code: 'unsupported', message: 'No such tool' }); });

@@ -196,6 +196,12 @@ class BackendClient {
    this.send({ jsonrpc: '2.0', id, error: { code: -32601, message: `Method not found: ${method}` } });
    return;
   }
+  // An id still being answered is not taken again: its handler would run twice, and one answer would take the other's place.
+  if (this.incoming.has(id)) {
+   const message = `Request ${id} is already being answered`;
+   this.send({ jsonrpc: '2.0', id, error: { code: -32600, message, data: { code: 'duplicate_request', message } } });
+   return;
+  }
   const controller = new AbortController();
   this.incoming.set(id, controller);
   try {

@@ -684,7 +684,7 @@ class Chat {
  begin(conv, config) {
   const turn = conv.turn = {
    id: uid(), remote: '', controller: new AbortController(), config, part: null, parts: [], next: null, queue: [], approvals: new Set(),
-   messages: new Set(), early: [], prompt: null, compaction: null, tool: '', text: false, finishReason: null,
+   messages: new Set(), requests: new Set(), early: [], prompt: null, compaction: null, tool: '', text: false, finishReason: null,
   };
   turn.done = new Promise((resolve, reject) => {
    turn.finish = ({ status, finishReason, error } = {}) => {
@@ -878,11 +878,30 @@ class Chat {
   if (record && title && !record.renamed) this.library.update(conv.id, { title, named: true });
  }
 
+ // A request the backend makes for a step (approval.request, host.tool) belongs to the turn it names. It gets that turn
+ // only while it is the chat's running turn: one that comes before turn.start is answered waits for the turn's id, one
+ // for a turn that ended or was stopped gets null (answered as cancelled), and one for another turn, or a step asked
+ // twice, is refused with `stale_turn` before anything shows or runs.
+ async claim(conv, p, signal, key) {
+  const turn = conv.turn;
+  if (turn && !turn.remote && !turn.controller.signal.aborted && !signal.aborted) {
+   await Promise.race([turn.started, turn.done, new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }))]).catch(() => {});
+  }
+  if (!turn || conv.turn !== turn || turn.controller.signal.aborted || signal.aborted) return null;
+  const stale = message => new BackendError({ code: 'stale_turn', message });
+  if (!p.turnId || p.turnId !== turn.remote) throw stale(`Turn ${p.turnId || '(none)'} is not the running turn of session ${p.sessionId}`);
+  if (key) {
+   if (turn.requests.has(key)) throw stale(`${key} was already asked in turn ${p.turnId}`);
+   turn.requests.add(key);
+  }
+  return turn;
+ }
+
  // The backend asks before a step: the card goes under the reply, and its answer goes back. A message sent instead
  // answers it too.
  async onApproval(conv, p, signal) {
-  const turn = conv.turn;
-  if (!turn || turn.controller.signal.aborted) return { decision: 'deny', reason: 'cancelled' };
+  const turn = await this.claim(conv, p, signal, p.approvalId && `approval ${p.approvalId}`);
+  if (!turn) return { decision: 'deny', reason: 'cancelled' };
   if (turn.queue.length) return { decision: 'deny', reason: SUPERSEDED };
   const view = turn.part.view;
   this.dismissGhost(view);
@@ -903,9 +922,10 @@ class Chat {
  // The backend asks the app to run one of its host tools: the built-in browser. While the user has taken control of the
  // browser the step waits for them to hand it back, then reports what the page is now instead.
  async onHostTool(conv, p, signal) {
-  const turn = conv.turn, panel = window.browserPanel;
+  const panel = window.browserPanel;
   if (!panel || !window.HostTools?.has(p.name)) throw new BackendError({ code: 'unsupported', message: `The app has no host tool ${p.name}` });
-  if (!turn || turn.controller.signal.aborted) return { status: 'cancelled', content: [] };
+  const turn = await this.claim(conv, p, signal, p.toolCallId && `tool call ${p.toolCallId}`);
+  if (!turn) return { status: 'cancelled', content: [] };
   this.showGhost(turn.next || turn.part.view);
   panel.drive(conv, true);
   let handed = false;
@@ -916,7 +936,7 @@ class Chat {
     signal.addEventListener('abort', () => resolve('abort'), { once: true });
    });
    turn.release = null;
-   if (why === 'abort' || signal.aborted || turn.controller.signal.aborted) return { status: 'cancelled', content: [] };
+   if (why === 'abort' || signal.aborted || turn.controller.signal.aborted || conv.turn !== turn) return { status: 'cancelled', content: [] };
    if (why === 'message') return { status: 'cancelled', reason: 'message', content: [] };
    handed = true;
   }
@@ -925,7 +945,7 @@ class Chat {
   signal.addEventListener('abort', stop, { once: true });
   try {
    const answer = await panel.run(handed ? 'browser_snapshot' : p.name, handed ? {} : p.args || {}, { id });
-   if (signal.aborted || turn.controller.signal.aborted) return { status: 'cancelled', content: [] };
+   if (signal.aborted || turn.controller.signal.aborted || conv.turn !== turn) return { status: 'cancelled', content: [] };
    const result = HostTools.result(p.args || {}, answer);
    return { ...result, status: handed ? 'handed-back' : result.isError ? 'error' : 'ok' };
   } finally {
@@ -974,6 +994,9 @@ class Chat {
   if (conv.turn !== turn) return;
   const { view, entry } = turn.part, aborted = error?.name === 'AbortError';
   for (const pending of turn.approvals) pending.card.settle('deny');
+  // A browser step the turn still has running, or waiting for the user to hand the browser back, ends with it.
+  turn.release?.('abort');
+  if (turn.tool) window.browserPanel?.cancel(turn.tool);
   conv.turn = null;
   if (turn.compaction) this.compactionDone(conv, turn, false);
   else if (error && !aborted && (turn.switch || turn.compacting)) this.failedNotice(conv, turn);

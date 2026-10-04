@@ -51,6 +51,8 @@ No **CRITICAL** finding is established. **HIGH** means a safety/data-loss/reliab
 
 **Recommendation:** validate session + turn + connection generation, including the start-in-progress case; reject stale/duplicate work before presentation or execution. Unknown sessions already produce `unknown_session`; extend that discipline to turns and call IDs.
 
+**Resolution (fixed):** `Chat.claim` (`chat.js`) now gates `onApproval`/`onHostTool`: the request's `turnId` must equal the chat's running `turn.remote` (a request before the start ACK waits for it); a missing/other `turnId` or a repeated `approvalId`/`toolCallId` in the turn fails with `stale_turn` before any card or browser step; a stopped/ended turn answers cancelled. `end()` now cancels a browser step still running (or waiting for hand-back) for that turn, and the client refuses a reverse request reusing an in-flight JSON-RPC id (`duplicate_request`). Connection generation is covered by `close()` aborting every in-flight reverse request. Regression tests: `test/turn-identity.test.js`, plus the duplicate-id case in `test/backend-client.test.js`; contract in `docs/backend-interface.md` (Turn identity).
+
 ### F02 — HIGH: browser cancellation and user control are not execution barriers (**partly reproduced**)
 
 **Evidence:** `chat.js:540–547,905–935,973–984`; `browser-panel.js:453–549`; `desktop/main.js:112–127`; `desktop/browser.js:519–623`.
