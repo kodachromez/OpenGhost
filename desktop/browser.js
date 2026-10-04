@@ -3,11 +3,13 @@
 const { app, clipboard, Menu, nativeImage, session, webContents } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
+const { randomUUID } = require('node:crypto');
+const { AsyncLocalStorage } = require('node:async_hooks');
+const operations = new AsyncLocalStorage();
 
 const PARTITION = 'persist:browser';
 const WORLD = 1077;
-const WAIT = { load: 30000, stop: 15000, call: 12000, quiet: [300, 2000], pointer: 420 };
-const SNAPSHOT = { view: 9000, full: 40000 };
+const WAIT = { operation: 75000, load: 30000, stop: 15000, call: 12000, quiet: [300, 2000], pointer: 420 };
 const SHOT = { max: 1280, quality: 82, tall: 4 };
 const READ_MAX = 4 * 1024 * 1024;
 const WAIT_MAX = 60;
@@ -23,8 +25,8 @@ const KEYS = {
 const MODIFIERS = { alt: 1, control: 2, ctrl: 2, meta: 4, cmd: 4, win: 4, shift: 8 };
 
 // Everything below runs inside the page, in an isolated world the page's own scripts can't see.
-function install() {
- if (window.__og) return;
+function install(pageId) {
+ if (window.__og?.pageId === pageId) return;
  const ACTIVE = new Set(['link', 'button', 'combobox', 'listbox', 'textbox', 'searchbox', 'checkbox', 'radio', 'slider', 'spinbutton', 'switch', 'tab', 'menuitem', 'menuitemcheckbox', 'menuitemradio', 'option', 'treeitem', 'file input', 'clickable']);
  const TYPING = new Set(['textbox', 'searchbox', 'combobox', 'spinbutton']);
  const INPUTS = { button: 'button', submit: 'button', reset: 'button', image: 'button', checkbox: 'checkbox', radio: 'radio', range: 'slider', search: 'searchbox', file: 'file input', number: 'spinbutton', hidden: '' };
@@ -200,12 +202,12 @@ function install() {
   children(document.body || document.documentElement);
   const scroller = document.scrollingElement || document.documentElement;
   const height = scroller.scrollHeight, top = scroller.scrollTop;
-  return { lines, refs, skipped, scroll: { top, height, vh, vw, below: Math.max(0, height - top - vh) } };
+  return { lines, refs, skipped, truncated: skipped > 0 || visited > 20000, scroll: { top, height, vh, vw, below: Math.max(0, height - top - vh) } };
  }
 
  function element(ref) {
   const el = state.refs.get(Number(ref))?.deref();
-  if (!el || !el.isConnected) throw new Error(`Element [${ref}] is no longer on the page. Take a new snapshot.`);
+  if (!el || !el.isConnected) throw Object.assign(new Error(`Element [${ref}] is no longer on the page. Take a new snapshot.`), { code: 'stale_ref' });
   return el;
  }
 
@@ -274,15 +276,40 @@ function install() {
   return false;
  }
 
- window.__og = { snapshot, point, choose, reveal, quiet, has };
+ window.__og = { pageId, snapshot, point, choose, reveal, quiet, has };
 }
 
-const INSTALL = `(${install.toString()})();`;
-const plain = message => Object.assign(new Error(message), { plain: true });
-const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+const plain = (message, code = 'browser_error') => Object.assign(new Error(message), { plain: true, code });
 const guests = new Map();
-const downloads = [];
-let shown = { open: false, id: 0 };
+const revise = found => { found.pageId = randomUUID(); found.read = null; };
+
+// Every await and every dispatch shares one deadline and cancellation barrier. A timed-out
+// CDP/JS call may already have been issued; it must never resume and dispatch another action.
+function check() {
+ const op = operations.getStore();
+ if (!op) return;
+ if (op.signal.aborted) throw op.signal.reason;
+ if (op.found.guest.isDestroyed()) throw plain('This browser tab is gone', 'tab_gone');
+ if (op.lease !== shown.lease) throw plain('The active browser target changed. Take a new snapshot.', 'stale_tab');
+ if (!op.navigating && op.pageId !== op.found.pageId) throw plain('The page changed. Take a new snapshot.', 'stale_page');
+}
+
+function sleep(ms) {
+ let timer;
+ return timed(new Promise(resolve => { timer = setTimeout(resolve, ms); }), ms + WAIT.call, 'Browser delay timed out').finally(() => clearTimeout(timer));
+}
+
+function command(guest, method, params = {}, mayNavigate = false) {
+ check();
+ const op = operations.getStore();
+ if (method.startsWith('Input.')) op.dirty = true;
+ const pending = guest.debugger.sendCommand(method, params);
+ // The final input may itself navigate before CDP acknowledges it. Only its release
+ // and observation may follow, never another press/type against the replacement page.
+ if (mayNavigate) op.navigating = true;
+ return timed(pending, WAIT.call, `${method} timed out`);
+}
+let shown = { open: false, id: 0, lease: 0 };
 let ready = false;
 
 function normalize(value) {
@@ -312,12 +339,13 @@ function setup() {
  ses.setPermissionCheckHandler((contents, permission) => ALLOWED.has(permission));
  ses.on('will-download', (event, item, contents) => {
   item.setSavePath(uniqueFile(app.getPath('downloads'), item.getFilename()));
+  const owner = guests.get(contents?.id), operationId = owner?.running;
   item.once('done', (e, result) => {
    if (result !== 'completed') return;
    const file = item.getSavePath();
-   downloads.push({ file, at: Date.now(), told: false });
+   if (owner) owner.downloads = [...owner.downloads, { file, at: Date.now(), operationId: operationId || null }].slice(-100);
    const host = contents?.hostWebContents;
-   if (host && !host.isDestroyed()) host.send('browser:event', { type: 'download', file, name: path.basename(file) });
+   if (host && !host.isDestroyed()) host.send('browser:event', { type: 'download', id: contents.id, operationId: operationId || null, file, name: path.basename(file) });
   });
  });
 }
@@ -330,8 +358,24 @@ function guard(host, prefs, params) {
 }
 
 function adopt(host, guest) {
- guests.set(guest.id, { guest, host, queue: Promise.resolve(), attached: false });
- guest.once('destroyed', () => guests.delete(guest.id));
+ const found = { guest, host, queue: Promise.resolve(), attached: false, pageId: randomUUID(), downloads: [], read: null };
+ guests.set(guest.id, found);
+ const changed = () => { revise(found); found.failure = null; };
+ guest.on('did-start-navigation', (event, url, inPlace, mainFrame) => { if (mainFrame) changed(); });
+ // A snapshot taken during loading describes the old document, not the document that commits later.
+ guest.on('did-navigate', changed);
+ guest.on('did-navigate-in-page', (event, url, mainFrame) => { if (mainFrame) changed(); });
+ guest.on('did-fail-load', (event, code, description, url, mainFrame) => {
+  if (mainFrame && code !== -3) found.failure = plain(`The page could not be opened: ${description}`, 'navigation_failed');
+ });
+ guest.on('render-process-gone', () => {
+  found.pageId = randomUUID(); found.read = null;
+  found.stop?.(plain('The browser page crashed. Open it again.', 'guest_crashed'));
+ });
+ guest.once('destroyed', () => {
+  found.stop?.(plain('This browser tab is gone', 'tab_gone'));
+  guests.delete(guest.id);
+ });
  const tell = (type, data = {}) => { if (!host.isDestroyed()) host.send('browser:event', { type, id: guest.id, ...data }); };
  guest.setWindowOpenHandler(({ url, disposition }) => {
   if (disposition === 'new-window') return { action: 'allow', overrideBrowserWindowOptions: { width: 520, height: 700, autoHideMenuBar: true, backgroundColor: '#ffffff' } };
@@ -387,33 +431,61 @@ function adopt(host, guest) {
 
 function entry(id, host) {
  const found = guests.get(Number(id));
- if (!found || found.guest.isDestroyed() || found.host !== host) throw plain('This browser tab is gone. Open a page again with browser_navigate.');
+ if (!found || found.guest.isDestroyed() || found.host !== host) throw plain('This browser tab is gone. Open a page again with browser_navigate.', 'tab_gone');
  return found;
 }
 
 async function attach(found) {
  if (found.attached && found.guest.debugger.isAttached()) return;
  if (!found.guest.debugger.isAttached()) found.guest.debugger.attach('1.3');
+ await command(found.guest, 'Emulation.setFocusEmulationEnabled', { enabled: true });
  found.attached = true;
- await found.guest.debugger.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => {});
 }
 
 function timed(promise, ms, message) {
- let timer;
- return Promise.race([promise, new Promise((resolve, reject) => { timer = setTimeout(() => reject(plain(message)), ms); })]).finally(() => clearTimeout(timer));
+ const op = operations.getStore();
+ let timer, stop;
+ const barrier = new Promise((resolve, reject) => {
+  stop = () => reject(op.signal.reason);
+  if (op?.signal.aborted) { stop(); return; }
+  op?.signal.addEventListener('abort', stop, { once: true });
+  timer = setTimeout(() => {
+   const error = plain(message, 'timeout');
+   op?.stop(error);
+   reject(error);
+  }, ms);
+ });
+ return Promise.race([promise, barrier]).then(value => { check(); return value; }).finally(() => {
+  clearTimeout(timer);
+  op?.signal.removeEventListener('abort', stop);
+ });
 }
 
-async function world(guest, expression) {
- const code = `${INSTALL}(async () => { try { return { ok: await (${expression}) }; } catch (error) { return { error: String(error && error.message || error) }; } })()`;
- const answer = await timed(guest.executeJavaScriptInIsolatedWorld(WORLD, [{ code }]), WAIT.call, 'The page is not responding');
- if (answer?.error) throw plain(answer.error);
+async function world(guest, expression, mayNavigate = false) {
+ check();
+ const op = operations.getStore();
+ const pageId = op.found.pageId;
+ // Never install a ref map for an action: a delayed execution in a replacement document must fail.
+ const input = /^__og\.(point|choose|reveal)\(/.test(expression);
+ if (input) op.dirty = true;
+ const prepare = input ? `if (window.__og?.pageId !== ${JSON.stringify(pageId)}) throw Object.assign(new Error('The page changed. Take a new snapshot.'), { code: 'stale_page' });` : `(${install.toString()})(${JSON.stringify(pageId)});`;
+ const expires = Math.min(op.deadline, Date.now() + WAIT.call);
+ const code = `(async () => { try { if (Date.now() > ${expires}) throw new Error('Browser operation expired'); ${prepare} return { ok: await (${expression}) }; } catch (error) { return { error: String(error && error.message || error), code: error.code || 'browser_error' }; } })()`;
+ const pending = guest.executeJavaScriptInIsolatedWorld(WORLD, [{ code }]);
+ if (mayNavigate) op.navigating = true;
+ const answer = await timed(pending, WAIT.call, 'The page is not responding');
+ if (answer?.error) throw plain(answer.error, answer.code);
  return answer?.ok;
 }
 
 async function settle(guest, loading = false) {
  await sleep(loading ? 250 : 120);
- if (guest.isLoading()) await timed(new Promise(resolve => guest.once('did-stop-loading', resolve)), WAIT.stop, 'slow').catch(() => {});
- await world(guest, `__og.quiet(${WAIT.quiet[0]}, ${WAIT.quiet[1]})`).catch(() => {});
+ if (guest.isLoading()) {
+  let done;
+  try { await timed(new Promise(resolve => { done = resolve; guest.once('did-stop-loading', done); }), WAIT.stop, 'The page did not finish loading'); }
+  finally { guest.removeListener('did-stop-loading', done); }
+ }
+ await world(guest, `__og.quiet(${WAIT.quiet[0]}, ${WAIT.quiet[1]})`);
 }
 
 function percent(scroll) {
@@ -422,6 +494,10 @@ function percent(scroll) {
 }
 
 async function state(guest, { full = false, note = '' } = {}) {
+ check();
+ const op = operations.getStore();
+ // A different chat must not apply input against an observation predating this operation.
+ if (op.dirty) { revise(op.found); op.pageId = op.found.pageId; op.dirty = false; }
  const snap = await world(guest, `__og.snapshot(${JSON.stringify({ full })})`);
  const { scroll } = snap, head = [];
  if (note) head.push(note);
@@ -429,13 +505,13 @@ async function state(guest, { full = false, note = '' } = {}) {
  if (guest.isLoading()) head.push('The page is still loading.');
  const screens = scroll.height / Math.max(1, scroll.vh);
  head.push(screens > 1.05 ? `Viewport ${scroll.vw}×${scroll.vh}, scrolled ${percent(scroll)}% of a page ${screens.toFixed(1)} screens tall.` : `Viewport ${scroll.vw}×${scroll.vh}, the whole page fits on screen.`);
- const fresh = downloads.filter(item => !item.told);
- for (const item of fresh) { item.told = true; head.push(`Downloaded: ${item.file}`); }
+ const fresh = op.found.downloads.filter(item => item.operationId === op.id);
+ for (const item of fresh) head.push(`Downloaded: ${item.file}`);
  const tail = [];
  if (snap.skipped) tail.push(`[… ${snap.skipped} more lines not shown. ${full ? 'Scroll to them and take a snapshot' : 'Call browser_snapshot with full true or scroll'}.]`);
  else if (!full && scroll.below > 8) tail.push('[More content below: scroll down to see it.]');
  const body = snap.lines.length ? snap.lines.join('\n') : '(nothing readable on screen)';
- return { text: `${head.join('\n')}\n\n${body}${tail.length ? `\n${tail.join('\n')}` : ''}`, refs: snap.refs };
+ return { text: `${head.join('\n')}\n\n${body}${tail.length ? `\n${tail.join('\n')}` : ''}`, refs: snap.refs, truncated: !!snap.truncated, coverage: full ? 'full-dom-heuristic' : 'viewport-dom-heuristic', scroll: snap.scroll, downloads: fresh };
 }
 
 async function pointer(found, x, y) {
@@ -445,11 +521,11 @@ async function pointer(found, x, y) {
  if (shown.open && shown.id === guest.id) await sleep(WAIT.pointer);
 }
 
-async function mouse(guest, x, y, count = 1) {
- const send = params => guest.debugger.sendCommand('Input.dispatchMouseEvent', { x, y, ...params });
+async function mouse(guest, x, y, count = 1, mayNavigate = false) {
+ const send = (params, final = false) => command(guest, 'Input.dispatchMouseEvent', { x, y, ...params }, final);
  await send({ type: 'mouseMoved' });
  for (let k = 1; k <= count; k++) {
-  await send({ type: 'mousePressed', button: 'left', buttons: 1, clickCount: k });
+  await send({ type: 'mousePressed', button: 'left', buttons: 1, clickCount: k }, mayNavigate && k === count);
   await send({ type: 'mouseReleased', button: 'left', buttons: 0, clickCount: k });
  }
 }
@@ -474,11 +550,11 @@ function keyOf(combo) {
  return { key: last, code, vk: upper.charCodeAt(0), text: modifiers & 7 ? '' : last, modifiers };
 }
 
-async function press(guest, combo) {
+async function press(guest, combo, mayNavigate = false) {
  const { key, code, vk, text, modifiers } = keyOf(combo);
  const base = { key, code, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk, modifiers };
- await guest.debugger.sendCommand('Input.dispatchKeyEvent', { ...base, type: text ? 'keyDown' : 'rawKeyDown', text, unmodifiedText: text });
- await guest.debugger.sendCommand('Input.dispatchKeyEvent', { ...base, type: 'keyUp' });
+ await command(guest, 'Input.dispatchKeyEvent', { ...base, type: text ? 'keyDown' : 'rawKeyDown', text, unmodifiedText: text }, mayNavigate);
+ await command(guest, 'Input.dispatchKeyEvent', { ...base, type: 'keyUp' });
 }
 
 async function navigate(guest, target) {
@@ -492,17 +568,17 @@ async function navigate(guest, target) {
  }
  if (target === 'reload') { guest.reload(); await settle(guest, true); return ''; }
  const url = normalize(target);
- let failure = '';
- await timed(guest.loadURL(url), WAIT.load, 'timeout').catch(error => {
-  if (error.message === 'timeout') failure = 'The page takes long to load, this is what has loaded so far.';
-  else if (error.code && error.code !== 'ERR_ABORTED') failure = `The page could not be opened: ${error.code}.`;
- });
+ try { await timed(guest.loadURL(url), WAIT.load, 'The page did not load in time'); }
+ catch (error) {
+  if (operations.getStore().signal.aborted) throw error;
+  throw plain(`The page could not be opened: ${error.message}`, 'navigation_failed');
+ }
  await settle(guest);
- return failure;
+ return '';
 }
 
 async function screenshot(guest, full) {
- const cdp = (method, params = {}) => guest.debugger.sendCommand(method, params);
+ const cdp = (method, params = {}) => command(guest, method, params);
  const metrics = await cdp('Page.getLayoutMetrics');
  const view = metrics.cssVisualViewport, content = metrics.cssContentSize;
  const width = Math.round(view.clientWidth), height = Math.round(full ? Math.min(content.height, view.clientHeight * SHOT.tall) : view.clientHeight);
@@ -513,18 +589,34 @@ async function screenshot(guest, full) {
  const target = Math.min(width, SHOT.max);
  if (image.getSize().width !== target) image = image.resize({ width: target, quality: 'good' });
  const size = image.getSize();
- return { image: `data:image/jpeg;base64,${image.toJPEG(SHOT.quality).toString('base64')}`, width: size.width, height: size.height, scale: size.width / width };
+ return { image: `data:image/jpeg;base64,${image.toJPEG(SHOT.quality).toString('base64')}`, width: size.width, height: size.height, scale: size.width / width, pageWidth: width, pageHeight: height, truncated: !!full && content.height > height };
 }
 
-async function act(found, name, args, signal) {
+async function act(found, name, args) {
  const { guest } = found;
- const check = () => { if (signal.aborted) throw plain('Stopped by the user'); };
+ check();
+ const op = operations.getStore();
+ const input = ['browser_click', 'browser_type', 'browser_select', 'browser_press', 'browser_scroll'].includes(name);
+ if (input && !args.pageId) throw plain('Pass pageId from a fresh snapshot with browser input.', 'stale_page');
+ if (args.pageId && args.pageId !== found.pageId) throw plain('The page changed. Take a new snapshot.', 'stale_page');
  await attach(found);
  check();
+ const afterInput = async () => { op.navigating = true; await settle(guest); op.pageId = found.pageId; op.navigating = false; };
  switch (name) {
   case 'browser_navigate': {
    const raw = String(args.url || '').trim(), word = raw.toLowerCase();
-   const note = await navigate(guest, ['back', 'forward', 'reload'].includes(word) ? word : raw);
+   op.navigating = true;
+   found.failure = null;
+   let note;
+   try {
+    note = await navigate(guest, ['back', 'forward', 'reload'].includes(word) ? word : raw);
+    if (found.failure) throw found.failure;
+   } catch (error) {
+    if (!guest.isDestroyed()) guest.stop();
+    throw error;
+   }
+   op.pageId = found.pageId;
+   op.navigating = false;
    return state(guest, { note });
   }
   case 'browser_snapshot':
@@ -534,15 +626,19 @@ async function act(found, name, args, signal) {
    if (args.ref !== undefined && args.ref !== null && args.ref !== '') {
     const spot = await world(guest, `__og.point(${Number(args.ref)})`);
     ({ x, y } = spot);
-    if (spot.covered) note = `Note: at that spot [${args.ref}] is covered by ${spot.covered}, the click went there.`;
+    if (spot.covered) throw plain(`Element [${args.ref}] is covered by ${spot.covered}. No click was sent.`, 'element_covered');
    } else if (!Number.isFinite(x) || !Number.isFinite(y)) {
     throw plain('Pass ref from the snapshot, or x and y in page pixels');
    }
    check();
    await pointer(found, x, y);
    check();
-   await mouse(guest, x, y, args.double ? 2 : 1);
-   await settle(guest);
+   if (args.ref != null) {
+    const spot = await world(guest, `__og.point(${Number(args.ref)})`);
+    if (spot.covered || spot.x !== x || spot.y !== y) throw plain('The click target moved or is covered. Take a new snapshot.', 'stale_target');
+   }
+   await mouse(guest, x, y, args.double ? 2 : 1, true);
+   await afterInput();
    return state(guest, { note });
   }
   case 'browser_type': {
@@ -552,39 +648,41 @@ async function act(found, name, args, signal) {
     check();
     await pointer(found, spot.x, spot.y);
     check();
+    const now = await world(guest, `__og.point(${Number(args.ref)})`);
+    if (now.covered || now.x !== spot.x || now.y !== spot.y) throw plain('The field moved or is covered. Take a new snapshot.', 'stale_target');
     await mouse(guest, spot.x, spot.y);
     await sleep(80);
    }
    check();
    if (args.clear !== false) {
     await press(guest, 'Control+A');
-    if (!text) await press(guest, 'Delete');
+    if (!text) await press(guest, 'Delete', !args.submit);
    }
    check();
-   if (text) await guest.debugger.sendCommand('Input.insertText', { text });
-   if (args.submit) { await sleep(60); check(); await press(guest, 'Enter'); }
-   await settle(guest);
+   if (text) await command(guest, 'Input.insertText', { text }, !args.submit);
+   if (args.submit) { await sleep(60); check(); await press(guest, 'Enter', true); }
+   await afterInput();
    return state(guest);
   }
   case 'browser_select': {
-   const chosen = await world(guest, `__og.choose(${Number(args.ref)}, ${JSON.stringify(String(args.option ?? ''))})`);
-   await settle(guest);
+   const chosen = await world(guest, `__og.choose(${Number(args.ref)}, ${JSON.stringify(String(args.option ?? ''))})`, true);
+   await afterInput();
    return state(guest, { note: `Chose "${chosen}".` });
   }
   case 'browser_press': {
    const count = Math.min(20, Math.max(1, Math.round(Number(args.times) || 1)));
-   for (let k = 0; k < count; k++) { check(); await press(guest, args.key); }
-   await settle(guest);
+   for (let k = 0; k < count; k++) { check(); await press(guest, args.key, k === count - 1); }
+   await afterInput();
    return state(guest);
   }
   case 'browser_scroll': {
    if (args.ref !== undefined && args.ref !== null && args.ref !== '') {
     await world(guest, `__og.reveal(${Number(args.ref)})`);
    } else {
-    const metrics = await guest.debugger.sendCommand('Page.getLayoutMetrics');
+    const metrics = await command(guest, 'Page.getLayoutMetrics');
     const view = metrics.cssVisualViewport, amount = Math.min(10, Math.max(0.1, Number(args.amount) || 0.8));
     const sign = String(args.direction || 'down').toLowerCase() === 'up' ? -1 : 1;
-    await guest.debugger.sendCommand('Input.dispatchMouseEvent', { type: 'mouseWheel', x: view.clientWidth / 2, y: view.clientHeight / 2, deltaX: 0, deltaY: sign * view.clientHeight * amount });
+    await command(guest, 'Input.dispatchMouseEvent', { type: 'mouseWheel', x: view.clientWidth / 2, y: view.clientHeight / 2, deltaX: 0, deltaY: sign * view.clientHeight * amount });
    }
    await sleep(250);
    await settle(guest);
@@ -596,8 +694,13 @@ async function act(found, name, args, signal) {
    return { ...shot, text: `Screenshot of ${args.full_page ? 'the page from the top' : 'the viewport'}: ${guest.getTitle() || guest.getURL()}, ${shot.width}×${shot.height}; ${scale}.` };
   }
   case 'browser_read': {
+   if (Number(args.start) > 0 || args.readId) {
+    if (!args.readId || args.readId !== found.read?.readId || found.read.pageId !== found.pageId) throw plain('The read snapshot expired. Read again from start=0.', 'stale_read');
+    return found.read;
+   }
    const html = await timed(guest.executeJavaScript('document.documentElement ? document.documentElement.outerHTML : ""'), WAIT.call, 'The page is not responding');
-   return { html: html.slice(0, READ_MAX), url: guest.getURL(), title: guest.getTitle() };
+   found.read = { html: html.slice(0, READ_MAX), url: guest.getURL(), title: guest.getTitle(), pageId: found.pageId, readId: randomUUID(), sourceTruncated: html.length > READ_MAX };
+   return found.read;
   }
   case 'browser_wait': {
    const seconds = Math.min(WAIT_MAX, Math.max(0.5, Number(args.seconds) || (args.text ? 15 : 2)));
@@ -606,14 +709,15 @@ async function act(found, name, args, signal) {
    if (args.text) {
     while (Date.now() < until) {
      check();
-     if (await world(guest, `__og.has(${JSON.stringify(String(args.text))})`).catch(() => false)) { found = true; break; }
+     if (await world(guest, `__og.has(${JSON.stringify(String(args.text))})`)) { found = true; break; }
      await sleep(400);
     }
    } else {
     while (Date.now() < until) { check(); await sleep(Math.min(250, until - Date.now())); }
    }
+   if (!found) throw plain(`"${args.text}" did not appear within ${seconds} s.`, 'wait_timeout');
    await settle(guest);
-   return state(guest, { note: args.text ? (found ? `"${args.text}" is on the page.` : `"${args.text}" did not appear within ${seconds} s.`) : '' });
+   return state(guest, { note: args.text ? `"${args.text}" is on the page.` : '' });
   }
   default:
    throw plain(`Unknown browser tool ${name}`);
@@ -621,14 +725,38 @@ async function act(found, name, args, signal) {
 }
 
 function run(name, args, host, signal) {
- const found = entry(args.tab, host);
- const job = found.queue.catch(() => {}).then(() => act(found, name, args, signal));
- found.queue = job;
+ const found = entry(args.tab, host), controller = new AbortController();
+ const op = { found, id: args.operationId || randomUUID(), signal: controller.signal, stop: reason => controller.abort(reason),
+  deadline: Date.now() + WAIT.operation, pageId: found.pageId, lease: shown.lease, navigating: false };
+ const stop = () => op.stop(plain('Stopped by the user', 'cancelled'));
+ if (signal.aborted) stop(); else signal.addEventListener('abort', stop, { once: true });
+ const timer = setTimeout(() => op.stop(plain('Browser operation timed out', 'timeout')), WAIT.operation);
+ const job = operations.run(op, async () => {
+  try {
+   await timed(found.queue.catch(() => {}), WAIT.operation, 'Browser queue timed out');
+   check();
+   found.stop = op.stop;
+   found.running = op.id;
+   const answer = await act(found, name, args);
+   check();
+   return { ...answer, pageId: found.pageId };
+  } finally {
+   clearTimeout(timer);
+   signal.removeEventListener('abort', stop);
+   if (found.stop === op.stop) {
+    if (op.dirty) revise(found); // Partial/cancelled input also invalidates earlier observations.
+    found.stop = null; found.running = null;
+   }
+  }
+ });
+ // A cancelled queued caller cannot release the predecessor's queue slot.
+ found.queue = Promise.allSettled([found.queue, job]).then(() => {});
  return job;
 }
 
 function setShown(value) {
- shown = { open: !!value?.open, id: Number(value?.id) || 0 };
+ const id = Number(value?.id) || 0;
+ shown = { open: !!value?.open, id, lease: shown.lease + (id !== shown.id ? 1 : 0) };
 }
 
 module.exports = { PARTITION, setup, guard, adopt, run, setShown };

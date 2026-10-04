@@ -4,10 +4,16 @@
 // Tools the host runs for a backend: the built-in browser, on the panel's own webviews, where the user's logins live and
 // where the user can take control and hand it back. They can't run anywhere else, so the frontend publishes them at the
 // handshake (initialize → host.tools) and a backend calls them back with a host.tool request (docs/backend-interface.md).
+// Targeting, deadlines and result metadata: docs/browser-host-tools.md.
 // Whether a step needs the user's approval is the backend's call: it asks with approval.request before calling.
 const PAGE_CHARS = 40000;
 
-const fn = (name, description, properties, required = []) => ({ name, description, parameters: { type: 'object', properties, required } });
+const INPUT = new Set(['browser_click', 'browser_type', 'browser_select', 'browser_press', 'browser_scroll']);
+const fn = (name, description, properties, required = []) => ({ name, description, parameters: { type: 'object', properties: {
+ tabId: { type: 'string', description: 'Stable tabId from a result or host.browser; otherwise the active tab is pinned at receipt.' },
+ pageId: { type: 'string', description: 'Page identity from a snapshot. Required for input; a changed page fails without input. Re-snapshot after navigation.' },
+ ...properties,
+}, required: INPUT.has(name) ? [...required, 'pageId'] : required } });
 
 const SCHEMAS = [
  fn('browser_navigate', 'Open a page in the built-in browser, the panel on the right of the app where the user\'s own logins live. Returns a snapshot of the screen: text, and the elements you can use, each with a [number].', {
@@ -44,17 +50,18 @@ const SCHEMAS = [
  fn('browser_screenshot', 'Look at the page in the built-in browser yourself: returns a picture of the screen, or of the page from the top with full_page. Use it when layout, images, colors, charts or the look of a site you build matter, or when the snapshot is not enough.', {
   full_page: { type: 'boolean', description: 'The page from the top, up to four screens tall' },
  }),
- fn('browser_read', 'Read the whole text of the page open in the built-in browser, with headings, lists and links, as the user sees it: signed in and after scripts ran. Long pages come in parts, pass start to read further.', {
-  start: { type: 'integer', description: 'Character to start from when reading further' },
+ fn('browser_read', 'Read a frozen HTML-derived text snapshot, with headings, lists and links. Not computed visibility: may include hidden text and omit form values, shadow roots and iframes. Long pages come in parts; continue with tabId, readId and start.', {
+  start: { type: 'integer', description: 'UTF-16 code-unit offset (not bytes) in the frozen read snapshot' },
+  readId: { type: 'string', description: 'Read identity from the first part; required for continuation. Start at 0 without readId to refresh.' },
  }),
  fn('browser_wait', 'Wait in the built-in browser until some text appears on the page, or for a number of seconds, then return the snapshot.', {
   text: { type: 'string', description: 'Text to wait for' },
   seconds: { type: 'number', description: 'How long to wait at most, 15 by default with text' },
  }),
- fn('browser_tabs', 'Tabs of the built-in browser: list them, open a new one (with url to load a page in it), switch to tab n or close it. The other browser tools act on the active tab.', {
+ fn('browser_tabs', 'List tabs, open a new one (with url to load a page), switch or close using stable tabId from the list. Opening at the 12-tab limit fails without eviction. Browser calls are serialized across chats.', {
   action: { type: 'string', enum: ['list', 'new', 'switch', 'close'] },
   url: { type: 'string', description: 'For new: what to open in it' },
-  tab: { type: 'integer', description: 'For switch and close: the tab number from the list' },
+  tab: { type: 'integer', description: 'Display position only; use tabId for switch and close' },
  }, ['action']),
 ];
 
@@ -120,19 +127,30 @@ function readable(html, url) {
 function read(answer, start) {
  const text = readable(answer.html || '', answer.url || 'about:blank');
  const from = Math.max(0, Math.floor(Number(start) || 0)), part = text.slice(from, from + PAGE_CHARS), end = from + part.length;
- const tail = end < text.length ? `\n\n[Characters ${from}–${end} of ${text.length}. Call browser_read with start=${end} to read further.]` : '';
- return `${answer.url || ''}\n\n${part || '(empty page)'}${tail}`;
+ const tail = end < text.length ? `\n\n[Characters ${from}–${end} of ${text.length}. Call browser_read with tabId=${JSON.stringify(answer.tabId)}, readId=${JSON.stringify(answer.readId)}, start=${end} to read further.]` : '';
+ return {
+  text: `${answer.url || ''}\n\n${part || '(empty page)'}${tail}${answer.sourceTruncated ? '\n\n[Source HTML truncated at 4 Mi UTF-16 code units.]' : ''}`,
+  start: from, end, total: text.length, hasMore: end < text.length, offsetUnit: 'utf16',
+  sourceTruncated: !!answer.sourceTruncated, truncated: !!answer.sourceTruncated || end < text.length,
+  coverage: 'html-derived; excludes form controls, shadow roots and iframe content; may include hidden text',
+ };
 }
 
 // What the browser answered, as an ABP host.tool result: text and pictures, plus the snapshot's element names by their
 // [number] (`data.refs`) for a backend that words its approval cards with them.
 function result(args, answer) {
- if (!answer || answer.error) return { isError: true, content: [{ type: 'text', text: `Error: ${answer?.error || 'the browser did not answer'}` }] };
- const data = answer.refs ? { refs: answer.refs } : undefined;
+ const data = {};
+ for (const key of ['code', 'tabId', 'pageId', 'readId', 'refs', 'tabs', 'truncated', 'coverage', 'scroll', 'width', 'height', 'scale', 'pageWidth', 'pageHeight', 'downloads']) {
+  if (answer?.[key] !== undefined) data[key] = answer[key];
+ }
+ if (!answer || answer.error) return { isError: true, data: { ...data, code: answer?.code || 'browser_error' }, content: [{ type: 'text', text: `Error: ${answer?.error || 'the browser did not answer'}` }] };
  if (answer.image) return { content: [{ type: 'text', text: answer.text || '' }, { type: 'image', dataUrl: answer.image, label: 'Screenshot of the built-in browser' }], data };
- if (answer.html !== undefined) return { content: [{ type: 'text', text: read(answer, args.start) }], data };
+ if (answer.html !== undefined) {
+  const { text, ...pagination } = read(answer, args.start);
+  return { content: [{ type: 'text', text }], data: { ...data, ...pagination } };
+ }
  return { content: [{ type: 'text', text: answer.text || '' }], data };
 }
 
-window.HostTools = { schemas: SCHEMAS, has: name => SCHEMAS.some(tool => tool.name === name), result };
+window.HostTools = { get schemas() { return window.openghost?.browser?.run ? SCHEMAS : []; }, has: name => SCHEMAS.some(tool => tool.name === name), result };
 })();

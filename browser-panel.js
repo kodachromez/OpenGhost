@@ -8,6 +8,24 @@ const TABS_MAX = 12;
 const WIDTH = { share: 0.44, min: 360, chat: 400 };
 const CURSOR = { hide: 2600 };
 const TOAST_TIME = 4200;
+const READY_MS = 15000;
+const OPERATION_MS = 90000;
+const fault = (code, message) => Object.assign(new Error(message), { code });
+
+function interruptible(promise, signal, ms, message) {
+ let timer, stop;
+ return new Promise((resolve, reject) => {
+  // Keep a result already delivered by the bridge; taking control cannot undo that step.
+  promise.then(resolve, reject);
+  if (signal?.aborted) { reject(signal.reason); return; }
+  stop = () => queueMicrotask(() => reject(signal.reason));
+  signal?.addEventListener('abort', stop, { once: true });
+  timer = setTimeout(() => reject(fault('timeout', message)), ms);
+ }).finally(() => {
+  clearTimeout(timer);
+  signal?.removeEventListener('abort', stop);
+ });
+}
 const EASE = 'cubic-bezier(0.32, 0.72, 0, 1)';
 const bridge = window.openghost?.browser || null;
 
@@ -64,7 +82,8 @@ class BrowserPanel {
   this.lent = null;
   this.waiters = [];
   // The agent's browser steps under way, by id: taking control stops them.
-  this.jobs = new Set();
+  this.jobs = new Map();
+  this.queue = Promise.resolve();
   this.cursorAt = null;
   this.accounts = read(ACCOUNTS) || [];
   const saved = read(STORE) || {};
@@ -74,6 +93,7 @@ class BrowserPanel {
   this.select(this.tabs[saved.active] || this.tabs[0] || null, { lazy: true });
   this.fit();
   bridge?.onEvent(data => this.onEvent(data));
+  window.Backend?.on('ready', () => { this.reported = null; this.report(); });
   toggle.addEventListener('browser-toggle', () => this.setOpen(!this.open));
   window.addEventListener('resize', () => this.fit());
   if (saved.open) this.setOpen(true);
@@ -143,7 +163,12 @@ class BrowserPanel {
    if (view.isLoading()) view.stop(); else view.reload();
   });
   $('.browser-external').addEventListener('click', () => { if (!blank(this.active?.url)) window.open(this.active.url, '_blank'); });
-  $('.browser-error .browser-pill').addEventListener('click', () => { this.active.error = ''; this.active.view?.reload(); this.render(); });
+  $('.browser-error .browser-pill').addEventListener('click', () => {
+   if (!this.active) return;
+   this.active.error = '';
+   if (this.active.view) this.active.view.reload(); else this.createView(this.active, this.active.url);
+   this.render();
+  });
   $('.browser-take').addEventListener('click', () => this.take());
   $('.browser-user .browser-pill').addEventListener('click', () => this.handBack());
   this.url.addEventListener('focus', () => { this.root.classList.add('is-editing'); this.url.select(); });
@@ -210,7 +235,7 @@ class BrowserPanel {
  }
 
  addTab(url, { title = '', after = null } = {}) {
-  const tab = { url, title, icon: '', loading: false, error: '', view: null, id: 0, ready: null, el: null };
+  const tab = { handle: crypto.randomUUID(), url, title, icon: '', loading: false, error: '', view: null, id: 0, ready: null, el: null, revision: 0, state: 'lazy' };
   const at = after ? this.tabs.indexOf(after) + 1 : this.tabs.length;
   this.tabs.splice(at, 0, tab);
   while (this.tabs.length > TABS_MAX) this.close(this.tabs.find(item => item !== tab && item !== this.active) || this.tabs[0], { quiet: true });
@@ -224,6 +249,7 @@ class BrowserPanel {
   this.render();
   this.save();
   if (!background && focus && blank(url) && this.open) requestAnimationFrame(() => this.url.focus());
+  this.report();
   return tab;
  }
 
@@ -235,14 +261,31 @@ class BrowserPanel {
   view.setAttribute('src', url || 'about:blank');
   tab.view = view;
   tab.url = blank(url) ? tab.url : url;
-  tab.ready = new Promise(resolve => {
-   view.addEventListener('dom-ready', () => {
+  tab.state = 'loading';
+  tab.ready = new Promise((resolve, reject) => {
+   const timer = setTimeout(() => tab.failReady?.(fault('timeout', 'The browser did not become ready in time')), READY_MS);
+   const done = () => {
+    clearTimeout(timer);
+    tab.failReady = null;
     tab.id = view.getWebContentsId();
+    tab.state = 'ready';
     this.report();
     resolve(tab);
-   }, { once: true });
+   };
+   tab.failReady = error => {
+    clearTimeout(timer);
+    view.removeEventListener('dom-ready', done);
+    tab.failReady = null;
+    tab.state = 'failed';
+    reject(error);
+    this.report();
+   };
+   view.addEventListener('dom-ready', done, { once: true });
   });
-  const update = () => { this.render(); if (tab === this.active) this.syncBar(); };
+  // A user-opened tab may fail before a tool starts waiting for it.
+  tab.ready.catch(() => {});
+  const update = () => { this.render(); if (tab === this.active) this.syncBar(); this.report(); };
+  view.addEventListener('did-start-navigation', event => { if (event.isMainFrame) { tab.revision++; this.report(); } });
   view.addEventListener('did-start-loading', () => { tab.loading = true; tab.error = ''; update(); });
   view.addEventListener('did-stop-loading', () => {
    tab.loading = false;
@@ -259,8 +302,21 @@ class BrowserPanel {
   view.addEventListener('did-fail-load', event => {
    if (!event.isMainFrame || event.errorCode === -3) return;
    tab.error = event.errorDescription || `Error ${event.errorCode}`;
+   tab.failReady?.(fault('navigation_failed', tab.error));
    tab.loading = false;
    update();
+   this.report();
+  });
+  view.addEventListener('render-process-gone', () => {
+   tab.failReady?.(fault('guest_crashed', 'The browser page crashed'));
+   tab.revision++;
+   tab.state = 'gone';
+   tab.error = 'The browser page crashed. Open the page again.';
+   tab.id = 0;
+   tab.view = null;
+   view.remove();
+   update();
+   this.report();
   });
   view.addEventListener('ipc-message', event => { if (event.channel === 'signin') this.signedIn(String(event.args[0] || '')); });
   view.classList.toggle('is-active', tab === this.active);
@@ -282,10 +338,13 @@ class BrowserPanel {
   const at = this.tabs.indexOf(tab);
   if (at < 0) return;
   this.tabs.splice(at, 1);
+  tab.state = 'gone';
+  tab.failReady?.(fault('tab_gone', 'This browser tab was closed'));
   tab.view?.remove();
   tab.el?.remove();
   if (this.active === tab) this.select(this.tabs[Math.min(at, this.tabs.length - 1)] || null);
   if (!quiet) { this.render(); this.save(); }
+  this.report();
  }
 
  go(text) {
@@ -373,6 +432,11 @@ class BrowserPanel {
 
  report() {
   bridge?.shown({ open: this.open, id: this.active?.id || 0 });
+  const browser = this.snapshot(), key = JSON.stringify(browser);
+  if (key !== this.reported && window.Backend?.available) {
+   this.reported = key;
+   window.Backend.notify('host.browser.changed', { browser });
+  }
  }
 
  onEvent(data) {
@@ -439,6 +503,7 @@ class BrowserPanel {
   if (!name) return;
   this.accounts = [{ host: name, at: Date.now() }, ...this.accounts.filter(item => item.host !== name)].slice(0, 30);
   write(ACCOUNTS, this.accounts);
+  this.report();
  }
 
  drive(key, on) {
@@ -456,7 +521,7 @@ class BrowserPanel {
 
  take() {
   this.control = 'user';
-  for (const id of this.jobs) this.cancel(id);
+  for (const id of this.jobs.keys()) this.cancel(id, fault('taken', 'The user took control'));
   this.sync();
   this.active?.view?.focus();
  }
@@ -484,13 +549,17 @@ class BrowserPanel {
   this.root.classList.toggle('is-driving', driving && this.control === 'agent');
   this.root.classList.toggle('is-user', driving && this.control === 'user');
   this.toggle.toggleAttribute('live', driving);
+  this.report();
  }
 
- async ensure() {
-  let tab = this.active;
+ async ensure(tab = this.active, signal) {
+  if (signal?.aborted) throw signal.reason;
   if (!tab) tab = this.newTab('', { focus: false });
+  if (!this.tabs.includes(tab)) throw fault('tab_gone', 'This browser tab was closed');
+  if (tab.state === 'failed') { tab.view?.remove(); tab.view = null; tab.id = 0; }
   if (!tab.view) this.createView(tab, blank(tab.url) ? 'about:blank' : tab.url);
-  await tab.ready;
+  await interruptible(tab.ready, signal, READY_MS, 'The browser did not become ready in time');
+  if (!this.tabs.includes(tab)) throw fault('tab_gone', 'This browser tab was closed');
   return tab;
  }
 
@@ -508,20 +577,48 @@ class BrowserPanel {
  // nothing, and one stopped midway in the main process ends before its next action. A step the user took the browser
  // from answers { taken: true }; the chat then waits for the browser to be handed back.
  async run(name, args, { id, signal }) {
-  if (!bridge?.run) return { error: 'The browser is only available in the desktop app' };
-  const back = document.activeElement;
-  const halt = () => signal?.aborted ? { error: 'Stopped by the user', stopped: true } : this.control === 'user' ? { taken: true } : null;
-  this.jobs.add(id);
-  try {
-   if (name === 'browser_tabs') return await this.tabsTool(args, { id, halt });
-   const tab = await this.ensure();
-   const held = halt();
-   if (held) return held;
-   const keys = name === 'browser_press' || (name === 'browser_type' && (args.ref === undefined || args.ref === null || args.ref === ''));
+  if (!bridge?.run) return { error: 'The browser is only available in the desktop app', code: 'unavailable' };
+  const controller = new AbortController(), back = document.activeElement;
+  const stop = () => this.cancel(id);
+  this.jobs.set(id, controller);
+  if (signal?.aborted) stop(); else signal?.addEventListener('abort', stop, { once: true });
+  // Pin the target at receipt, never after waiting behind another chat.
+  const target = args.tabId ? this.tabs.find(tab => tab.handle === args.tabId) : name === 'browser_tabs' ? null : this.active;
+  const revision = target?.revision;
+  const previous = this.queue || Promise.resolve();
+  const check = () => {
+   if (controller.signal.aborted) throw controller.signal.reason;
+   if (this.control === 'user') throw fault('taken', 'The user took control');
+   if (target && !this.tabs.includes(target)) throw fault('tab_gone', 'This browser tab was closed');
+   if (target && revision !== target.revision) throw fault('stale_page', 'The page changed while this call was waiting. Take a new snapshot.');
+   if (!args.tabId && name !== 'browser_tabs' && this.active !== target) throw fault('stale_tab', 'The active tab changed. Take a new snapshot.');
+  };
+  const work = (async () => {
+   await interruptible(previous, controller.signal, OPERATION_MS, 'Browser queue timed out');
+   check();
+   if (args.tabId && !target) throw fault('tab_gone', 'This browser tab was closed');
+   if (name === 'browser_tabs') return this.tabsTool(args, { id, check, target, signal: controller.signal });
+   if (target && args.tabId) this.select(target);
+   const tab = await this.ensure(target, controller.signal);
+   // First creation navigates to the initial page; existing targets must not drift during readiness.
+   if (controller.signal.aborted) throw controller.signal.reason;
+   if (this.control === 'user') throw fault('taken', 'The user took control');
+   if (!this.tabs.includes(tab)) throw fault('tab_gone', 'This browser tab was closed');
+   if (this.active !== tab) throw fault('stale_tab', 'The active tab changed during readiness');
+   const keys = name === 'browser_press' || (name === 'browser_type' && args.ref == null);
    if (keys && this.lent === tab.view) tab.view.focus();
-   const result = await bridge.run(id, name, { ...args, tab: tab.id });
-   return result?.stopped && this.control === 'user' && !signal?.aborted ? { taken: true } : result;
+   const result = await interruptible(bridge.run(id, name, { ...args, tab: tab.id, operationId: id }), controller.signal, OPERATION_MS, 'Browser operation timed out');
+   return { ...(result || { error: 'The browser did not answer', code: 'browser_error' }), tabId: tab.handle };
+  })();
+  this.queue = Promise.allSettled([previous, work]).then(() => {});
+  try {
+   return await interruptible(work, null, OPERATION_MS, 'Browser operation timed out');
+  } catch (error) {
+   if (error.code === 'timeout') this.cancel(id, error);
+   if (error.code === 'taken' && !signal?.aborted) return { taken: true };
+   return { error: error.message, code: error.code || 'browser_error', stopped: error.code === 'cancelled' };
   } finally {
+   signal?.removeEventListener('abort', stop);
    this.jobs.delete(id);
    this.giveBack(back);
   }
@@ -536,51 +633,51 @@ class BrowserPanel {
   back.focus({ preventScroll: true });
  }
 
- cancel(id) {
+ cancel(id, reason = fault('cancelled', 'Stopped by the user')) {
+  const job = this.jobs.get(id);
+  if (!job || job.signal.aborted) return;
+  job.abort(reason);
   bridge?.cancel?.(id);
  }
 
- async tabsTool(args, { id, halt = () => null }) {
-  const action = String(args.action || 'list').toLowerCase();
-  const pick = () => {
-   const tab = this.tabs[Math.round(Number(args.tab)) - 1];
-   if (!tab) throw new Error(`There is no tab ${args.tab}. Tabs:\n${this.tabsText()}`);
-   return tab;
-  };
-  try {
-   if (['new', 'switch', 'close'].includes(action) && halt()) return halt();
-   if (action === 'new') {
-    const tab = this.newTab('', { focus: false });
-    if (!args.url) return { text: `Opened a new empty tab.\n\nTabs:\n${this.tabsText()}` };
-    await this.ensure();
-    if (halt()) return halt();
-    const result = await bridge.run(id, 'browser_navigate', { url: args.url, tab: tab.id });
-    return result.error ? result : { ...result, text: `Tabs:\n${this.tabsText()}\n\n${result.text}` };
-   }
-   if (action === 'switch') {
-    this.select(pick());
-    const tab = await this.ensure();
-    if (halt()) return halt();
-    return bridge.run(id, 'browser_snapshot', { tab: tab.id });
-   }
-   if (action === 'close') {
-    this.close(pick());
-    return { text: `Closed. Tabs:\n${this.tabsText()}` };
-   }
-   return { text: `Tabs:\n${this.tabsText()}` };
-  } catch (error) {
-   return { error: error.message };
+ async tabsTool(args, { id, check, target, signal }) {
+  const action = args.action || 'list';
+  const listing = text => ({ text, tabs: this.snapshot().tabs });
+  check();
+  if (!['list', 'new', 'switch', 'close'].includes(action)) throw fault('invalid_request', 'Unknown browser_tabs action');
+  if (action === 'new') {
+   if (this.tabs.length >= TABS_MAX) throw fault('tab_limit', 'Close a tab before opening another (limit 12).');
+   const tab = this.newTab('', { focus: false });
+   if (!args.url) return { ...listing(`Opened a new empty tab.\n\nTabs:\n${this.tabsText()}`), tabId: tab.handle };
+   await this.ensure(tab, signal);
+   if (signal.aborted) throw signal.reason;
+   if (this.active !== tab) throw fault('stale_tab', 'The active tab changed during readiness');
+   const result = await interruptible(bridge.run(id, 'browser_navigate', { url: args.url, tab: tab.id, operationId: id }), signal, OPERATION_MS, 'Browser operation timed out');
+   return { ...(result || { error: 'The browser did not answer', code: 'browser_error' }), tabId: tab.handle, tabs: this.snapshot().tabs };
   }
+  if (action === 'switch' || action === 'close') {
+   if (!args.tabId) throw fault('invalid_request', 'Pass the stable tabId from browser_tabs list, not its display position.');
+   if (!target) throw fault('tab_gone', `There is no tab ${args.tabId || args.tab}`);
+   if (action === 'close') { this.close(target); return listing(`Closed. Tabs:\n${this.tabsText()}`); }
+   this.select(target);
+   const tab = await this.ensure(target, signal);
+   if (signal.aborted) throw signal.reason;
+   if (this.active !== tab) throw fault('stale_tab', 'The active tab changed during readiness');
+   const result = await interruptible(bridge.run(id, 'browser_snapshot', { tab: tab.id, operationId: id }), signal, OPERATION_MS, 'Browser operation timed out');
+   return { ...(result || { error: 'The browser did not answer', code: 'browser_error' }), tabId: tab.handle };
+  }
+  return listing(`Tabs:\n${this.tabsText()}`);
  }
 
- // What the browser holds, for the backend with each turn (host.browser in turn.start): whether the panel is open, its tabs
- // and the sites the user signed in to with it. A closed browser with nothing in it is null.
+ // Explicit even when empty/closed. signedIn is only a submission hint, never verified auth.
  snapshot() {
-  const tabs = this.tabs.filter(tab => !blank(tab.url));
-  if (!this.open && !tabs.length && !this.accounts.length) return null;
   return {
+   available: !!bridge?.run,
+   status: !bridge?.run ? 'unavailable' : this.active?.state || 'empty',
+   control: this.userHas ? 'user' : 'agent',
+   signedInVerified: false,
    open: !!this.open,
-   tabs: this.tabs.map((tab, k) => ({ n: k + 1, title: tab.title || '', url: blank(tab.url) ? '' : tab.url, active: tab === this.active })),
+   tabs: this.tabs.map((tab, k) => ({ n: k + 1, tabId: tab.handle, state: tab.state, loading: tab.loading, revision: tab.revision, title: tab.title || '', url: blank(tab.url) ? '' : tab.url, active: tab === this.active })),
    signedIn: this.accounts.map(item => ({ host: item.host, at: item.at })),
   };
  }

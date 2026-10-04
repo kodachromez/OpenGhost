@@ -275,6 +275,8 @@ An empty/malformed approval presentation object suppresses the JSON-arguments fa
 
 **Recommendation:** explicit availability/control/page identity, structured metadata and error codes, cancellation-aware readiness, stable tab handles, and operation serialization/leases. Rust should currently re-snapshot after navigation/control changes and never reuse refs across documents.
 
+**Resolution (fixed):** browser calls now have cancellation-aware, bounded readiness/queues/CDP waits, stable tab handles, serialized dispatch and page-revision checks before input; covered/moved refs fail without clicking. Availability/control changes are explicit, failures/timeouts carry error codes, reads use frozen continuation identities with truncation/UTF-16 metadata, screenshots expose dimensions/scale, and downloads are operation-scoped. Existing browser UI and extraction heuristics remain; their limits and the stricter targeting contract are documented in [Browser host-tool lifecycle](../browser-host-tools.md). Focused regressions: `test/browser-lifecycle.test.js`, `test/cancellation.test.js`, `test/untrusted-text.test.js`, and local-page Electron checks in `test/e2e/browser-lifecycle.mjs`.
+
 ### F17 — MEDIUM: “renderer cannot network” is broader than what CSP enforces
 
 **Evidence:** `index.html:7`; `link-chip.js:75–105`; `media-embed.js:124–193`; browser navigation/guard; `docs/frontend-only.md` network section; `test/boundary.test.js`.

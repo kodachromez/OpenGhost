@@ -344,14 +344,16 @@ backend decides what needs asking, what Ask/Auto/Full mean, and words the card. 
 analysis was keyed to the removed backend's tool names and went with it; see `docs/frontend-only.md`.)
 
 **Host tools.** The built-in browser lives in the app: its webviews hold the user's logins, the user can take control
-and hand it back, and the panel shows the agent's cursor. So the frontend publishes its tools at `initialize`
+and hand it back, and the panel shows the agent's cursor. When the desktop browser bridge exists, the frontend publishes its tools at `initialize`
 (`host.tools`: `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_select`,
 `browser_press`, `browser_scroll`, `browser_screenshot`, `browser_read`, `browser_wait`, `browser_tabs`, as
 `{ name, description, parameters }` JSON Schemas) and runs them when the backend calls `host.tool`. While the user has
 taken control, a call waits until they hand it back, then returns a fresh snapshot with `status: 'handed-back'`
 instead of doing the step; if the user sends a message instead, it returns `status: 'cancelled', reason: 'message'`.
 Whether a browser step needs approval is the backend's call, made with `approval.request` before `host.tool`.
-`data.refs` names the snapshot's numbered elements, for wording approval cards.
+`data.refs` names the snapshot's numbered elements, for wording approval cards. See [Browser host-tool lifecycle](browser-host-tools.md)
+for required `pageId` input preconditions, stable `tabId` targeting, `host.browser.changed` notifications, deadlines,
+and structured failure/truncation/read-continuation metadata.
 
 **Turn identity.** Both requests belong to the turn named by `turnId`, which must be the session's running turn. One
 for a turn that ended or was stopped is answered as cancelled (`deny`/`cancelled`, `status: 'cancelled'`); one naming
