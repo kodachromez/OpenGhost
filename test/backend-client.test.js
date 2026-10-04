@@ -154,3 +154,85 @@ test('errors are worded for the chat, with a way to the settings when a key or s
  assert.equal(explain({ code: 'network', message: 'Offline' }).settings, false);
  assert.equal(explain({ code: 'backend_unavailable', message: '' }).message, 'Something went wrong.');
 });
+
+// A client whose requests time out quickly: 20 ms for most methods, longer for session.compact.
+async function hurried(timeouts = { default: 20, 'session.compact': 200 }) {
+ const transport = fakeTransport();
+ const window = renderer(['backend-client.js'], {});
+ const Backend = new window.BackendClient(transport, { timeouts });
+ await tick();
+ transport.deliver({ id: transport.last().id, result: { protocolVersion: '0.1', backend: { name: 'fake' }, capabilities: {} } });
+ assert.equal(await Backend.ready, true);
+ return { transport, Backend };
+}
+
+const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+test('a request the backend never answers fails with timeout, and the backend is told to stop', async () => {
+ const { transport, Backend } = await hurried();
+ const pending = Backend.request('models.list', {});
+ const id = transport.last().id;
+ await assert.rejects(pending, error => error.name === 'BackendError' && error.code === 'timeout' && /models\.list/.test(error.message));
+ assert.equal(Backend.pending.size, 0);
+ assert.deepEqual(transport.last(), { jsonrpc: '2.0', method: '$/cancelRequest', params: { id } });
+});
+
+test('an answer after the timeout is ignored and does not touch later requests', async () => {
+ const { transport, Backend } = await hurried();
+ const late = Backend.request('models.list', {});
+ const lateId = transport.last().id;
+ await assert.rejects(late, error => error.code === 'timeout');
+ const next = Backend.request('models.list', {});
+ const nextId = transport.last().id;
+ transport.deliver({ id: lateId, result: ['stale'] });
+ transport.deliver({ id: lateId, error: { code: -32000, message: 'stale' } });
+ assert.equal(Backend.pending.size, 1);
+ transport.deliver({ id: nextId, result: ['fresh'] });
+ assert.deepEqual(await next, ['fresh']);
+ assert.equal(Backend.pending.size, 0);
+ assert.equal(Backend.state, 'ready');
+});
+
+test('a request answered in time is unchanged: no timeout fires and no cancel is sent afterwards', async () => {
+ const { transport, Backend } = await hurried();
+ const ok = Backend.request('models.list', {});
+ transport.deliver({ id: transport.last().id, result: [{ id: 'm' }] });
+ assert.deepEqual(await ok, [{ id: 'm' }]);
+ const sent = transport.sent.length;
+ await wait(40);
+ assert.equal(transport.sent.length, sent);
+ assert.equal(Backend.pending.size, 0);
+});
+
+test('each method has its own deadline, and an abort before it still wins', async () => {
+ const { transport, Backend } = await hurried();
+ const slow = Backend.request('session.compact', {});
+ const slowId = transport.last().id;
+ await wait(40);
+ assert.equal(Backend.pending.has(slowId), true);
+ transport.deliver({ id: slowId, result: { ok: true } });
+ assert.deepEqual(await slow, { ok: true });
+ const controller = new AbortController();
+ const aborted = Backend.request('models.list', {}, { signal: controller.signal });
+ controller.abort();
+ await assert.rejects(aborted, error => error.name === 'AbortError');
+ const sent = transport.sent.length;
+ await wait(40);
+ assert.equal(transport.sent.length, sent);
+});
+
+test('a backend that never answers the handshake ends unavailable instead of initializing forever', async () => {
+ const transport = fakeTransport();
+ const window = renderer(['backend-client.js'], {});
+ const Backend = new window.BackendClient(transport, { timeouts: { default: 20 } });
+ assert.equal(await Backend.ready, false);
+ assert.equal(Backend.state, 'unavailable');
+ assert.equal(Backend.pending.size, 0);
+});
+
+test('the shipped deadlines are bounded for every request, longest for sign-in and compaction', () => {
+ const window = renderer(['backend-client.js'], {});
+ const { timeouts } = new window.BackendClient(null);
+ for (const ms of Object.values(timeouts)) assert.ok(Number.isFinite(ms) && ms > 0);
+ assert.ok(timeouts['auth.login'] > timeouts.default && timeouts['session.compact'] > timeouts.default);
+});

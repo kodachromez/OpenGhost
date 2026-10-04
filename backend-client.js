@@ -30,6 +30,11 @@ class BackendError extends Error {
 
 const aborted = () => new DOMException('Aborted', 'AbortError');
 
+// How long a request may go unanswered before it fails with `timeout` and the backend is told to stop working on it, so
+// a hung backend can't leave anything waiting forever. Sign-ins wait for the user in a browser, and a compaction runs a
+// model, so theirs are long; everything else is a quick answer.
+const TIMEOUTS = { default: 60e3, 'auth.login': 15 * 60e3, 'session.compact': 10 * 60e3 };
+
 // A JSON-RPC error as the backend sent it: its ABP error in `data` when there is one.
 function fromRpc(error) {
  const data = error?.data && typeof error.data === 'object' ? error.data : {};
@@ -39,9 +44,10 @@ function fromRpc(error) {
 class BackendClient {
  // `transport`: { send(message), onMessage(callback), onStatus(callback), status(): Promise<{ state }> }, or null.
  // `hello()`: what the client tells the backend at the handshake (client, host tools, render guide), asked for then.
- constructor(transport, { hello = () => ({}) } = {}) {
+ constructor(transport, { hello = () => ({}), timeouts = {} } = {}) {
   this.transport = transport;
   this.hello = hello;
+  this.timeouts = { ...TIMEOUTS, ...timeouts };
   this.next = 1;
   this.pending = new Map();
   this.listeners = new Map();
@@ -119,8 +125,9 @@ class BackendClient {
   return new BackendError({ code: 'backend_unavailable', message: 'No backend is connected.' });
  }
 
- // A request to the backend. Resolves with its result, rejects with a BackendError, or with an AbortError once `signal`
- // aborts, and then the backend is told to stop working on it.
+ // A request to the backend. Resolves with its result, rejects with a BackendError (`timeout` when it goes unanswered
+ // for its method's time), or with an AbortError once `signal` aborts. On a timeout or an abort the backend is told to
+ // stop working on it, and a late answer is ignored.
  request(method, params, { signal } = {}) {
   if (this.state !== 'ready') return Promise.reject(this.unavailable());
   return this.call(method, params, { signal });
@@ -130,16 +137,18 @@ class BackendClient {
   if (signal?.aborted) return Promise.reject(aborted());
   const id = this.next++;
   return new Promise((resolve, reject) => {
-   const stop = () => {
+   let timer;
+   const settle = done => value => { clearTimeout(timer); signal?.removeEventListener('abort', stop); done(value); };
+   const give = error => {
     if (!this.pending.delete(id)) return;
     this.notify('$/cancelRequest', { id });
-    reject(aborted());
+    settle(reject)(error);
    };
-   this.pending.set(id, {
-    resolve: value => { signal?.removeEventListener('abort', stop); resolve(value); },
-    reject: error => { signal?.removeEventListener('abort', stop); reject(error); },
-   });
+   const stop = () => give(aborted());
+   this.pending.set(id, { resolve: settle(resolve), reject: settle(reject) });
    signal?.addEventListener('abort', stop, { once: true });
+   const ms = this.timeouts[method] ?? this.timeouts.default;
+   timer = setTimeout(() => give(new BackendError({ code: 'timeout', message: `The backend did not answer ${method} in time.` })), ms);
    this.send({ jsonrpc: '2.0', id, method, ...(params === undefined ? {} : { params }) });
   });
  }

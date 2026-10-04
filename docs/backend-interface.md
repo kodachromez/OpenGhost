@@ -41,6 +41,9 @@ behind in its session (on POSIX the backend leads a session of its own). A page 
 
 JSON-RPC 2.0. Requests have an `id`, notifications don't, and **both sides send requests**. Either side may cancel a
 request it sent with the notification `$/cancelRequest { id }`. A cancelled request is still answered.
+The client gives up on any request it sent, `initialize` included, that goes unanswered for 60 seconds (15 minutes for
+`auth.login`, 10 for `session.compact`): it fails locally with `timeout`, the client sends `$/cancelRequest`, and the
+late answer is ignored.
 
 Errors: a JSON-RPC error whose `data` is an `AbpError`:
 

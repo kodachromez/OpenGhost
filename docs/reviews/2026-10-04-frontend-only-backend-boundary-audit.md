@@ -146,6 +146,8 @@ Stop aborts `turn.done`, but `drive()` is still awaiting `work()`. Attachment re
 
 **Recommendation:** per-operation deadlines (with intentionally long/user-interactive auth exceptions), transport delivery errors, epoch-checked initialization, and cancellation racing *all* preparation/lifecycle waits. Keep the UI responsive without claiming backend cancellation has finished.
 
+**Resolution (2026-10-04), request deadlines only:** every request the client sends (`BackendClient.call`, so `initialize` too) now has a deadline: 60 seconds by default, 15 minutes for `auth.login` and 10 for `session.compact`. An unanswered request rejects with a `timeout` BackendError, leaves the pending map, its abort listener is removed, and the backend gets `$/cancelRequest`. A reply that arrives afterwards finds no pending entry and is ignored. A backend that never answers `initialize` now ends `unavailable` instead of initializing forever. Answered requests clear their timer, so they behave as before. Regression tests: the timeout cases in `test/backend-client.test.js`; contract in `docs/backend-interface.md` (Envelope). The other parts of this finding (stdin-closed delivery errors, epoch-checked initialization, preparation waits racing Stop, `turn.completed` releasing `turn.start`) are still open.
+
 ### F09 — HIGH: event bookkeeping requires stricter ordering than the interface says (**partly reproduced**)
 
 **Evidence:** `chat.js:799–876`; `backend-client.js:164–190`; interface event definitions.
