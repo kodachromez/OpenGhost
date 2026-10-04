@@ -369,7 +369,7 @@ Backend process (any language), or an adapter in front of one (e.g. Pi RPC → A
 Principles:
 
 - **One protocol, many transports.** ABP messages are transport-agnostic JSON-RPC 2.0. Framing is one JSON object per line (`\n`, UTF-8, no embedded newlines). Stdio is the default.
-- **The renderer never talks to the network or sockets.** The CSP becomes `connect-src 'none'`, which is tighter than today.
+- **Model/provider API traffic belongs to the external backend.** The app renderer's CSP becomes `connect-src 'none'`, blocking fetch/XHR/WebSocket-style connections, not HTTP(S) image loads or the separate browser webviews' networking. This is not a provider-hostname deny policy; see `docs/frontend-only.md` for the implemented boundary.
 - **The main process stays dumb.** It relays opaque JSON plus host services. Validation, versioning and capability negotiation happen in a renderer-side `backend-client.js` module, which keeps the UI testable with a fake transport.
 - **Reverse requests are first-class.** Approvals and host tools are JSON-RPC *requests from the backend*, so the backend's loop simply awaits them.
 - **Backend config** lives in a settings entry (`backend.command`, `args`, `env`, `transport`), with a built-in **mock backend** for the frontend-only baseline and for tests.

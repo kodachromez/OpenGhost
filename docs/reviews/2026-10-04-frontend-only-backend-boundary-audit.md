@@ -285,6 +285,8 @@ Thus **“no frontend model API calls” passes source inspection; “the render
 
 **Recommendation:** accurately document network exceptions and decide whether a strict provider-domain network policy is required. Keep AI runtime requests exclusively in Rust; do not break the intended general-purpose browser by confusing browsing with a provider client.
 
+**Resolution:** Corrected the code/docs/tests to claim no frontend AI/provider API client, not no renderer networking or provider-host contact. Boundary tests now distinguish source scans from exact CSP directives and preserve HTTP(S) images and self/data/blob media. CSP, gallery/video behavior and separate browser networking are unchanged; no provider-domain rules were needed. Validation: `node --test test/boundary.test.js` — 10 passed, no live provider calls.
+
 ### F18 — MEDIUM: prompt policy and model-shaped legacy data remain
 
 **Evidence:** `render-guide.js:8–19,40,54–56,64–67,86–99`; `chat.js:1107,1189–1197`; `library.js:237–267`.

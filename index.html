@@ -3,7 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <!-- Only the app's own script files run: text from a model, a site or a file can never become code here.
-       The page reaches no network at all: every model call is the external backend's, through backend-client.js. -->
+       Model/provider API calls belong to the external backend, through backend-client.js. connect-src blocks
+       fetch/XHR/WebSocket-style connections here, not HTTP(S) images or networking in the separate browser webviews. -->
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https: http:; media-src 'self' data: blob:; font-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>OpenGhost</title>

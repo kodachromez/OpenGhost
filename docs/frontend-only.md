@@ -65,10 +65,21 @@ cards). Chats saved by 1.3.0 still open: their model-facing parts are ignored, a
 
 ## What can still reach the network
 
-- The renderer: nothing (`connect-src 'none'`, no `fetch`; enforced by `test/boundary.test.js`).
-- The main process: `https://www.youtube.com/oembed` for video card titles (a fixed host and an 11-character video id),
-  and the built-in browser's webviews, which load what the user or the backend's `host.tool` calls open.
-- The external backend, which is the only thing that talks to a model provider.
+- The app renderer: `connect-src 'none'` blocks fetch/XHR/WebSocket/EventSource/beacon connections, not all networking.
+  `img-src` permits any HTTP(S) host, plus self/data/blob images: favicons, video thumbnails and permitted gallery
+  images intentionally make requests. The gallery's trusted-preview/click-to-load behavior is unchanged; it is not
+  a global hostname restriction. `media-src` permits only self/data/blob, not direct remote audio/video sources.
+- The main process: `https://www.youtube.com/oembed` for video card titles (a fixed host and an 11-character video id).
+- The built-in browser: separate `persist:browser` webviews load pages opened by the user or backend `host.tool` calls.
+  The app page's CSP does not restrict their networking; HTTP(S), file, about and data navigation remain supported.
+  Links opened in the system browser also network outside the app page's CSP.
+- The external backend: owns the app's AI/model-provider API traffic. The frontend contains no provider client and relays
+  backend requests through `backend-client.js`; browsing and display-resource loads are not provider API clients.
+
+This is **no frontend AI/provider API implementation**, not **no contact with provider hostnames**. There is no
+provider-domain denylist for image loads or browsing, and none is required by this boundary. `test/boundary.test.js`
+checks source patterns and CSP directives (including the image/media exceptions); it does not prove total network
+isolation or exercise live provider endpoints.
 
 ## Still coupled to the old backend
 

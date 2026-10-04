@@ -1,7 +1,8 @@
 'use strict';
 
-// The app is a frontend only: nothing in it may reach an AI provider, hold a provider's key, run the old agent or its
-// tools, or build a model's prompt. Everything goes through backend-client.js to an external backend.
+// Static backend-removal guards: model/provider API clients and the agent runtime belong to the external backend,
+// reached through backend-client.js. Display resources and browser webviews intentionally network; these source/CSP
+// checks do not prove network isolation or prevent contact with provider hostnames through those channels.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -24,7 +25,7 @@ test('the backend files are gone', () => {
  for (const file of REMOVED) assert.equal(fs.existsSync(path.join(ROOT, file)), false, file);
 });
 
-test('no source names a provider API, an SDK or a sign-in server', () => {
+test('app sources contain no known provider API endpoints, SDK imports or sign-in endpoints', () => {
  const banned = [
   /api\.deepseek\.com/, /api\.openai\.com/, /api\.anthropic\.com/, /chatgpt\.com/, /auth\.openai\.com/, /generativelanguage/,
   /@anthropic-ai/, /\bopenai\b.*require|require\(['"]openai/, /\/v1\/(chat\/completions|messages|responses)\b/, /localhost:1455/,
@@ -44,15 +45,26 @@ test('the old agent globals and prompts are gone from the renderer', () => {
  }
 });
 
-test('the renderer makes no network requests and its CSP allows none', () => {
+test('renderer source scan finds no fetch/XHR/WebSocket/EventSource/beacon client', () => {
  for (const file of sources().filter(file => !file.startsWith('desktop/'))) {
   assert.equal(/\bfetch\(|XMLHttpRequest|new WebSocket|EventSource|sendBeacon/.test(read(file)), false, file);
  }
- const csp = read('index.html').match(/Content-Security-Policy" content="([^"]+)"/)[1];
- assert.match(csp, /connect-src 'none'/);
 });
 
-test('only the backend host starts processes, and the main process fetches only YouTube oEmbed', () => {
+test('renderer CSP disables connections but preserves remote images and local media', () => {
+ const csp = read('index.html').match(/Content-Security-Policy" content="([^"]+)"/)[1];
+ const directives = Object.fromEntries(csp.split(';').map(part => part.trim()).filter(Boolean).map(part => {
+  const [name, ...sources] = part.split(/\s+/);
+  return [name, sources];
+ }));
+ assert.deepEqual(directives['connect-src'], ["'none'"]);
+ // Image requests are not governed by connect-src. Video cards use remote thumbnails (images) and main-process
+ // oEmbed metadata; direct remote audio/video sources remain disallowed in the app page, unlike browser webviews.
+ assert.deepEqual(directives['img-src'], ["'self'", 'data:', 'blob:', 'https:', 'http:']);
+ assert.deepEqual(directives['media-src'], ["'self'", 'data:', 'blob:']);
+});
+
+test('only backend-host sources use child_process; the sole net.fetch call targets YouTube oEmbed', () => {
  for (const file of sources().filter(file => file.startsWith('desktop/'))) {
   const text = read(file);
   if (file !== 'desktop/backend-host.js') assert.equal(/child_process/.test(text), false, file);
