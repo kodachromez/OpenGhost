@@ -137,3 +137,133 @@ for (const mode of ['graceful', 'stubborn', 'crash']) {
   }
  });
 }
+
+// Audit F07: stop() always settles, once, for the child it was asked about, and never hangs a quit.
+const { EventEmitter } = require('node:events');
+const { PassThrough } = require('node:stream');
+
+// A child process the test drives by hand: it exits, closes and errors only when told to, and its kill can be made to fail.
+function fakeChild({ pid = 4242, kill = () => true } = {}) {
+ const child = new EventEmitter();
+ Object.assign(child, { pid, exitCode: null, signalCode: null, stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), kills: 0 });
+ child.kill = signal => { child.kills++; return kill(signal); };
+ return child;
+}
+
+function fakeHost(children, extra = {}) {
+ const messages = [], statuses = [], logs = [];
+ const backend = new BackendHost({
+  command: { file: 'fake-backend', args: [] },
+  onMessage: message => messages.push(message),
+  onStatus: status => statuses.push(status),
+  log: { error: line => logs.push(line) },
+  spawnProcess: () => children.shift(),
+  ...extra,
+ });
+ return { backend, messages, statuses, logs };
+}
+
+const within = (promise, ms) => Promise.race([promise.then(() => true), new Promise(resolve => setTimeout(() => resolve(false), ms))]);
+
+test('stop() right after a spawn error settles instead of waiting for an exit that never comes', async () => {
+ const { backend, statuses } = host({ command: { file: path.join(__dirname, 'no-such-backend'), args: [] } });
+ backend.start();
+ assert.ok(await within(backend.stop(5000), 1000), 'stop() did not settle after error/close');
+ assert.equal(statuses.at(-1).state, 'error');
+ assert.equal(backend.child, null);
+ assert.equal(backend.stopping, null);
+});
+
+test('stop() settles on close even when no exit event arrives', async () => {
+ const child = fakeChild();
+ const { backend } = fakeHost([child]);
+ backend.start();
+ const stopping = backend.stop(5000);
+ child.emit('close', 0, null);
+ assert.ok(await within(stopping, 200));
+});
+
+test('overlapping stop() calls share one shutdown and all settle', async () => {
+ const { backend, statuses, next } = host();
+ backend.start();
+ backend.send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} });
+ await next(message => message.id === 1);
+ const sent = [];
+ const send = backend.send.bind(backend);
+ backend.send = message => { sent.push(message.method); return send(message); };
+ const first = backend.stop(), second = backend.stop(), third = backend.stop();
+ assert.equal(first, second);
+ assert.equal(first, third);
+ await Promise.all([first, second, third]);
+ assert.deepEqual(sent, ['shutdown']);
+ assert.equal(statuses.filter(status => status.state === 'exited').length, 1);
+ assert.equal(backend.stopping, null);
+ // Normal shutdown is unchanged: a later stop has nothing to do, and the host can start a new backend.
+ await backend.stop();
+ backend.start();
+ assert.ok(backend.child);
+ await backend.stop();
+ assert.equal(statuses.at(-1).state, 'exited');
+});
+
+test('a backend whose kill fails or never exits is given up after a bounded wait', async () => {
+ const child = fakeChild({ pid: 2 ** 22 + 12345, kill: () => { throw new Error('kill failed'); } });
+ const { backend, statuses } = fakeHost([child]);
+ backend.start();
+ child.emit('spawn');
+ // The failed kill's error event must not crash or settle stop() early; only the bounded deadline does.
+ const stopping = backend.stop(20);
+ setTimeout(() => child.emit('error', new Error('kill EPERM')), 30);
+ const started = Date.now();
+ assert.ok(await within(stopping, 4000), 'stop() hung on a backend that would not die');
+ assert.ok(Date.now() - started >= 20);
+ assert.equal(child.kills, 1);
+ assert.equal(backend.child, null);
+ assert.equal(backend.stopping, null);
+ assert.equal(statuses.at(-1).state, 'error');
+});
+
+test('stale events from an older backend do not affect a newer one', async () => {
+ const old = fakeChild({ pid: 1001 }), fresh = fakeChild({ pid: 1002 });
+ const { backend, messages, statuses, logs } = fakeHost([old, fresh]);
+ backend.start();
+ old.emit('spawn');
+ // Half a line from the old backend must not prefix the new backend's first line.
+ old.stdout.write('{"from":"old"');
+ const stopping = backend.stop(5000);
+ old.emit('exit', 0, null);
+ await stopping;
+ backend.start();
+ assert.equal(backend.child, fresh);
+ fresh.emit('spawn');
+ assert.deepEqual(statuses.at(-1), { state: 'running', pid: 1002 });
+ old.stdout.write('}\n{"from":"old-late"}\n');
+ old.stderr.write('old noise\n');
+ old.emit('spawn');
+ old.emit('error', new Error('old error'));
+ old.emit('exit', 1, null);
+ old.emit('close', 1, null);
+ fresh.stdout.write('{"from":"fresh"}\n');
+ await new Promise(resolve => setImmediate(resolve));
+ assert.deepEqual(messages, [{ from: 'fresh' }]);
+ assert.deepEqual(logs, []);
+ assert.deepEqual(statuses.at(-1), { state: 'running', pid: 1002 });
+ assert.equal(backend.child, fresh);
+ const stoppingFresh = backend.stop(5000);
+ fresh.emit('exit', 0, null);
+ await stoppingFresh;
+ assert.equal(statuses.at(-1).state, 'exited');
+});
+
+test('start() during a shutdown does not spawn a second backend', async () => {
+ const child = fakeChild();
+ const spawned = [child];
+ const { backend } = fakeHost(spawned);
+ backend.start();
+ child.emit('spawn');
+ const stopping = backend.stop(5000);
+ backend.start();
+ assert.equal(backend.child, child);
+ child.emit('exit', 0, null);
+ await stopping;
+});

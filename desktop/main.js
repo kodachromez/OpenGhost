@@ -292,11 +292,16 @@ if (process.argv.includes('--create-shortcut')) {
   });
  });
  app.on('window-all-closed', () => app.quit());
+ let quitting = null;
  app.on('before-quit', event => {
   cancelBrowser();
   if (!writes.size && !backend?.child) return;
   event.preventDefault();
-  // The store is on disk and the backend has had its chance to shut down before the app goes.
-  Promise.allSettled([...writes.values()]).then(() => backend?.stop()).then(() => app.quit());
+  // The store is on disk and the backend has had its chance to shut down before the app goes. Repeated quits while that
+  // is under way join it instead of starting another; stop() always settles, so the quit always goes ahead.
+  quitting ??= Promise.allSettled([...writes.values()]).then(() => backend?.stop()).finally(() => {
+   quitting = null;
+   app.quit();
+  });
  });
 }

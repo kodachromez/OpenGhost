@@ -155,12 +155,12 @@ escape POSIX cleanup. Kill failures are ignored; cleanup does not wait for every
 OS `wait` reaping for arbitrary grandchildren. No supervisor/parent-death mechanism ensures cleanup after abrupt
 Electron termination or machine failure.
 
-Open lifecycle issues also remain: `stop()` resolves on `exit` only, so a spawn-error race producing `error`/`close`
-without `exit`, or failed termination, can leave it pending. There is no shared idempotent stop promise or
-quit-in-progress guard against overlapping quit attempts. Status is emitted on child exit rather than stream close,
-so trailing stdout can arrive afterward. Initialization checks disposal but lacks a process-generation check after
-its awaits; a narrowly timed exit can race the ready-state transition. None of these paths should be described as
-fully reliable shutdown/reconnection. The two-second grace does not bound storage waits, these races or total quit time.
+`stop()` settles on `exit`, `close`, or a spawn `error`; overlapping stops and quits share one shutdown; events from an
+older child never reach a newer one; and a backend that survives its kill is given up (reaped where possible, status
+`error`) 2 seconds after the kill, so the backend part of quit is bounded by about 4 seconds. Open lifecycle issues
+remain: status is emitted on child exit rather than stream close, so the same child's trailing stdout can arrive
+afterward. Initialization checks disposal but lacks a process-generation check after its awaits; a narrowly timed exit
+can race the ready-state transition. Store writes awaited before quit are not bounded by the shutdown deadline.
 
 ## 5. CSP and actual networking boundary
 

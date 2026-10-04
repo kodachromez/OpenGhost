@@ -107,7 +107,8 @@ The backend should answer with `result: null` and exit. The host does not wait f
 terminate it. On POSIX it force-kills the backend after the grace period and reaps its process group on exit; Linux also
 scans its session for descendants in other process groups. Descendants that deliberately create another session are
 outside that cleanup. On Windows the forced shutdown path uses `taskkill /T /F` while the backend is still alive;
-normal/crash exit does not provide the POSIX session-reaping guarantee.
+normal/crash exit does not provide the POSIX session-reaping guarantee. If the backend is still there 2 seconds after
+the kill, the host gives it up (reporting status `error`) so quitting cannot hang on it.
 
 The preload's `onMessage` and `onStatus` subscriptions return unsubscribe functions. Replacing a client requires
 `BackendClient.dispose()`: it detaches subscriptions, rejects pending calls, aborts reverse handlers and clears local
