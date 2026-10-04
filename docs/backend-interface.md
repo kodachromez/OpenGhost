@@ -750,9 +750,10 @@ and model IDs and numeric `input`, `cached`, `written`, `output`, optional `requ
 - The frontend clamps counts to nonnegative values and `cached` to at most `input`. An event with neither input nor
   output adds no token/request accounting; otherwise requests defaults to at least 1. Context can still update from
   a correlated event without token increments.
-- The global local ledger requires nonempty provider/model IDs and does not record a provider ID containing `|`.
-  Other provider UI operations still treat IDs as opaque. `modelName` supplies a display label. No per-event monetary
-  cost is consumed; account balances/credits come from `account.limits`.
+- The global local ledger requires nonempty provider/model IDs and otherwise treats both as opaque, `|` included: it
+  keys each model by the JSON pair `[provider, model]` and upgrades older `provider|model` keys when it loads.
+  `modelName` supplies a display label. No per-event monetary cost is consumed; account balances/credits come from
+  `account.limits`.
 - With `messageId`, usage belongs to that message's original reply part. Turn-only usage belongs to its first reply
   part. Standalone compaction usage, correlated by `clientTurnId`, belongs to its compaction entry. Unknown or conflicting
   identities and uncorrelated session-only usage are ignored.

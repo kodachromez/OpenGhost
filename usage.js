@@ -19,16 +19,41 @@ function daysAgo(back) {
  return dayOf(date);
 }
 
+// Each model is kept under its provider and model IDs written as a JSON pair, so any ID, `|` and all, reads back whole.
+// Version 1 wrote `provider|model`; its provider IDs never held a `|`, so the first one splits such a key.
+const keyOf = (provider, model) => JSON.stringify([provider, model]);
+function idOf(key) {
+ try {
+  const id = JSON.parse(key);
+  if (Array.isArray(id) && id.length === 2 && id.every(part => typeof part === 'string')) return id;
+ } catch {}
+ return null;
+}
+function rekey(rows) {
+ const out = {};
+ for (const [key, value] of Object.entries(rows || {})) {
+  const cut = key.indexOf('|');
+  if (cut > 0) out[keyOf(key.slice(0, cut), key.slice(cut + 1))] = value;
+ }
+ return out;
+}
+function upgrade(saved) {
+ const days = {};
+ for (const [day, rows] of Object.entries(saved.days || {})) days[day] = rekey(rows);
+ return { ...saved, version: 2, days, names: rekey(saved.names) };
+}
+
 const empty = () => ({ input: 0, cached: 0, written: 0, output: 0, requests: 0, tokens: 0, models: {} });
 
 class Usage {
  constructor(store) {
   this.store = store;
-  this.data = { version: 1, since: 0, days: {}, names: {} };
+  this.data = { version: 2, since: 0, days: {}, names: {} };
   this.listeners = new Set();
   this.timer = 0;
   this.ready = store.read(KEY).then(saved => {
-   if (saved?.version === 1) this.data = { ...this.data, ...saved };
+   if (saved?.version === 1) this.data = { ...this.data, ...upgrade(saved) };
+   else if (saved?.version === 2) this.data = { ...this.data, ...saved };
   }).catch(() => {});
  }
 
@@ -45,10 +70,10 @@ class Usage {
  // and what came back, by provider and model.
  record(usage) {
   const parts = this.parts(usage), provider = String(usage?.provider || ''), model = String(usage?.model || ''), name = usage?.modelName;
-  if (!parts || !provider || !model || provider.includes('|')) return;
+  if (!parts || !provider || !model) return;
   const { input, cached, written, output, requests } = parts;
   this.ready.then(() => {
-   const data = this.data, id = `${provider}|${model}`;
+   const data = this.data, id = keyOf(provider, model);
    data.since ||= Date.now();
    const row = (data.days[daysAgo(0)] ||= {})[id] ||= [0, 0, 0, 0, 0];
    row[INPUT] += input;
@@ -73,7 +98,9 @@ class Usage {
   for (const [day, rows] of Object.entries(this.data.days)) {
    if (day < from || day > to) continue;
    for (const [id, row] of Object.entries(rows)) {
-    const provider = id.slice(0, id.indexOf('|')), total = out[provider] ||= empty();
+    const provider = idOf(id)?.[0];
+    if (provider === undefined) continue;
+    const total = out[provider] ||= empty();
     total.input += row[INPUT];
     total.cached += row[CACHED];
     total.written += row[WRITTEN];
@@ -100,7 +127,8 @@ class Usage {
  day(day) {
   const rows = this.data.days[day] || {}, providers = Object.create(null);
   for (const [id, row] of Object.entries(rows)) {
-   const provider = id.slice(0, id.indexOf('|'));
+   const provider = idOf(id)?.[0];
+   if (provider === undefined) continue;
    providers[provider] = (providers[provider] || 0) + row[INPUT] + row[OUTPUT];
   }
   return { day, providers };
@@ -117,7 +145,7 @@ class Usage {
  }
 
  nameOf(id) {
-  return this.data.names[id] || id.slice(id.indexOf('|') + 1);
+  return this.data.names[id] || (idOf(id)?.[1] ?? id);
  }
 
  get since() {
