@@ -5,9 +5,8 @@
 // and a column for each of the last 30 days. Below, a section for every provider in use: its plan, limits and balance as the
 // backend reports them (account.limits), and the tokens, the cache and the models from the app's own count.
 const PERIODS = [['today', 1], ['week', 7], ['month', 30], ['all', 0]];
-// Each provider gets a color of its own, the first ones as they always had theirs.
+// A cycling chart palette in display order, not provider branding.
 const TONES = ['turquoise', 'lilac', 'orange', 'blue'];
-const KNOWN_TONES = { chatgpt: 'turquoise', 'openai-codex': 'turquoise', openai: 'lilac', anthropic: 'orange', deepseek: 'blue' };
 const CHART_DAYS = 30;
 const REFRESH = 60000;
 const COUNT_TIME = 700;
@@ -28,7 +27,7 @@ const easeOut = t => 1 - (1 - t) ** 3;
 let ORDER = [];
 let names = provider => provider;
 const nameOf = provider => names(provider);
-const toneOf = provider => Object.hasOwn(KNOWN_TONES, provider) ? KNOWN_TONES[provider] : TONES[Math.max(0, ORDER.indexOf(provider)) % TONES.length];
+const toneOf = provider => TONES[Math.max(0, ORDER.indexOf(provider)) % TONES.length];
 const dateOf = day => { const [y, m, d] = day.split('-').map(Number); return new Date(y, m - 1, d); };
 const monthName = key => new Intl.DateTimeFormat(I18n.lang, { month: 'long', year: 'numeric' }).format(dateOf(`${key}-01`));
 

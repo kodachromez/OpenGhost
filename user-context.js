@@ -6,12 +6,11 @@
 // backend's business.
 const KEY = 'context';
 const SAVE_DELAY = 400;
-const LIMITS = { instructions: 8000, files: 20, chars: 200000 };
-// What a picture or a file read from its path weighs against LIMITS.chars.
-const WEIGHT = { image: 4000, none: 300 };
+// Local storage/payload guardrails, not model context or token limits. AttachmentReader also bounds individual files.
+const LIMITS = { instructions: 8000, files: 20, textChars: 200000 };
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-const weigh = file => file.kind === 'text' ? file.chars : WEIGHT[file.kind] || 0;
+const textChars = file => file.kind === 'text' ? file.chars : 0;
 const same = (a, b) => a.path && b.path ? Library.samePath(a.path, b.path) : a.name === b.name && a.size === b.size;
 
 class UserContext {
@@ -42,8 +41,8 @@ class UserContext {
   return LIMITS;
  }
 
- weight() {
-  return this.files.reduce((sum, file) => sum + weigh(file), 0);
+ textChars() {
+  return this.files.reduce((sum, file) => sum + textChars(file), 0);
  }
 
  onChange(listener) {
@@ -90,7 +89,7 @@ class UserContext {
    if (payload.type === 'none' && !entry.path) { skipped.push({ name, reason: 'unreadable' }); continue; }
    const old = this.files.find(item => same(item, entry));
    if (!old && this.files.length >= LIMITS.files) { skipped.push({ name, reason: 'count' }); continue; }
-   if (this.weight() - (old ? weigh(old) : 0) + weigh(entry) > LIMITS.chars) { skipped.push({ name, reason: 'size' }); continue; }
+   if (this.textChars() - (old ? textChars(old) : 0) + textChars(entry) > LIMITS.textChars) { skipped.push({ name, reason: 'size' }); continue; }
    if (payload.type !== 'none') {
     const kept = payload.type === 'text' ? { text: payload.text } : { url: payload.url };
     this.payloads.set(entry.id, kept);

@@ -308,6 +308,8 @@ Existing transcripts are returned and re-saved wholesale, not projected to a dis
 
 **Recommendation:** remove misleading provider/token defaults; migrate preferences once if needed. These do not justify restoring provider code.
 
+**Resolution:** Pinned text now shows character counts, not token estimates. The 200,000-character text cap and 20-file cap are explicitly local resource limits; synthetic image/path weights are removed. Usage uses the same generic palette for every provider, API-key placeholders defer to backend metadata or “API key”, and effort preferences migrate once to `openghost.effort` (obsolete model-key cleanup removed). Backend-reported usage/statistics remain unchanged. Validation: `node --test test/settings-presentation.test.js test/provider-auth.test.js test/model-capabilities.test.js test/usage.test.js` — 33 passed.
+
 ### F20 — CLEANUP: misleading recovery UX and avoidable coupling
 
 - `BackendClient` can reinitialize on a synthetic later `running` status, and the unit test says it “comes back”, but the production main process has **no restart/reconnect command or automatic restart**. After crash/configuration changes the user must relaunch the app. This is documented, not a hidden feature. Raw spawn/config errors exist in `Backend.process` but the normal UI says only “No backend is connected”.

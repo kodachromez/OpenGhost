@@ -106,6 +106,23 @@ async function page(catalog = [provider()]) {
  return { settings, Backend, list, requests, next, type, debounce, statusText, window };
 }
 
+test('API key placeholders are neutral unless supplied by the backend; saved-key wording is preserved', async () => {
+ const catalog = [provider(), { ...provider('custom'), methods: [{ type: 'apiKey', placeholder: 'Backend "key"' }] }];
+ const { settings, list } = await page(catalog);
+ assert.match(list.html, /placeholder="settings.key.label"/);
+ assert.match(list.html, /placeholder="Backend &quot;key&quot;"/);
+ assert.doesNotMatch(list.html, /sk-/);
+ assert.equal(settings.inputs.p.placeholder, 'settings.key.label');
+ assert.equal(settings.inputs.custom.placeholder, 'Backend "key"');
+ for (const id of settings.order) {
+  settings.setProviderStatus(id, { connected: false, keySaved: true });
+  assert.equal(settings.inputs[id].placeholder, 'settings.key.saved');
+  settings.setProviderStatus(id, { connected: false, keySaved: false });
+ }
+ assert.equal(settings.inputs.p.placeholder, 'settings.key.label');
+ assert.equal(settings.inputs.custom.placeholder, 'Backend "key"');
+});
+
 test('overlapping key saves: latest success wins, including repeated key text; late errors are ignored', async () => {
  const { settings, next, type, debounce, statusText } = await page();
  type('p', 'same'); debounce();

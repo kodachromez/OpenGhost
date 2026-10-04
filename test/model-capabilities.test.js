@@ -80,7 +80,7 @@ const thinking = { thinkingLevels: ['none', 'low', 'high'], defaultThinking: 'lo
 
 test('empty or missing thinkingLevels stays unsupported in settings, slider, and outgoing configuration', async () => {
  for (const capabilities of [{}, { thinkingLevels: [] }, { thinkingLevels: [], defaultThinking: 'high' }]) {
-  const f = await page([model('m', capabilities)], { 'deepseek.effort': 'high' });
+  const f = await page([model('m', capabilities)], { 'openghost.effort': 'high' });
   assert.deepEqual(plain(f.settings.config.efforts), []);
   assert.equal(f.settings.config.effort, undefined);
   assert.deepEqual(plain(f.slider.efforts), []);
@@ -134,28 +134,42 @@ test('backend defaults drive initial selection and same-level model switches wit
  assert.equal(f.settings.config.effort, 'low');
  assert.equal(f.slider.value, 1);
  assert.equal(f.slider.button.level, 1);
- assert.equal(f.storage.has('deepseek.effort'), false);
+ assert.equal(f.storage.has('openghost.effort'), false);
  f.chat.setModel('p:b');
  assert.equal(f.settings.config.effort, 'none');
  assert.equal(f.slider.value, 0);
- assert.equal(f.storage.has('deepseek.effort'), false);
+ assert.equal(f.storage.has('openghost.effort'), false);
  f.slider.commit(2);
  assert.equal(f.settings.config.effort, 'high');
  f.chat.setModel('p:a');
  assert.equal(f.settings.config.effort, 'high');
- const saved = await page([model('a', thinking)], { 'deepseek.effort': 'high' });
+ const saved = await page([model('a', thinking)], { 'openghost.effort': 'high' });
  assert.equal(saved.settings.config.effort, 'high');
+});
+
+test('historical effort preference migrates once to the neutral key without overriding a newer choice', async () => {
+ for (const current of [undefined, 'none']) {
+  const saved = { 'deepseek.effort': 'high', ...(current ? { 'openghost.effort': current } : {}) };
+  const f = await page([model('m', thinking)], saved);
+  assert.equal(f.settings.config.effort, current ?? 'high');
+  assert.equal(f.storage.get('openghost.effort'), current ?? 'high');
+  assert.equal(f.storage.has('deepseek.effort'), false);
+  f.settings.setEffort(undefined);
+  const reopened = await page([model('m', thinking)], Object.fromEntries(f.storage));
+  assert.equal(reopened.settings.config.effort, 'low', 'clearing the preference must not revive the legacy choice');
+  assert.equal(reopened.storage.has('openghost.effort'), false);
+ }
 });
 
 test('advertised custom levels without a default are selectable but are not automatically sent or saved', async () => {
  const f = await page([model('m', { thinkingLevels: ['brief', 'deep'] })]);
  assert.equal(f.settings.config.effort, undefined);
- assert.equal(f.storage.has('deepseek.effort'), false);
+ assert.equal(f.storage.has('openghost.effort'), false);
  assert.equal(f.slider.button.hidden, false);
  assert.equal(f.slider.button.attributes.label, f.window.I18n.t('effort'));
  f.slider.commit(1);
  assert.equal(f.settings.config.effort, 'deep');
- assert.equal(f.storage.get('deepseek.effort'), 'deep');
+ assert.equal(f.storage.get('openghost.effort'), 'deep');
  f.backend.models = [model('m', { thinkingLevels: [] })];
  await f.settings.refresh();
  assert.equal(f.settings.config.effort, undefined);
@@ -164,7 +178,7 @@ test('advertised custom levels without a default are selectable but are not auto
 
 test('model switching adopts backend canonical model/thinking/mode, including a cleared thinking value', async () => {
  for (const value of ['low', null]) {
-  const f = await page(['a', 'b', 'canonical'].map(id => model(id, thinking)), { 'deepseek.effort': 'high' });
+  const f = await page(['a', 'b', 'canonical'].map(id => model(id, thinking)), { 'openghost.effort': 'high' });
   let modeSyncs = 0;
   f.window.ModePicker = { sync() { modeSyncs++; } };
   f.backend.canonical = { model: 'canonical', thinking: value, permissionMode: 'auto' };

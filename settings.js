@@ -1,7 +1,7 @@
 (() => {
 'use strict';
 
-const STORAGE = { effort: 'deepseek.effort', mode: 'openghost.mode', model: 'openghost.model', catalog: 'openghost.catalog' };
+const STORAGE = { effort: 'openghost.effort', mode: 'openghost.mode', model: 'openghost.model', catalog: 'openghost.catalog' };
 // How long the backend's list of models counts as fresh. Opening the model picker after that reads the list again.
 const FRESH = 10 * 60 * 1000;
 const MODES = ['ask', 'auto', 'full'];
@@ -26,7 +26,7 @@ function keyRow(index, method) {
    </div>
    <div class="settings-control">
     <div class="settings-key-box">
-     <input id="settings-key-${index}" class="settings-key" type="password" placeholder="${escapeHtml(method.placeholder || 'sk-…')}" autocomplete="off" spellcheck="false">
+     <input id="settings-key-${index}" class="settings-key" type="password" placeholder="${escapeHtml(method.placeholder || I18n.t('settings.key.label'))}" autocomplete="off" spellcheck="false">
      <button type="button" class="settings-key-eye" aria-label="${escapeHtml(I18n.t('settings.key.show'))}" aria-pressed="false">${Glyphs.eye}</button>
     </div>
     <p class="settings-status" role="status"></p>
@@ -115,11 +115,19 @@ class Settings {
   this.providerCheck = 0;
   this.models = this.readCatalog();
   this.efforts = [];
-  localStorage.removeItem('deepseek.model');
   this.model = localStorage.getItem(STORAGE.model) || '';
   this.shown = null;
   this.read = 0;
-  const effort = localStorage.getItem(STORAGE.effort);
+  let effort = localStorage.getItem(STORAGE.effort);
+  // Move the historical preference once; it is not a provider-specific setting.
+  const legacyEffort = localStorage.getItem('deepseek.effort');
+  if (legacyEffort !== null) {
+   if (effort === null) {
+    effort = legacyEffort;
+    localStorage.setItem(STORAGE.effort, effort);
+   }
+   localStorage.removeItem('deepseek.effort');
+  }
   this.preferredEffort = effort || undefined;
   this.effort = undefined;
   const mode = localStorage.getItem(STORAGE.mode);
@@ -471,7 +479,7 @@ class Settings {
    box.querySelector('.settings-account-who').textContent = status.waiting ? I18n.t('settings.account.waiting') : who;
   }
   for (const [provider, input] of Object.entries(this.inputs || {})) {
-   if (!input.value) input.placeholder = this.status[provider]?.keySaved ? I18n.t('settings.key.saved') : (this.providers.find(item => item.id === provider)?.methods || []).find(method => method.type === 'apiKey')?.placeholder || 'sk-…';
+   if (!input.value) input.placeholder = this.status[provider]?.keySaved ? I18n.t('settings.key.saved') : (this.providers.find(item => item.id === provider)?.methods || []).find(method => method.type === 'apiKey')?.placeholder || I18n.t('settings.key.label');
   }
  }
 

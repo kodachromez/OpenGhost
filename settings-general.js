@@ -2,22 +2,17 @@
 'use strict';
 
 // Settings → General: the user's standing instructions and the files OpenGhost keeps at hand in every chat.
-// Everything saves as it changes; UserContext passes it to the model.
+// Everything saves as it changes; UserContext passes it to the backend.
 const ROW = { duration: 420, easing: 'cubic-bezier(0.32, 0.72, 0, 1)' };
 // A row folded shut: its padding goes too, or the height could not reach zero.
 const FOLDED = { height: '0px', paddingTop: '0px', paddingBottom: '0px' };
 const STATUS_TIME = 6000;
-const CHARS_PER_TOKEN = 3.2;
 const PLUS = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M8 3.2v9.6M3.2 8h9.6"/></svg>';
 const CROSS = '<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M3 3l6 6M9 3l-6 6"/></svg>';
 
 const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 const escapeHtml = text => String(text).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 const hasFiles = event => [...(event.dataTransfer?.types || [])].includes('Files');
-const tokens = chars => {
- const count = Math.max(1, Math.round(chars / CHARS_PER_TOKEN));
- return count < 1000 ? String(count) : `${(count / 1000).toFixed(count < 10000 ? 1 : 0).replace(/\.0$/, '')}k`;
-};
 
 class GeneralSettings {
  constructor({ root, context }) {
@@ -26,7 +21,7 @@ class GeneralSettings {
   this.rows = new Map();
   this.depth = 0;
   this.statusTimer = 0;
-  const t = key => escapeHtml(I18n.t(key));
+  const t = (key, params) => escapeHtml(I18n.t(key, params));
   root.innerHTML = `
    <p class="settings-lead">${t('settings.general.lead')}</p>
    <section class="general-block">
@@ -39,7 +34,7 @@ class GeneralSettings {
    </section>
    <section class="general-block general-files-block">
     <div class="general-head"><span class="settings-label" id="settings-files-label">${t('settings.files')}</span></div>
-    <p class="settings-hint">${t('settings.files.hint')}</p>
+    <p class="settings-hint">${t('settings.files.hint', { files: context.limits.files, chars: context.limits.textChars.toLocaleString(I18n.lang) })}</p>
     <ul class="general-files" aria-labelledby="settings-files-label"></ul>
     <button type="button" class="general-drop">${PLUS}<span>${t('settings.files.drop')}</span></button>
     <p class="settings-status general-status" role="status"></p>
@@ -109,7 +104,7 @@ class GeneralSettings {
   const first = skipped[0];
   const text = first.reason === 'count'
    ? I18n.t('settings.files.count', { count: this.context.limits.files })
-   : I18n.t(`settings.files.${first.reason}`, { name: first.name });
+   : I18n.t(`settings.files.${first.reason}`, { name: first.name, count: this.context.limits.textChars.toLocaleString(I18n.lang) });
   this.say(text, 'error');
  }
 
@@ -128,7 +123,7 @@ class GeneralSettings {
  meta(file) {
   const info = FileKinds.describe(file.name);
   const parts = [info.name, FileKinds.formatSize(file.size)];
-  if (file.kind === 'text') parts.push(I18n.t('settings.files.tokens', { count: tokens(file.chars) }));
+  if (file.kind === 'text') parts.push(I18n.t('settings.files.chars', { count: file.chars.toLocaleString(I18n.lang) }));
   else if (file.kind === 'image' && file.width) parts.push(`${file.width}×${file.height}`);
   else if (file.kind === 'none') parts.push(I18n.t('settings.files.path'));
   return parts.join(' · ');
