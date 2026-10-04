@@ -2,9 +2,6 @@
 'use strict';
 
 const STORAGE = { effort: 'deepseek.effort', mode: 'openghost.mode', model: 'openghost.model', catalog: 'openghost.catalog' };
-const EFFORTS = ['none', 'low', 'high', 'max'];
-const DEFAULT_EFFORT = 'high';
-const DEFAULT_CONTEXT = 1000000;
 // How long the backend's list of models counts as fresh. Opening the model picker after that reads the list again.
 const FRESH = 10 * 60 * 1000;
 const MODES = ['ask', 'auto', 'full'];
@@ -101,10 +98,10 @@ const modelOf = model => ({
  provider: String(model.provider),
  api: String(model.id),
  name: text(model.name) || String(model.id),
- context: Number(model.contextWindow) || 0,
- efforts: Array.isArray(model.thinkingLevels) && model.thinkingLevels.length ? model.thinkingLevels.map(String) : EFFORTS.slice(),
- defaultEffort: model.defaultThinking || '',
- vision: model.vision !== false,
+ context: Number.isFinite(model.contextWindow) && model.contextWindow > 0 ? model.contextWindow : 0,
+ efforts: Array.isArray(model.thinkingLevels) ? model.thinkingLevels.filter(level => typeof level === 'string' && level) : [],
+ defaultEffort: model.defaultThinking,
+ vision: model.vision === true,
 });
 
 class Settings {
@@ -117,13 +114,14 @@ class Settings {
   this.messages = new Map();
   this.providerCheck = 0;
   this.models = this.readCatalog();
-  this.efforts = EFFORTS.slice();
+  this.efforts = [];
   localStorage.removeItem('deepseek.model');
   this.model = localStorage.getItem(STORAGE.model) || '';
-  this.shown = this.model;
+  this.shown = null;
   this.read = 0;
   const effort = localStorage.getItem(STORAGE.effort);
-  this.effort = typeof effort === 'string' && effort ? effort : DEFAULT_EFFORT;
+  this.preferredEffort = effort || undefined;
+  this.effort = undefined;
   const mode = localStorage.getItem(STORAGE.mode);
   this.mode = MODES.includes(mode) ? mode : DEFAULT_MODE;
   this.typed = Object.create(null);
@@ -230,13 +228,14 @@ class Settings {
  readCatalog() {
   try {
    const saved = JSON.parse(localStorage.getItem(STORAGE.catalog));
-   if (saved?.version === 2 && Array.isArray(saved.models)) return saved.models;
+   // Older catalogs contain inferred capabilities, not just backend data.
+   if (saved?.version === 3 && Array.isArray(saved.models)) return saved.models;
   } catch {}
   return [];
  }
 
  saveCatalog() {
-  try { localStorage.setItem(STORAGE.catalog, JSON.stringify({ version: 2, models: this.models })); } catch {}
+  try { localStorage.setItem(STORAGE.catalog, JSON.stringify({ version: 3, models: this.models })); } catch {}
  }
 
  // The eye beside a key shows what was typed for a moment's check; closing the settings hides every key again. A saved
@@ -289,21 +288,23 @@ class Settings {
   return this.models.find(item => item.id === id) || null;
  }
 
- // A chat keeps its own model; one that is no longer offered falls back to the model new chats get.
- // Chats started before this was fixed kept the provider's model name rather than the picker's id, so that name is looked up too.
+ // Keep unavailable selections so sending cannot silently switch models/providers. Legacy bare names still resolve
+ // when unambiguous; only a chat with no selection gets the initial catalog choice.
  resolve(id) {
-  if (id && this.find(id)) return id;
-  const named = id && this.models.find(item => item.api === id);
-  if (named) return named.id;
-  if (this.find(this.model)) return this.model;
-  return this.models[0]?.id || '';
+  const selected = id || this.model;
+  if (!selected) return this.models[0]?.id || '';
+  if (this.find(selected) || selected.includes(':')) return selected;
+  const named = this.models.filter(item => item.api === selected);
+  return named.length === 1 ? named[0].id : selected;
  }
 
  // What a turn tells the backend about its model: which one, and how hard it thinks. `ready` once the backend listed it.
  configFor(id) {
   const model = this.find(id);
-  const efforts = model?.efforts?.length ? model.efforts : EFFORTS;
-  const effort = efforts.includes(this.effort) ? this.effort : [model?.defaultEffort, DEFAULT_EFFORT].find(level => efforts.includes(level)) || efforts[efforts.length - 1];
+  const efforts = model?.efforts || [];
+  const effort = this.canonicalEffort && this.canonicalEffort.id === id ? this.canonicalEffort.value
+   : efforts.includes(this.preferredEffort) ? this.preferredEffort
+   : efforts.includes(model?.defaultEffort) ? model.defaultEffort : undefined;
   return {
    id: model?.id || id,
    provider: model?.provider || '',
@@ -312,7 +313,7 @@ class Settings {
    ready: !!model,
    effort,
    efforts,
-   vision: model?.vision !== false,
+   vision: model?.vision === true,
   };
  }
 
@@ -321,7 +322,7 @@ class Settings {
  }
 
  windowOf(id) {
-  return this.find(id)?.context || DEFAULT_CONTEXT;
+  return this.find(id)?.context || 0;
  }
 
  // The effort steps follow the model of the chat on screen.
@@ -332,34 +333,34 @@ class Settings {
  }
 
  applyEfforts() {
-  // Before the backend's models came in, the chat on screen had none; it has the one new chats get now.
-  const model = this.find(this.resolve(this.shown));
-  const efforts = model?.efforts?.length ? model.efforts : EFFORTS;
-  const same = efforts.length === this.efforts.length && efforts.every((level, i) => level === this.efforts[i]);
+  const { efforts, effort } = this.configFor(this.resolve(this.shown));
+  const same = effort === this.effort && efforts.length === this.efforts.length && efforts.every((level, i) => level === this.efforts[i]);
   this.efforts = efforts.slice();
-  if (!efforts.includes(this.effort)) {
-   const fallback = [model?.defaultEffort, DEFAULT_EFFORT].find(level => efforts.includes(level));
-   this.effort = fallback || efforts[Math.min(efforts.length - 1, 2)];
-   localStorage.setItem(STORAGE.effort, this.effort);
-  }
+  this.effort = effort;
+  // Backend defaults are display state, not a saved user preference.
   if (!same) this.onEfforts?.(this.efforts);
  }
 
- setModel(id) {
-  if (id === this.model || !this.find(id)) return;
+ setModel(id, canonical = false) {
+  if (id === this.model || !canonical && !this.find(id)) return;
   this.model = id;
   localStorage.setItem(STORAGE.model, id);
  }
 
- setEffort(value) {
-  this.effort = value;
-  localStorage.setItem(STORAGE.effort, value);
+ setEffort(value, canonicalId = '') {
+  value = typeof value === 'string' && value ? value : undefined;
+  this.canonicalEffort = canonicalId ? { id: canonicalId, value } : null;
+  this.preferredEffort = value;
+  if (value == null) localStorage.removeItem(STORAGE.effort);
+  else localStorage.setItem(STORAGE.effort, value);
+  this.applyEfforts();
  }
 
  setMode(value) {
   if (!MODES.includes(value)) return;
   this.mode = value;
   localStorage.setItem(STORAGE.mode, value);
+  window.ModePicker?.sync();
  }
 
  changed() {

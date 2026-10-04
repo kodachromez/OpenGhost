@@ -137,13 +137,13 @@ turn.cancel({ sessionId, turnId }) → null
 
 // Sessions
 session.get({ sessionId, clientTurnId?: string }) → SessionRecovery
-session.configure({ sessionId, sessionVersion: string, clientTurnId?, model?, provider?, thinking?, permissionMode? }) → { model, thinking, permissionMode }
+session.configure({ sessionId, sessionVersion: string, clientTurnId?, model?, provider?, thinking?, permissionMode? }) → { model, provider?, thinking, permissionMode } // canonical; null/empty thinking clears the selection
 session.compact({ sessionId, sessionVersion: string, clientTurnId }) → { ok: boolean }      // resolves when the compaction is over
 session.delete({ sessionId }) → null
 
 type SessionParams = {
   model: string, provider: string,          // Model.id and Model.provider as models.list gave them
-  thinking: string,                         // one of the model's thinkingLevels
+  thinking?: string,                        // explicit/canonical selection or advertised default; otherwise omitted
   permissionMode: 'ask' | 'auto' | 'full',
   cwd: string,                              // the chat's project folder, or its own folder under ~/OpenGhost/Chats/
                                             // (which may not exist yet: create it on first use)
@@ -361,6 +361,9 @@ type Provider = {
 }
 type ProviderStatus = { connected: boolean, checking?: boolean, waiting?: boolean, keySaved?: boolean,
                         account?: { email?: string, plan?: string }, error?: AbpError | string }
+// Omitted/empty thinkingLevels means no selectable thinking levels; only vision:true advertises vision.
+// Missing contextWindow is unknown. No frontend levels, thinking default or window limit are inferred.
+// defaultThinking is used when advertised and no supported user preference exists.
 type Model = { id: string, provider: string, name: string, contextWindow?: number, vision?: boolean,
                thinkingLevels?: string[], defaultThinking?: string }
 type AccountLimits = {

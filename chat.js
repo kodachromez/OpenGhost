@@ -216,7 +216,7 @@ class Chat {
   return this.settings.configFor(this.modelOf(conv));
  }
 
- // Whether the chat has turns no summary covers yet: a new model would need them compacted first.
+ // Whether switching models should ask for confirmation. The backend decides if compaction is needed.
  hasHistory(conv = this.active) {
   const messages = conv?.messages || [], last = messages.findLastIndex(entry => entry.role === 'compact');
   return messages.slice(last + 1).some(entry => entry.role === 'user' || entry.role === 'assistant');
@@ -224,7 +224,7 @@ class Chat {
 
  setModel(id) {
   const conv = this.active;
-  if (!conv || conv.turn || id === this.modelOf(conv)) return;
+  if (!conv || conv.turn || !this.settings.find(id) || id === this.modelOf(conv)) return;
   if (conv.record) this.library.update(conv.id, { model: id });
   else conv.model = id;
   this.settings.setModel(id);
@@ -235,7 +235,7 @@ class Chat {
  // its own window; the chat shows that as it would its own compaction.
  switchModel(id) {
   const conv = this.active;
-  if (!conv?.record || conv.turn || conv.deleting || conv.recovering || id === this.modelOf(conv)) return;
+  if (!conv?.record || conv.turn || conv.deleting || conv.recovering || !this.settings.find(id) || id === this.modelOf(conv)) return;
   if (!conv.reconciled) { this.reconcile(conv); return; }
   if (!this.hasHistory(conv) || !Backend.available) { this.setModel(id); return; }
   const turn = this.begin(conv, this.config(conv));
@@ -244,11 +244,29 @@ class Chat {
   this.settings.setModel(id);
   this.summarize(conv, turn, async () => {
    const config = this.config(conv);
-   await Backend.request('session.configure', { sessionId: this.sessionOf(conv), sessionVersion: conv.sessionVersion, clientTurnId: turn.id, model: config.model, provider: config.provider, thinking: config.effort }, { signal: turn.controller.signal });
+   turn.config = await this.configure(conv, { clientTurnId: turn.id, model: config.model, provider: config.provider, thinking: config.effort }, { signal: turn.controller.signal });
    turn.switch = '';
-   turn.config = config;
    return null;
   });
+ }
+
+ // Apply only fields returned by the backend; the requested configuration is not necessarily canonical.
+ async configure(conv, params, options) {
+  const requested = this.config(conv);
+  const result = await Backend.request('session.configure', { sessionId: this.sessionOf(conv), sessionVersion: conv.sessionVersion, ...params }, options);
+  if (typeof result?.model === 'string' && result.model) {
+   const id = `${result.provider || requested.provider}:${result.model}`;
+   if (conv.record) this.library.update(conv.id, { model: id });
+   else conv.model = id;
+   this.settings.setModel(id, true);
+   if (conv === this.active) this.settings.show(id);
+  }
+  if (result && Object.hasOwn(result, 'thinking')) this.settings.setEffort(result.thinking, this.modelOf(conv));
+  if (result?.permissionMode) this.settings.setMode(result.permissionMode);
+  const config = this.config(conv);
+  if (conv.turn) conv.turn.config = config;
+  this.onChange();
+  return config;
  }
 
  // Whether the chat on screen can be compacted now: the backend can, the chat has turns no summary covers yet, and
@@ -267,7 +285,8 @@ class Chat {
  // How full the chat's context is, out of its model's window, from 0 to 1, as the backend last reported it.
  get fill() {
   const conv = this.active;
-  return conv?.record ? Math.min(1, (conv.tokens || 0) / (conv.window || this.settings.windowOf(this.modelOf(conv)))) : 0;
+  const window = conv?.record && (conv.window || this.settings.windowOf(this.modelOf(conv)));
+  return window ? Math.min(1, (conv.tokens || 0) / window) : null;
  }
 
  // Compacts the chat on screen on the user's word: the backend summarizes it, and the chat shows it as a full window would.
@@ -691,7 +710,7 @@ class Chat {
  onModeChange() {
   if (!Backend.available) return;
   for (const conv of this.conversations.values()) {
-   if (conv.turn && conv.reconciled && !conv.recovering) Backend.request('session.configure', { sessionId: this.sessionOf(conv), sessionVersion: conv.sessionVersion, permissionMode: this.settings.mode }).catch(() => {});
+   if (conv.turn && conv.reconciled && !conv.recovering) this.configure(conv, { permissionMode: this.settings.mode }).catch(() => {});
   }
  }
 

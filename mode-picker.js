@@ -18,6 +18,10 @@ const icon = mode => `<span class="mode-icon" data-mode="${mode.id}">${Glyphs[mo
 const pickers = new Set();
 
 class ModePicker {
+ static sync() {
+  for (const picker of pickers) picker.sync();
+ }
+
  constructor({ button, host = document.body, anchor = '--mode', settings, onChange }) {
   pickers.add(this);
   this.button = button;

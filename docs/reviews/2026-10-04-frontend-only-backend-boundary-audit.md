@@ -227,6 +227,8 @@ Approvals are generic enough to name unknown tools and display JSON fallback arg
 
 **Recommendation:** explicit unsupported/unknown capabilities, no invented thinking/vision/window values, backend-authoritative configuration results, capability-driven controls and loss-of-model UX. UI selection belongs here; runtime capabilities and whether compaction is needed do not.
 
+**Resolution (model defaults/configuration scope):** Missing/empty capabilities no longer invent thinking levels, vision or context limits; old inferred catalogs are invalidated. Backend defaults/canonical configuration are honored, unavailable selections require an explicit replacement, and switching no longer promises compaction. Valid picker choices and explicit effort preferences remain supported. Focused regressions: `test/model-capabilities.test.js`. Broader feature/attachment gating and protocol extensions are unchanged.
+
 ### F14 — MEDIUM: provider/auth UI is extensible but not fully general or race-safe
 
 **Evidence:** `settings.js:20–73,104–111,320–353,356–415,419–499`; `settings-usage.js:9–10,31,174–198,331–370`.

@@ -56,7 +56,7 @@ function size(tokens) {
 function meta(model) {
  return [
   model.context ? I18n.t('model.context', { size: size(model.context) }) : '',
-  I18n.t(model.vision === false ? 'model.text' : 'model.vision'),
+  I18n.t(model.vision === true ? 'model.vision' : 'model.text'),
  ].filter(Boolean).join(' · ');
 }
 
@@ -128,12 +128,12 @@ class ModelStage {
  }
 
  current() {
-  return this.rows.find(row => row.dataset.model === this.chat.model) || this.rows[0] || null;
+  return this.rows.find(row => row.dataset.model === this.chat.model) || null;
  }
 
  sync() {
   const locked = this.chat.busy, name = this.name(this.chat.model);
-  this.button.setAttribute('label', name ? I18n.t('model.current', { name }) : I18n.t('model.none'));
+  this.button.setAttribute('label', name ? I18n.t(this.settings.find(this.chat.model) ? 'model.current' : 'model.unavailable', { name }) : I18n.t('model.none'));
   this.button.toggleAttribute('disabled', locked);
   this.button.title = locked ? I18n.t('model.locked') : '';
   if (locked && (this.state === 'open' || this.state === 'confirm')) this.cancel();
@@ -268,8 +268,8 @@ class ModelStage {
   this.button.setAttribute('expanded', '');
   const current = this.current();
   for (const row of this.rows) row.setAttribute('aria-selected', String(row === current));
-  this.middle(current);
-  this.rest(current);
+  this.middle(current || this.rows[0]);
+  this.rest(current || this.rows[0]);
   if (!current) return;
   if (reducedMotion()) { this.mark(current); return; }
   this.veil.animate(veil(), { duration: OPEN.veil, easing: EASE.motion, fill: 'both' });
@@ -309,8 +309,8 @@ class ModelStage {
 
  // A short hop from one model to another before the stage closes, so the choice is seen being made.
  hop(row) {
-  const from = this.flyer?.isConnected ? this.flyer.querySelector('svg') : this.marked.querySelector('.model-mark svg');
-  const start = center(from.getBoundingClientRect()), turn = ModelGlyph.turnOf(from);
+  const from = this.flyer?.isConnected ? this.flyer.querySelector('svg') : this.marked?.querySelector('.model-mark svg');
+  const start = center(from ? from.getBoundingClientRect() : this.button.glyphRect()), turn = from ? ModelGlyph.turnOf(from) : this.button.turn;
   const mark = this.mark(row, true), timing = { duration: HOP.duration, easing: EASE.motion };
   const flyer = this.makeFlyer(mark.getBoundingClientRect().width, turn, timing);
   return quiet(arc(flyer, start, center(mark.getBoundingClientRect()), { ...timing, spin: -HOP.spin, bend: 0.5 })).then(() => {
@@ -387,6 +387,7 @@ class ModelStage {
 
  pick(row) {
   const id = row.dataset.model;
+  if (!this.settings.find(id)) { this.cancel(); return; }
   if (id === this.chat.model) { this.close(); return; }
   if (this.chat.hasHistory()) { this.confirm(row); return; }
   this.state = 'hop';
