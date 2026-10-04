@@ -110,6 +110,8 @@ This is not proof that the future backend will store plaintext; it is an **unres
 
 **Recommendation:** explicitly scope the lock UI to the display cache until a negotiated backend protection capability/lifecycle exists. Do not advertise whole-session confidentiality based on this frontend lock alone.
 
+**Resolution:** labels now say “local view”; setup, management and locked-screen notices explicitly limit encryption to this app’s display cache and exclude backend/session history and other data. Forgotten-password copy is cache-only. Existing frontend encryption/locking and backend storage are unchanged; focused regressions: `test/lock-ui.test.js`.
+
 ### F06 — HIGH: JSONL size limit and flow control do not enforce bounded transport (**limit reproduced**)
 
 **Evidence:** `desktop/backend-host.js:14–15,97–125`; `desktop/main.js:247`; `desktop/preload.js:38`.

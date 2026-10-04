@@ -264,6 +264,7 @@ class LockScreen {
    <div class="lock-screen-body">
     ${seal('lock-screen-seal')}
     <h2 class="lock-screen-title">${letters(I18n.t('lock.screen.title'))}</h2>
+    <p class="lock-screen-note">${t('lock.scope.note')}</p>
     <div class="lock-entry">
      <form class="lock-screen-form" autocomplete="off">
       <div class="pass">
@@ -633,7 +634,7 @@ class LockCard {
      <button type="button" class="lock-act" data-act="remove">${t('lock.remove')}</button>
     </div>`}
    </div>
-   ${set ? `<p class="lock-card-note">${t('lock.set.note')}</p>` : ''}`;
+   <p class="lock-card-note">${t('lock.scope.note')}${set ? ` ${t('lock.set.note')}` : ''}</p>`;
   this.words = new StageWord(this.body.querySelector('.lock-card-title'));
   const input = this.body.querySelector('.pass-input');
   this.field = input ? new PassField(input) : null;

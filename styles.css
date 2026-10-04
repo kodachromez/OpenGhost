@@ -7339,7 +7339,8 @@ h6.md-h {
   right: 3px;
 }
 
-.lock-card-note {
+.lock-card-note,
+.lock-screen-note {
   max-width: 300px;
   margin: 12px 14px 0;
   color: var(--fg-tertiary);
