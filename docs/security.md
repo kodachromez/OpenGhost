@@ -143,7 +143,8 @@ relaunch OpenGhost; Retry and page reload do not launch another child.
 Closing the app window cancels browser jobs and PDF readings. All windows closed triggers app quit, including on
 macOS. The normal quit path waits for store writes already registered in main, then sends
 `{"jsonrpc":"2.0","id":"shutdown","method":"shutdown"}`, closes stdin and allows two seconds for backend exit.
-It waits for the process's `exit`, not the shutdown RPC result. If still running, forced termination follows.
+It waits for the process to exit and its output to be read, not the shutdown RPC result. If still running, forced
+termination follows.
 
 | Platform | Cleanup implementation and evidence |
 | --- | --- |
@@ -156,12 +157,13 @@ escape POSIX cleanup. Kill failures are ignored; cleanup does not wait for every
 OS `wait` reaping for arbitrary grandchildren. No supervisor/parent-death mechanism ensures cleanup after abrupt
 Electron termination or machine failure.
 
-`stop()` settles on `exit`, `close`, or a spawn `error`; overlapping stops and quits share one shutdown; events from an
-older child never reach a newer one; and a backend that survives its kill is given up (reaped where possible, status
-`error`) 2 seconds after the kill, so the backend part of quit is bounded by about 4 seconds. Open lifecycle issues
-remain: status is emitted on child exit rather than stream close, so the same child's trailing stdout can arrive
-afterward. Initialization checks disposal but lacks a process-generation check after its awaits; a narrowly timed exit
-can race the ready-state transition. Store writes awaited before quit are not bounded by the shutdown deadline.
+Status `exited` is emitted once the exited child's stdout has closed, so everything it wrote before exiting is
+delivered first; if a descendant that escaped cleanup holds the pipe open, it is emitted 1 second after the exit and
+later output from that child is discarded. `stop()` settles then, on `close`, or on a spawn `error`; overlapping stops
+and quits share one shutdown; events from an older child never reach a newer one; and a backend that survives its kill
+is given up (reaped where possible, status `error`) 2 seconds after the kill, so the backend part of quit is bounded by
+about 4 seconds plus that 1-second drain. Open lifecycle issues remain. Initialization checks disposal but lacks a
+process-generation check after its awaits; a narrowly timed exit can race the ready-state transition. Store writes awaited before quit are not bounded by the shutdown deadline.
 
 ## 5. CSP and actual networking boundary
 

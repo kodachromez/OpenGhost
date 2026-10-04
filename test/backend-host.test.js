@@ -232,6 +232,7 @@ test('stale events from an older backend do not affect a newer one', async () =>
  old.stdout.write('{"from":"old"');
  const stopping = backend.stop(5000);
  old.emit('exit', 0, null);
+ old.emit('close', 0, null);
  await stopping;
  backend.start();
  assert.equal(backend.child, fresh);
@@ -251,6 +252,7 @@ test('stale events from an older backend do not affect a newer one', async () =>
  assert.equal(backend.child, fresh);
  const stoppingFresh = backend.stop(5000);
  fresh.emit('exit', 0, null);
+ fresh.emit('close', 0, null);
  await stoppingFresh;
  assert.equal(statuses.at(-1).state, 'exited');
 });
@@ -265,5 +267,58 @@ test('start() during a shutdown does not spawn a second backend', async () => {
  backend.start();
  assert.equal(backend.child, child);
  child.emit('exit', 0, null);
+ child.emit('close', 0, null);
  await stopping;
+});
+
+// Audit F07: a backend's last output arrives before the exit it reports, never after.
+test('output written just before the exit is delivered before the exited status', async () => {
+ const child = fakeChild();
+ const events = [];
+ const { backend } = fakeHost([child], { onMessage: message => events.push(message.id), onStatus: status => events.push(status.state) });
+ backend.start();
+ child.emit('spawn');
+ child.emit('exit', 0, null);
+ // Gone for sending and starting at once, though its output is still being read.
+ assert.equal(backend.child, null);
+ assert.equal(backend.send({ jsonrpc: '2.0', id: 9, method: 'initialize' }), false);
+ child.stdout.write('{"jsonrpc":"2.0","id":"last","result":null}\n');
+ await new Promise(resolve => setImmediate(resolve));
+ child.emit('close', 0, null);
+ assert.deepEqual(events, ['running', 'last', 'exited']);
+});
+
+test('a real backend that writes and exits at once has all its output delivered before exited', async () => {
+ const count = 2000;
+ const script = `const line = JSON.stringify({ jsonrpc: '2.0', method: 'x', params: { pad: 'p'.repeat(512) } }) + '\\n';
+  process.stdout.write(line.repeat(${count}), () => process.exit(0));`;
+ const events = [];
+ const backend = new BackendHost({
+  command: { file: process.execPath, args: ['-e', script] },
+  cwd: __dirname,
+  onMessage: () => events.push('message'),
+  onStatus: status => events.push(status.state),
+  log: quiet,
+ });
+ backend.start();
+ await new Promise(resolve => { const poll = () => events.includes('exited') ? resolve() : setTimeout(poll, 10); poll(); });
+ await new Promise(resolve => setTimeout(resolve, 100));
+ assert.equal(events.filter(event => event === 'message').length, count);
+ assert.equal(events.at(-1), 'exited');
+});
+
+test('a pipe held open after the exit delays the exited status only for the drain period', async () => {
+ const child = fakeChild();
+ const { backend, messages, statuses } = fakeHost([child], { drain: 50 });
+ backend.start();
+ child.emit('spawn');
+ const stopping = backend.stop(5000);
+ child.emit('exit', 0, null);
+ child.stdout.write('{"id":"before"}\n');
+ // No close: something that escaped the reaping still holds stdout.
+ assert.ok(await within(stopping, 1000), 'stop() waited for a close that never comes');
+ assert.deepEqual(statuses.at(-1), { state: 'exited', code: 0, signal: null });
+ child.stdout.write('{"id":"after"}\n');
+ await new Promise(resolve => setImmediate(resolve));
+ assert.deepEqual(messages, [{ id: 'before' }]);
 });

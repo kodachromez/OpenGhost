@@ -20,6 +20,9 @@ const MAX_PENDING = MAX_LINE + 1;
 const GRACE = 2000;
 // How long stop() waits after the kill before it gives the backend up, so quitting never hangs on a kill that failed.
 const KILL_WAIT = 2000;
+// How long, after a backend exits, its output may still be read before it is reported exited. Its stdout normally closes
+// at once; this only bounds a pipe held open by a descendant that escaped the reaping below.
+const DRAIN = 1000;
 const POSIX = process.platform !== 'win32';
 
 // Every process left in a session: on Linux read from /proc, so it includes the separate process groups a backend runs
@@ -103,8 +106,9 @@ function configured({ env = process.env, userData = '' } = {}) {
 }
 
 class BackendHost {
- constructor({ command = null, cwd, onMessage = () => {}, onStatus = () => {}, log = console, spawnProcess = spawn } = {}) {
+ constructor({ command = null, cwd, onMessage = () => {}, onStatus = () => {}, log = console, spawnProcess = spawn, drain = DRAIN } = {}) {
   this.command = command;
+  this.drain = drain;
   this.cwd = cwd;
   this.onMessage = onMessage;
   this.onStatus = onStatus;
@@ -115,6 +119,8 @@ class BackendHost {
   this.current = null;
   // One shutdown at a time, shared by every stop() that overlaps it.
   this.stopping = null;
+  // Per child: settles once it has exited and its output has been read, when its exit is reported.
+  this.ended = new WeakMap();
   this.buffer = Buffer.alloc(0);
   this.lineBytes = 0;
   this.discarding = false;
@@ -158,11 +164,30 @@ class BackendHost {
    this.child = null;
    this.setState({ state: 'error', error: error.message });
   });
+  let ended;
+  this.ended.set(child, new Promise(resolve => { ended = resolve; }));
   child.once('exit', (code, signal) => {
    reap(child.pid);
-   if (this.child !== child) return;
+   if (this.child !== child) return ended();
+   // Gone for sending and starting at once, but what it wrote just before exiting may still be in the pipe: it is
+   // reported exited only after that has been delivered (close), or after DRAIN if something still holds the pipe.
    this.child = null;
-   this.setState({ state: 'exited', code, signal });
+   let timer;
+   const finish = () => {
+    if (!timer) return;
+    clearTimeout(timer);
+    timer = null;
+    child.off('close', finish);
+    if (this.current === child) {
+     // Nothing it writes from now on reaches the page after the exit it reported.
+     child.stdout.destroy();
+     child.stderr.destroy();
+     this.setState({ state: 'exited', code, signal });
+    }
+    ended();
+   };
+   timer = setTimeout(finish, this.drain);
+   child.once('close', finish);
   });
   return this.status;
  }
@@ -224,7 +249,8 @@ class BackendHost {
  }
 
  // Asks the backend to shut down, then ends it if it is still there after the grace period. Settles once the backend has
- // exited or closed, failed to start, or, if even the kill does not end it, KILL_WAIT later; overlapping calls share one.
+ // exited and its exit has been reported (or it closed), failed to start, or, if even the kill does not end it, KILL_WAIT
+ // later; overlapping calls share one.
  stop(grace = GRACE) {
   if (this.stopping) return this.stopping;
   const child = this.child;
@@ -234,14 +260,13 @@ class BackendHost {
    const done = () => {
     clearTimeout(killTimer);
     clearTimeout(giveUpTimer);
-    child.off('exit', done);
     child.off('close', done);
     child.off('error', failed);
     resolve();
    };
    // Only a child that never started is finished by an error; a failed kill leaves the give-up timer in charge.
    const failed = () => { if (child.pid === undefined) done(); };
-   child.once('exit', done);
+   this.ended.get(child)?.then(done);
    child.once('close', done);
    child.on('error', failed);
    killTimer = setTimeout(() => {
