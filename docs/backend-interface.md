@@ -33,7 +33,11 @@ With neither, nothing is started: the UI works, and a message gets "No backend i
 
 The process starts in the user's home folder with the app's environment. **stdout carries protocol only**; logs go to
 stderr, which the host prints with a `[backend]` prefix. A line that isn't a JSON-RPC 2.0 object is dropped and logged.
-Lines over 64 MiB are dropped. There is no automatic restart. On quit the host sends `shutdown`, closes stdin, and kills
+Lines are limited to 64 MiB of UTF-8 bytes, excluding LF but including whitespace/CR. Oversized input is discarded
+through its next newline before decoding or parsing. Outbound messages have the same limit; the host rejects sends
+that would exceed 64 MiB + 1 byte in Node's stdin write queue (including newlines). Accepted writes drain in order;
+there is no extra host queue. Rejection returns `false` from the host's `send`; renderer IPC delivery remains unacknowledged.
+There is no automatic restart. On quit the host sends `shutdown`, closes stdin, and kills
 the process after 2 s if it is still running. When the backend exits, however it exits, the host ends whatever it left
 behind in its session (on POSIX the backend leads a session of its own). A page reload sends `initialize` again on the same process.
 

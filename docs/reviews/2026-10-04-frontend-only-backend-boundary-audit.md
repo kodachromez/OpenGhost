@@ -124,6 +124,8 @@ This is not proof that the future backend will store plaintext; it is an **unres
 
 **Recommendation:** byte-based framing before parse, a discard-until-newline state, bounded queues/write acknowledgements, field-specific limits, log throttling/redaction, and controlled failure instead of indefinite waiting after discarded responses.
 
+**Resolution (transport bounds):** the host now enforces 64 MiB of raw UTF-8 bytes per line (excluding LF, including whitespace/CR) before decoding/parsing, and discards oversized input through the next newline. Outbound messages have the same limit; Node's stdin queue is capped at 64 MiB + 1 byte including framing, with oversized/full-queue sends returning `false` rather than accumulating another queue. Accepted writes drain normally. Regressions: `test/backend-transport.test.js` (complete/split oversize, exact limits, UTF-8 splits/bytes, discard/resync, stalled writes and drain). IPC delivery acknowledgements, field/depth/event limits and log policy remain unchanged.
+
 ### F07 — HIGH: shutdown reaps only the direct child; error/reentrancy paths can hang (**partly reproduced**)
 
 **Evidence:** `desktop/backend-host.js:66–94,128–137`; `desktop/main.js:285–300`.

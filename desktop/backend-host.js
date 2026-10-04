@@ -11,8 +11,10 @@ const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 
-// A line longer than this is a broken backend, not a message: the host drops it rather than hold it in memory.
+// UTF-8 bytes per line, excluding LF (but including any whitespace/CR), in either direction.
 const MAX_LINE = 64 * 1024 * 1024;
+// Bound Node's stdin write queue, including framing; no separate host queue. Fits one maximum-sized message.
+const MAX_PENDING = MAX_LINE + 1;
 // How long a backend has to exit by itself on quit before it is killed.
 const GRACE = 2000;
 const POSIX = process.platform !== 'win32';
@@ -93,7 +95,9 @@ class BackendHost {
   this.onStatus = onStatus;
   this.log = log;
   this.child = null;
-  this.buffer = '';
+  this.buffer = Buffer.alloc(0);
+  this.lineBytes = 0;
+  this.discarding = false;
   this.state = { state: command ? 'stopped' : 'none' };
  }
 
@@ -116,8 +120,9 @@ class BackendHost {
    return this.status;
   }
   this.child = child;
-  this.buffer = '';
-  child.stdout.setEncoding('utf8');
+  this.buffer = Buffer.alloc(0);
+  this.lineBytes = 0;
+  this.discarding = false;
   child.stdout.on('data', chunk => this.receive(chunk));
   child.stderr.setEncoding('utf8');
   // A backend's logs go to its stderr, never into the protocol.
@@ -139,11 +144,34 @@ class BackendHost {
  }
 
  receive(chunk) {
-  this.buffer += chunk;
-  let at;
-  while ((at = this.buffer.indexOf('\n')) >= 0) {
-   const line = this.buffer.slice(0, at).trim();
-   this.buffer = this.buffer.slice(at + 1);
+  if (!Buffer.isBuffer(chunk)) chunk = Buffer.from(chunk, 'utf8');
+  let offset = 0;
+  while (offset < chunk.length) {
+   const newline = chunk.indexOf(10, offset);
+   const end = newline < 0 ? chunk.length : newline;
+   if (!this.discarding) {
+    const length = this.lineBytes + end - offset;
+    if (length > MAX_LINE) {
+     this.buffer = Buffer.alloc(0);
+     this.lineBytes = 0;
+     this.discarding = true;
+     this.log.error('[backend] a line went past the size limit and was dropped');
+    } else {
+     // Grow geometrically, not once per fragment; even one-byte chunks cannot build an unbounded fragment list.
+     if (length > this.buffer.length) {
+      const buffer = Buffer.allocUnsafe(Math.min(MAX_LINE, Math.max(length, this.buffer.length * 2, 4096)));
+      this.buffer.copy(buffer, 0, 0, this.lineBytes);
+      this.buffer = buffer;
+     }
+     chunk.copy(this.buffer, this.lineBytes, offset, end);
+     this.lineBytes = length;
+    }
+   }
+   offset = end + 1;
+   if (newline < 0) break;
+   if (this.discarding) { this.discarding = false; continue; }
+   const line = this.buffer.toString('utf8', 0, this.lineBytes).trim();
+   this.lineBytes = 0;
    if (!line) continue;
    let message;
    try {
@@ -155,16 +183,17 @@ class BackendHost {
    if (isMessage(message)) this.onMessage(message);
    else this.log.error(`[backend] not a JSON-RPC 2.0 message: ${line.slice(0, 200)}`);
   }
-  if (this.buffer.length > MAX_LINE) {
-   this.log.error('[backend] a line went past the size limit and was dropped');
-   this.buffer = '';
-  }
  }
 
- // One message to the backend. False when there is no backend to take it or the message isn't JSON-RPC 2.0.
+ // False means rejected (unavailable, invalid, oversized or queue full); never retained for a later retry.
  send(message) {
-  if (!this.child || !isMessage(message)) return false;
-  this.child.stdin.write(`${JSON.stringify(message)}\n`);
+  const stdin = this.child?.stdin;
+  if (!stdin?.writable || stdin.writableLength >= MAX_PENDING || !isMessage(message)) return false;
+  const line = JSON.stringify(message);
+  const bytes = Buffer.byteLength(line, 'utf8');
+  if (bytes > MAX_LINE || stdin.writableLength + bytes + 1 > MAX_PENDING) return false;
+  // write(false) still accepts the message. Node drains its own queue; our byte cap bounds it even if it never drains.
+  stdin.write(`${line}\n`, 'utf8');
   return true;
  }
 
