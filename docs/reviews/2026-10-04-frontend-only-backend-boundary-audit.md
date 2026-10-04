@@ -241,6 +241,8 @@ Approvals are generic enough to name unknown tools and display JSON fallback arg
 
 **Recommendation:** validate catalog/status types, use Maps/safe keys, define method IDs/challenge types and catalog invalidation, and serialize/version auth mutations. No frontend provider API/auth execution should be added.
 
+**Resolution (frontend auth/rendering scope):** Per-provider operation tokens and guarded catalog refreshes prevent stale key/login/logout/cancel results from replacing newer state; unversioned `auth.changed` triggers a fresh read, reconciled after pending mutations. Provider/method/status fields are normalized, opaque IDs use safe maps and generated DOM IDs, and both existing method rows retain status without collisions. Dynamic providers/models remain backend-driven. Focused regressions: `test/provider-auth.test.js`, `test/usage.test.js`. New auth challenge/method-ID protocols, usage-ledger `|` encoding and account-limits lifecycle changes are not included.
+
 ### F15 — MEDIUM: malformed envelopes are accepted and errors are inconsistent
 
 **Evidence:** `desktop/backend-host.js:43,97–125`; `backend-client.js:27–31,82–98,175–211`; `approval-card.js:181–207`.

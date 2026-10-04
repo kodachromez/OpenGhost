@@ -69,7 +69,7 @@ class Usage {
 
  // Every provider's tokens from one day to another, both included; days are written YYYY-MM-DD.
  between(from, to) {
-  const out = {};
+  const out = Object.create(null);
   for (const [day, rows] of Object.entries(this.data.days)) {
    if (day < from || day > to) continue;
    for (const [id, row] of Object.entries(rows)) {
@@ -98,7 +98,7 @@ class Usage {
  }
 
  day(day) {
-  const rows = this.data.days[day] || {}, providers = {};
+  const rows = this.data.days[day] || {}, providers = Object.create(null);
   for (const [id, row] of Object.entries(rows)) {
    const provider = id.slice(0, id.indexOf('|'));
    providers[provider] = (providers[provider] || 0) + row[INPUT] + row[OUTPUT];

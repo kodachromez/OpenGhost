@@ -28,7 +28,7 @@ const easeOut = t => 1 - (1 - t) ** 3;
 let ORDER = [];
 let names = provider => provider;
 const nameOf = provider => names(provider);
-const toneOf = provider => KNOWN_TONES[provider] || TONES[Math.max(0, ORDER.indexOf(provider)) % TONES.length];
+const toneOf = provider => Object.hasOwn(KNOWN_TONES, provider) ? KNOWN_TONES[provider] : TONES[Math.max(0, ORDER.indexOf(provider)) % TONES.length];
 const dateOf = day => { const [y, m, d] = day.split('-').map(Number); return new Date(y, m - 1, d); };
 const monthName = key => new Intl.DateTimeFormat(I18n.lang, { month: 'long', year: 'numeric' }).format(dateOf(`${key}-01`));
 
@@ -100,7 +100,7 @@ class UsageSettings {
   this.root = root;
   this.settings = settings;
   this.dialog = dialog;
-  this.limits = {};
+  this.limits = Object.create(null);
   names = provider => this.settings.nameOf(provider);
   this.visible = false;
   this.timer = 0;
@@ -172,7 +172,7 @@ class UsageSettings {
 
  // What the backend knows of each connected account: plan, limits and balance.
  refresh() {
-  if (!Backend.can('usage.limits')) { this.limits = {}; return; }
+  if (!Backend.can('usage.limits')) { this.limits = Object.create(null); return; }
   for (const provider of this.settings.order) {
    if (!this.connected(provider)) { delete this.limits[provider]; continue; }
    this.loadLimits(provider);

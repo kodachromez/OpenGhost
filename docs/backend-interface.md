@@ -359,6 +359,12 @@ type AccountLimits = {
 Keys and sign-ins belong to the backend. The frontend never receives a saved key back: the field shows "Saved · type to
 replace" when `keySaved` is true, and an emptied field sends `auth.setKey({ key: null })`.
 
+The provider UI validates catalog/status fields and renders at most one `apiKey` and one `oauth` method per provider;
+unknown kinds are ignored (v0 has no method selector). `auth.changed` is an unversioned invalidation, not an ordered
+snapshot: the frontend re-reads `auth.providers`, again after any pending local mutation settles. `models.changed`
+refreshes both providers and models. Return current authoritative statuses from `auth.providers`; the backend must
+order its own credential mutations. Frontend freshness guards prevent stale UI updates, not backend-side effects.
+
 ## Not in this version
 
 From the audit's ABP v0, these are not used yet: `session.create`/`session.list` (the frontend keeps its

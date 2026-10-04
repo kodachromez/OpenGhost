@@ -19,48 +19,48 @@ const hostOf = url => { try { return new URL(url).host; } catch { return ''; } }
 // Providers, their sign-in methods and their models all come from the backend (auth.providers, models.list); the app
 // knows none by itself. A provider's section is drawn from what the backend says about it, in the same rows as ever:
 // a field for an API key, a row to sign in with an account.
-function keyRow(provider, method) {
+function keyRow(index, method) {
  const link = method.url && /^https:\/\//.test(method.url) ? ` <a href="${escapeHtml(method.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(hostOf(method.url))}</a>.` : '';
  return `
   <div class="settings-row">
    <div class="settings-text">
-    <label class="settings-label" for="settings-key-${escapeHtml(provider)}">${escapeHtml(method.label || I18n.t('settings.key.label'))}</label>
+    <label class="settings-label" for="settings-key-${index}">${escapeHtml(method.label || I18n.t('settings.key.label'))}</label>
     <p class="settings-hint"><span>${escapeHtml(method.hint || '')}</span>${link}</p>
    </div>
    <div class="settings-control">
     <div class="settings-key-box">
-     <input id="settings-key-${escapeHtml(provider)}" class="settings-key" data-provider="${escapeHtml(provider)}" type="password" placeholder="${escapeHtml(method.placeholder || 'sk-…')}" autocomplete="off" spellcheck="false">
+     <input id="settings-key-${index}" class="settings-key" type="password" placeholder="${escapeHtml(method.placeholder || 'sk-…')}" autocomplete="off" spellcheck="false">
      <button type="button" class="settings-key-eye" aria-label="${escapeHtml(I18n.t('settings.key.show'))}" aria-pressed="false">${Glyphs.eye}</button>
     </div>
-    <p class="settings-status" data-provider="${escapeHtml(provider)}" role="status"></p>
+    <p class="settings-status" role="status"></p>
    </div>
   </div>`;
 }
 
-function accountRow(provider, method) {
+function accountRow(method) {
  return `
   <div class="settings-row">
    <div class="settings-text">
     <span class="settings-label">${escapeHtml(method.label || '')}</span>
     <p class="settings-hint">${escapeHtml(method.hint || '')}</p>
    </div>
-   <div class="settings-control settings-account" data-provider="${escapeHtml(provider)}">
+   <div class="settings-control settings-account">
     <div class="settings-account-row">
      <span class="settings-account-who"></span>
      <button type="button" class="settings-button is-primary" data-action="login">${escapeHtml(method.action || I18n.t('settings.account.login'))}</button>
      <button type="button" class="settings-button" data-action="cancel">${escapeHtml(I18n.t('settings.account.cancel'))}</button>
      <button type="button" class="settings-button" data-action="logout">${escapeHtml(I18n.t('settings.account.logout'))}</button>
     </div>
-    <p class="settings-status" data-provider="${escapeHtml(provider)}" role="status"></p>
+    <p class="settings-status" role="status"></p>
    </div>
   </div>`;
 }
 
-function section(id, name, rows) {
+function section(index, name, rows) {
  return `
-  <section class="provider" data-provider="${escapeHtml(id)}" aria-labelledby="provider-${escapeHtml(id)}">
+  <section class="provider" aria-labelledby="settings-provider-${index}">
    <header class="provider-head">
-    <h3 class="provider-name" id="provider-${escapeHtml(id)}">${escapeHtml(name)}</h3>
+    <h3 class="provider-name" id="settings-provider-${index}">${escapeHtml(name)}</h3>
     <span class="provider-models"></span>
     <span class="provider-state"></span>
    </header>
@@ -68,12 +68,39 @@ function section(id, name, rows) {
   </section>`;
 }
 
+const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+const text = value => typeof value === 'string' ? value : '';
+
+function statusOf(value) {
+ if (!record(value) || typeof value.connected !== 'boolean') return null;
+ if (value.error != null && typeof value.error !== 'string' && (!record(value.error) || typeof value.error.message !== 'string')) return null;
+ const error = text(value.error) || text(value.error?.message);
+ return {
+  connected: value.connected, checking: value.checking === true, waiting: value.waiting === true,
+  keySaved: value.keySaved === true,
+  account: { email: text(value.account?.email), plan: text(value.account?.plan) },
+  error,
+ };
+}
+
+function providersOf(values) {
+ const seen = new Set();
+ return values.filter(item => record(item) && typeof item.id === 'string' && !seen.has(item.id) && seen.add(item.id)).map(item => {
+  // ABP v0 addresses auth by provider, not method ID: render at most one of each supported kind.
+  const kinds = new Set();
+  const methods = (Array.isArray(item.methods) ? item.methods : []).filter(method =>
+   record(method) && ['apiKey', 'oauth'].includes(method.type) && !kinds.has(method.type) && kinds.add(method.type)
+  ).map(method => Object.fromEntries(['type', 'label', 'hint', 'url', 'placeholder', 'action'].map(key => [key, text(method[key])])));
+  return { id: item.id, name: text(item.name) || item.id, group: text(item.group), limits: item.limits === true, methods, status: statusOf(item.status) };
+ });
+}
+
 // A model as the backend lists it (ABP Model), as the picker and the effort control use it.
 const modelOf = model => ({
  id: `${model.provider}:${model.id}`,
  provider: String(model.provider),
  api: String(model.id),
- name: model.name || String(model.id),
+ name: text(model.name) || String(model.id),
  context: Number(model.contextWindow) || 0,
  efforts: Array.isArray(model.thinkingLevels) && model.thinkingLevels.length ? model.thinkingLevels.map(String) : EFFORTS.slice(),
  defaultEffort: model.defaultThinking || '',
@@ -85,7 +112,10 @@ class Settings {
   this.dialog = dialog;
   this.list = dialog.querySelector('.settings-providers');
   this.providers = [];
-  this.status = {};
+  this.status = Object.create(null);
+  this.authVersions = new Map();
+  this.messages = new Map();
+  this.providerCheck = 0;
   this.models = this.readCatalog();
   this.efforts = EFFORTS.slice();
   localStorage.removeItem('deepseek.model');
@@ -96,8 +126,8 @@ class Settings {
   this.effort = typeof effort === 'string' && effort ? effort : DEFAULT_EFFORT;
   const mode = localStorage.getItem(STORAGE.mode);
   this.mode = MODES.includes(mode) ? mode : DEFAULT_MODE;
-  this.typed = {};
-  this.timer = {};
+  this.typed = Object.create(null);
+  this.timer = Object.create(null);
   this.build();
   this.pager();
   dialog.addEventListener('dismiss', () => dialog.close());
@@ -108,9 +138,27 @@ class Settings {
   });
   // The backend says when what it offers has changed: a sign-in went through or lapsed, a provider listed new models.
   Backend.on('ready', () => this.refreshAll());
-  Backend.on('closed', () => { this.providers = []; this.status = {}; this.build(); this.paint(); });
-  Backend.on('auth.changed', ({ provider, status }) => this.setProviderStatus(provider, status));
-  Backend.on('models.changed', () => this.refresh().catch(() => {}));
+  Backend.on('closed', () => {
+   ++this.providerCheck;
+   this.checks = (this.checks || 0) + 1;
+   this.authVersions.clear();
+   this.messages.clear();
+   for (const timer of Object.values(this.timer)) clearTimeout(timer);
+   this.timer = Object.create(null);
+   this.typed = Object.create(null);
+   this.providers = [];
+   this.status = Object.create(null);
+   this.build();
+  });
+  Backend.on('auth.changed', event => {
+   if (!Backend.available || typeof event?.provider !== 'string' || !statusOf(event.status)) return;
+   // Events have no revision/operation ID. Re-read authoritative state, never trust a late event's snapshot.
+   const token = this.authVersions.get(event.provider);
+   if (token?.pending) token.changed = true;
+   else this.authVersions.set(event.provider, {});
+   this.refreshAll();
+  });
+  Backend.on('models.changed', () => this.refreshAll());
   if (Backend.available) this.refreshAll();
  }
 
@@ -323,14 +371,31 @@ class Settings {
  // Everything the backend offers, read anew: its providers with how each stands, then its models.
  async refreshAll() {
   this.read = Date.now();
+  const check = ++this.providerCheck, versions = new Map(this.authVersions);
+  const pending = new Set([...versions].filter(([, token]) => token.pending).map(([id]) => id));
   const providers = Backend.can('auth.providers') ? await Backend.request('auth.providers').catch(() => null) : [];
+  if (check !== this.providerCheck || !Backend.available) return;
   if (Array.isArray(providers)) {
-   this.providers = providers.filter(item => item && typeof item.id === 'string');
-   this.status = Object.fromEntries(this.providers.map(item => [item.id, item.status || {}]));
+   this.providers = providersOf(providers);
+   const status = Object.create(null), ids = new Set(this.order);
+   for (const provider of this.providers) {
+    const token = this.authVersions.get(provider.id);
+    const changed = token !== versions.get(provider.id) || pending.has(provider.id) || token?.pending;
+    status[provider.id] = (changed ? this.status[provider.id] : provider.status) || { connected: false };
+    if (!changed) this.messages.delete(provider.id);
+   }
+   for (const id of this.messages.keys()) if (!ids.has(id)) this.messages.delete(id);
+   for (const id of this.authVersions.keys()) if (!ids.has(id)) {
+    this.authVersions.delete(id);
+    clearTimeout(this.timer[id]);
+    delete this.timer[id];
+    delete this.typed[id];
+   }
+   this.status = status;
    this.build();
   }
   await this.refresh().catch(() => {});
-  this.paint();
+  if (check === this.providerCheck) this.paint();
  }
 
  // Reads the backend's models again once the list is no longer fresh, quietly: a model added since shows up the next
@@ -354,10 +419,15 @@ class Settings {
 
  build() {
   const backend = Backend.available;
-  this.list.innerHTML = this.providers.map(provider => section(provider.id, provider.name || provider.id, (provider.methods || []).map(method =>
-   method?.type === 'oauth' ? accountRow(provider.id, method) : method?.type === 'apiKey' ? keyRow(provider.id, method) : '').join(''))).join('')
+  this.list.innerHTML = this.providers.map((provider, index) => section(index, provider.name, provider.methods.map(method =>
+   method.type === 'oauth' ? accountRow(method) : keyRow(index, method)).join(''))).join('')
    || `<p class="settings-status" role="status" data-tone="${backend ? '' : 'error'}">${escapeHtml(I18n.t(backend ? 'settings.backend.empty' : 'settings.backend.none'))}</p>`;
-  this.inputs = {};
+  // IDs are opaque strings, not DOM IDs/selectors (even whitespace and NUL must round-trip).
+  [...this.list.querySelectorAll('.provider')].forEach((node, index) => {
+   node.dataset.provider = this.providers[index].id;
+   for (const child of node.querySelectorAll('.settings-key, .settings-status, .settings-account')) child.dataset.provider = node.dataset.provider;
+  });
+  this.inputs = Object.create(null);
   for (const input of this.list.querySelectorAll('.settings-key')) {
    const provider = input.dataset.provider;
    this.inputs[provider] = input;
@@ -365,15 +435,20 @@ class Settings {
    input.addEventListener('input', () => this.onKeyInput(provider));
    input.nextElementSibling.addEventListener('click', () => this.reveal(provider, input.type === 'password'));
   }
-  this.statuses = Object.fromEntries([...this.list.querySelectorAll('.settings-status[data-provider]')].map(node => [node.dataset.provider, node]));
-  this.accounts = Object.fromEntries([...this.list.querySelectorAll('.settings-account')].map(node => [node.dataset.provider, node]));
+  this.statuses = Object.create(null);
+  for (const node of this.list.querySelectorAll('.settings-status[data-provider]')) (this.statuses[node.dataset.provider] ||= []).push(node);
+  this.accounts = Object.assign(Object.create(null), Object.fromEntries([...this.list.querySelectorAll('.settings-account')].map(node => [node.dataset.provider, node])));
   for (const [provider, box] of Object.entries(this.accounts)) {
    box.addEventListener('click', event => {
     const action = event.target.closest('[data-action]')?.dataset.action;
     if (action === 'login') this.login(provider);
     else if (action === 'cancel') this.auth('auth.cancel', provider);
-    else if (action === 'logout') this.auth('auth.logout', provider).then(() => this.setStatus(provider, ''));
+    else if (action === 'logout') this.auth('auth.logout', provider);
    });
+  }
+  for (const provider of this.order) {
+   const message = this.messages.get(provider), error = this.status[provider]?.error;
+   this.setStatus(provider, message?.text ?? error ?? '', message?.tone ?? (error ? 'error' : ''));
   }
   this.paint();
  }
@@ -401,22 +476,45 @@ class Settings {
 
  // How a provider stands, as the backend says: connected or not, waiting for a sign-in, the account, an error.
  setProviderStatus(provider, status) {
-  if (!provider || !status) return;
   const was = this.connected(provider);
   this.status[provider] = status;
-  if (status.error) this.setStatus(provider, status.error.message || String(status.error), 'error');
+  this.setStatus(provider, status.error || '', status.error ? 'error' : '');
   if (was !== this.connected(provider)) this.refresh().catch(() => {});
   this.paint();
  }
 
- async auth(method, provider, extra = {}) {
+ beginAuth(provider) {
+  clearTimeout(this.timer[provider]);
+  const token = { pending: true, changed: false };
+  this.authVersions.set(provider, token);
+  return token;
+ }
+
+ async auth(method, provider, extra = {}, token = this.beginAuth(provider)) {
+  if (this.authVersions.get(provider) !== token) return null;
   try {
-   const status = await Backend.request(method, { provider, ...extra });
-   this.setProviderStatus(provider, status);
+   const result = await Backend.request(method, { provider, ...extra });
+   if (this.authVersions.get(provider) !== token) return null;
+   const status = statusOf(result);
+   if (!status) throw new Error('Invalid provider status from backend.');
+   if (!token.changed) this.setProviderStatus(provider, status);
    return status;
   } catch (error) {
+   if (this.authVersions.get(provider) !== token || token.changed) return null;
+   this.status[provider] = { ...this.status[provider], waiting: false };
    this.setStatus(provider, Backend.explain(error).message, 'error');
+   this.paint();
    return null;
+  } finally {
+   if (this.authVersions.get(provider) === token) {
+    token.pending = false;
+    // An event during the mutation may describe an older operation. Read again after this one settles.
+    if (token.changed) {
+     this.status[provider] = { ...this.status[provider], waiting: false };
+     this.paint();
+     this.refreshAll();
+    }
+   }
   }
  }
 
@@ -425,9 +523,7 @@ class Settings {
   this.setStatus(provider, '');
   this.status[provider] = { ...this.status[provider], waiting: true };
   this.paint();
-  const status = await this.auth('auth.login', provider);
-  if (!status) this.status[provider] = { ...this.status[provider], waiting: false };
-  this.paint();
+  return this.auth('auth.login', provider);
  }
 
  open(reason = '', provider = '') {
@@ -453,28 +549,28 @@ class Settings {
  onKeyInput(provider) {
   const key = this.inputs[provider].value.trim();
   this.typed[provider] = key;
-  clearTimeout(this.timer[provider]);
+  const token = this.beginAuth(provider);
   this.setStatus(provider, key ? I18n.t('settings.key.checking') : '');
-  this.timer[provider] = setTimeout(() => this.saveKey(provider, key), CHECK_DELAY);
+  this.timer[provider] = setTimeout(() => this.saveKey(provider, key, token), CHECK_DELAY);
  }
 
- async saveKey(provider, key) {
-  const status = await this.auth('auth.setKey', provider, { key: key || null });
-  if (key !== this.typed[provider]) return;
-  if (status && !status.error) this.setStatus(provider, '');
-  if (status && !status.error && key) {
+ async saveKey(provider, key, token = this.beginAuth(provider)) {
+  const status = await this.auth('auth.setKey', provider, { key: key || null }, token);
+  if (this.authVersions.get(provider) !== token || !status) return;
+  if (!status.error && key && key === this.typed[provider]) {
    this.typed[provider] = '';
-   this.inputs[provider].value = '';
+   if (this.inputs[provider]) this.inputs[provider].value = '';
+   this.paint();
   }
   await this.refresh().catch(() => {});
-  this.paint();
  }
 
  setStatus(provider, text, tone = '') {
-  const node = this.statuses?.[provider];
-  if (!node) return;
-  node.textContent = text;
-  node.dataset.tone = tone;
+  this.messages.set(provider, { text, tone });
+  for (const node of this.statuses?.[provider] || []) {
+   node.textContent = text;
+   node.dataset.tone = tone;
+  }
  }
 }
 

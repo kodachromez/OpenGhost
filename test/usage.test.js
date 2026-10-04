@@ -25,6 +25,23 @@ test('usage events are counted in ABP terms, for any provider the backend names'
  assert.equal(usage.nameOf('openai-codex|gpt-x'), 'GPT X');
 });
 
+test('reserved provider IDs have independent totals and chart buckets, never prototype properties', async () => {
+ const usage = ledger();
+ await usage.ready;
+ const ids = ['__proto__', 'constructor', 'toString', 'a " <provider>'];
+ for (const provider of ids) usage.record({ provider, model: 'm', input: 5, output: 2 });
+ await tick();
+ const totals = usage.totals(), day = usage.daily(1)[0];
+ assert.equal(Object.getPrototypeOf(totals), null);
+ assert.equal(Object.getPrototypeOf(day.providers), null);
+ for (const id of ids) {
+  assert.equal(totals[id].tokens, 7);
+  assert.equal(day.providers[id], 7);
+ }
+ assert.equal(Object.prototype.tokens, undefined);
+ usage.flush();
+});
+
 test('an event that counts nothing, or names no model, is left out', async () => {
  const usage = ledger();
  await usage.ready;
