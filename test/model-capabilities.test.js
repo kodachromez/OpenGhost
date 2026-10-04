@@ -267,3 +267,17 @@ test('cached catalogs containing old inferred capabilities are not reused', asyn
  f.settings.saveCatalog();
  assert.deepEqual(plain(f.settings.readCatalog()), plain(f.settings.models));
 });
+
+test('canonical thinking from a model switch is session state, not a replacement for the saved preference', async () => {
+ const deep = { thinkingLevels: ['none', 'low', 'high', 'max'], defaultThinking: 'low' };
+ const f = await page([model('deep', deep), model('plain')], { 'openghost.effort': 'max' });
+ f.conv.messages.push({ role: 'user', content: 'history' });
+ f.backend.canonical = { model: 'plain', thinking: null };
+ f.chat.switchModel('p:plain');
+ await f.chat.switching;
+ assert.equal(f.calls.find(call => call.method === 'session.configure').params.thinking, undefined);
+ assert.equal(f.settings.config.effort, undefined);
+ assert.equal(f.slider.button.hidden, true);
+ assert.equal(f.storage.get('openghost.effort'), 'max');
+ assert.equal(f.settings.configFor('p:deep').effort, 'max');
+});

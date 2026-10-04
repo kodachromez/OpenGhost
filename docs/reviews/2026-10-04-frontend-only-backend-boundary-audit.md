@@ -248,6 +248,8 @@ Approvals are generic enough to name unknown tools and display JSON fallback arg
 
 **Resolution (model defaults/configuration scope):** Missing/empty capabilities no longer invent thinking levels, vision or context limits; old inferred catalogs are invalidated. Backend defaults/canonical configuration are honored, unavailable selections require an explicit replacement, and switching no longer promises compaction. Valid picker choices and explicit effort preferences remain supported. Focused regressions: `test/model-capabilities.test.js`. Broader feature/attachment gating and protocol extensions are unchanged.
 
+**Follow-up resolution (canonical thinking):** a `session.configure` result's `thinking` (including `null` after switching to a model without levels) had also overwritten and could erase the saved effort preference. It now stays canonical session display state for that model; only the user's own choice is saved. Regression: `test/model-capabilities.test.js` (“canonical thinking from a model switch…”). Remaining items were classified against upstream `42f0dc8`: upstream had no UI vision/attachment gate either (its in-app provider adapters replaced images with a notice), so input validation is now backend-owned per `docs/backend-interface.md`; picker-key colon collisions are upstream behavior; the mode picker's desktop gate is equivalent to upstream's tool-bridge check.
+
 ### F14 — MEDIUM: provider/auth UI is extensible but not fully general or race-safe
 
 **Evidence:** `settings.js:20–73,104–111,320–353,356–415,419–499`; `settings-usage.js:9–10,31,174–198,331–370`.

@@ -358,9 +358,12 @@ class Settings {
  setEffort(value, canonicalId = '') {
   value = typeof value === 'string' && value ? value : undefined;
   this.canonicalEffort = canonicalId ? { id: canonicalId, value } : null;
-  this.preferredEffort = value;
-  if (value == null) localStorage.removeItem(STORAGE.effort);
-  else localStorage.setItem(STORAGE.effort, value);
+  // A canonical session value is display state for that model; only the user's own choice is saved.
+  if (!canonicalId) {
+   this.preferredEffort = value;
+   if (value == null) localStorage.removeItem(STORAGE.effort);
+   else localStorage.setItem(STORAGE.effort, value);
+  }
   this.applyEfforts();
  }
 
