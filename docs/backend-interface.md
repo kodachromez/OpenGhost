@@ -129,9 +129,11 @@ An unterminated final line is not dispatched.
 - Outbound messages must pass the same envelope validator and line-size limit. Node's pending stdin write queue,
   including all framing newlines, is capped at **64 MiB + 1 byte**. Accepted writes drain in order; there is no extra
   host retry queue.
-- The host's `send` returns `false` for unavailable, invalid, oversized or queue-full sends. Renderer IPC sends are
-  **unacknowledged**: the RPC client is not told that a host send was rejected and may instead time out. A timeout is
-  not proof that the backend did not receive or accept a request.
+- The host's `send` returns `false` for unavailable, invalid, oversized or queue-full sends, and reports a failed stdin
+  write (for example `EPIPE` from a backend that closed its stdin) through its write callback. Renderer `backend:send`
+  is an IPC invoke that resolves `false` in either case, and the RPC client then rejects **that request** at once with
+  `backend_unavailable` instead of waiting for its deadline. `true` means only that the line was written to the pipe;
+  a timeout is still not proof that the backend did not receive or accept a request.
 
 ### Envelope validation and identity
 
@@ -341,7 +343,10 @@ string and must agree with an early `turn.started`. Every start acknowledgement 
 `sessionVersion`. For an existing-session start it must exactly match the requested incarnation; for a create-only
 start (`sessionVersion: null`) it identifies the newly created incarnation. The frontend validates both identities
 before adopting the returned version, and rejects acknowledgements if the local turn or incarnation changed while
-waiting. Missing, malformed or mismatched versions fail closed and require reconciliation, even if completion events
+waiting. A `turn.completed` that arrives first ends the turn locally at once without waiting for the response; the
+start stays pending until its response or deadline, keeps its pending markers and offers no Retry meanwhile, and a
+following start in that chat waits for it before reading the incarnation. A late valid acknowledgement is then
+adopted; a late invalid one, or none by the deadline, fails closed as below. Missing, malformed or mismatched versions fail closed and require reconciliation, even if completion events
 arrived first; they never replace the current version or authorize an automatic resend.
 
 Before dispatching start/retry/steer, the frontend durably saves its chat index and display checkpoint with the relevant

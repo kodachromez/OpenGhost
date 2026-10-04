@@ -79,6 +79,8 @@ class BackendClient {
   this.process = { state: 'none' };
   this.failure = null;
   this.disposed = false;
+  // Each backend connection (a `running` status) is one epoch; a handshake continuation from an older one is dropped.
+  this.epoch = 0;
   this.subscriptions = [];
   this.ready = new Promise(resolve => { this.settleReady = resolve; });
   if (!transport) { this.settleReady(false); return; }
@@ -109,13 +111,14 @@ class BackendClient {
 
  async initialize() {
   if (this.disposed) return;
+  const epoch = ++this.epoch, stale = () => this.disposed || epoch !== this.epoch;
   this.state = 'initializing';
   this.failure = null;
   try {
    await loaded;
-   if (this.disposed) return;
+   if (stale()) return;
    const result = await this.call('initialize', { ...this.hello(), protocolVersion: PROTOCOL, connectionId: this.connectionId });
-   if (this.disposed) return;
+   if (stale()) return;
    if (!isObject(result) || typeof result.protocolVersion !== 'string') throw new BackendError({ code: 'protocol_error', message: 'Invalid initialize result: expected a string protocolVersion.' });
    if (result.protocolVersion !== PROTOCOL) throw new BackendError({ code: 'unsupported', message: `Unsupported backend protocolVersion: ${result.protocolVersion} (expected ${PROTOCOL}).` });
    this.info = result?.backend || null;
@@ -124,7 +127,7 @@ class BackendClient {
    this.emit('ready', this.info);
    this.settleReady(true);
   } catch (error) {
-   if (this.disposed) return;
+   if (stale()) return;
    this.state = 'unavailable';
    this.info = null;
    this.capabilities = {};
@@ -137,6 +140,7 @@ class BackendClient {
  // The backend went away: whatever was waiting for it fails, and whatever it was waiting for is let go.
  close(status) {
   const was = this.state;
+  this.epoch++;
   this.state = 'unavailable';
   this.info = null;
   this.capabilities = {};
@@ -193,7 +197,14 @@ class BackendClient {
    signal?.addEventListener('abort', stop, { once: true });
    const ms = this.timeouts[method] ?? this.timeouts.default;
    timer = setTimeout(() => give(new BackendError({ code: 'timeout', message: `The backend did not answer ${method} in time.` })), ms);
-   this.send({ jsonrpc: '2.0', id, method, ...(params === undefined ? {} : { params }) });
+   // A request the host could not hand to the backend (stdin closed or broken, queue full, invalid) fails at once.
+   const undelivered = () => {
+    if (!this.pending.delete(id)) return;
+    settle(reject)(new BackendError({ code: 'backend_unavailable', message: `The backend could not be sent ${method}: its input is closed or full.` }));
+   };
+   const sent = this.send({ jsonrpc: '2.0', id, method, ...(params === undefined ? {} : { params }) });
+   if (sent === false) undelivered();
+   else if (typeof sent?.then === 'function') sent.then(ok => { if (ok === false) undelivered(); }, undelivered);
   });
  }
 
@@ -202,8 +213,9 @@ class BackendClient {
   this.send({ jsonrpc: '2.0', method, ...(params === undefined ? {} : { params }) });
  }
 
+ // The transport's answer: `false` (or a promise of it) when the message was not delivered.
  send(message) {
-  if (!this.disposed) this.transport.send(message);
+  return this.disposed ? false : this.transport.send(message);
  }
 
  // Events from the backend by method ('message.delta', 'usage', …), and the client's own 'ready' and 'closed';

@@ -245,7 +245,10 @@ ipcMain.handle('media:video-info', (event, id) => fromApp(event) ? videoInfo(id)
 let backend = null;
 let page = null;
 const toPage = (channel, data) => { if (page && !page.isDestroyed()) page.send(channel, data); };
-ipcMain.on('backend:send', (event, message) => { if (fromApp(event)) backend?.send(message); });
+// Answers whether the message reached the backend: false when the host refused it or the write to its stdin failed.
+ipcMain.handle('backend:send', (event, message) => new Promise(resolve => {
+ if (!fromApp(event) || !backend?.send(message, error => resolve(!error))) resolve(false);
+}));
 ipcMain.handle('backend:status', event => fromApp(event) && backend ? backend.status : { state: 'none' });
 
 function startBackend() {

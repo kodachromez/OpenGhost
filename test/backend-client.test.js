@@ -265,3 +265,81 @@ test('the shipped deadlines are bounded for every request, longest for sign-in a
  for (const ms of Object.values(timeouts)) assert.ok(Number.isFinite(ms) && ms > 0);
  assert.ok(timeouts['auth.login'] > timeouts.default && timeouts['session.compact'] > timeouts.default);
 });
+
+// Audit F08: delivery failures and handshakes from an older backend connection.
+test('a request the host could not deliver fails at once, and only that request', async () => {
+ const { transport, Backend } = await connected();
+ const send = transport.send;
+ const other = Backend.request('models.list', {});
+ const otherId = transport.last().id;
+ // Refused at once (stdin closed, queue full), refused later (the write failed: EPIPE), or the bridge itself failed.
+ for (const answer of [() => false, () => Promise.resolve(false), () => Promise.reject(new Error('ipc'))]) {
+  transport.send = message => { send(message); return answer(); };
+  const failed = Backend.request('settings.get', {});
+  const id = transport.last().id;
+  await assert.rejects(failed, error => error.code === 'backend_unavailable' && /could not be sent settings.get/.test(error.message));
+  assert.equal(Backend.pending.has(id), false);
+  assert.equal(Backend.pending.has(otherId), true);
+ }
+ // A delivered message (true, a promise of true, or the old bridge's undefined) leaves the request waiting for its answer.
+ for (const answer of [() => true, () => Promise.resolve(true), () => undefined]) {
+  transport.send = message => { send(message); return answer(); };
+  const waiting = Backend.request('settings.get', {});
+  await tick();
+  transport.deliver({ id: transport.last().id, result: { ok: 1 } });
+  assert.deepEqual(await waiting, { ok: 1 });
+ }
+ transport.deliver({ id: otherId, result: [] });
+ assert.deepEqual(await other, []);
+});
+
+test('an undelivered initialize ends the handshake unavailable at once', async () => {
+ const transport = fakeTransport();
+ transport.send = message => { transport.sent.push(message); return false; };
+ const window = renderer(['backend-client.js'], {});
+ const Backend = new window.BackendClient(transport, { timeouts: { default: 60e3 } });
+ assert.equal(await Backend.ready, false);
+ assert.equal(Backend.state, 'unavailable');
+ assert.match(Backend.unavailable().message, /initialization failed: The backend could not be sent initialize/);
+});
+
+test('an initialize answered just before its backend exited does not make the client ready', async () => {
+ const transport = fakeTransport();
+ const window = renderer(['backend-client.js'], {});
+ const Backend = new window.BackendClient(transport);
+ await tick();
+ const closed = [];
+ Backend.on('closed', status => closed.push(status.state));
+ // The answer and the exit arrive before initialize() continues.
+ transport.deliver({ id: transport.last().id, result: { protocolVersion: '0.1', capabilities: { old: true } } });
+ transport.setStatus({ state: 'exited', code: 1 });
+ assert.equal(await Backend.ready, false);
+ await tick();
+ assert.equal(Backend.state, 'unavailable');
+ assert.equal(Backend.can('old'), false);
+ assert.deepEqual(closed, ['exited']);
+});
+
+test('an older backend connection\'s handshake cannot settle or fail a newer one', async () => {
+ const transport = fakeTransport();
+ const window = renderer(['backend-client.js'], {});
+ const Backend = new window.BackendClient(transport);
+ await tick();
+ const first = transport.last();
+ transport.setStatus({ state: 'exited', code: 1 });
+ transport.setStatus({ state: 'running' });
+ await tick();
+ const second = transport.last();
+ assert.equal(second.method, 'initialize');
+ assert.notEqual(second.id, first.id);
+ // The old backend's late answer, valid or not, neither readies nor fails the new handshake.
+ transport.deliver({ id: first.id, result: { protocolVersion: '0.1', capabilities: { old: true } } });
+ transport.deliver({ id: first.id, result: { protocolVersion: '9' } });
+ await tick();
+ assert.equal(Backend.state, 'initializing');
+ transport.deliver({ id: second.id, result: { protocolVersion: '0.1', capabilities: { fresh: true } } });
+ await tick();
+ assert.equal(Backend.state, 'ready');
+ assert.equal(Backend.can('fresh'), true);
+ assert.equal(Backend.can('old'), false);
+});

@@ -175,3 +175,26 @@ test('the outbound cap includes all queued frames and their newlines; drain pres
  assert.equal(stdin.writableLength, 0);
  assert.equal(writes.length, 2);
 });
+
+// Audit F08: a backend that closes its stdin but keeps running. The write's own failure is reported, so the request it
+// carried can fail at once, and later sends are refused synchronously.
+test('send reports a failed stdin write through its callback, then refuses at once', async t => {
+ const statuses = [];
+ const backend = new BackendHost({
+  command: { file: process.execPath, args: ['-e', 'require("fs").closeSync(0); setTimeout(() => {}, 10000)'] },
+  onStatus: status => statuses.push(status.state), log: { error() {} },
+ });
+ backend.start();
+ t.after(() => backend.child?.kill('SIGKILL'));
+ await once(backend.child, 'spawn');
+ // Give the child time to close its end of the pipe.
+ let error;
+ for (let attempt = 0; attempt < 50 && !error; attempt++) {
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const written = new Promise(resolve => { if (!backend.send(message, resolve)) resolve('refused'); });
+  error = await written;
+ }
+ assert.ok(error === 'refused' || error?.code === 'EPIPE', `unexpected write outcome ${error}`);
+ assert.equal(backend.send(message, () => assert.fail('a refused send must not call back')), false);
+ assert.deepEqual(statuses, ['running']);
+});

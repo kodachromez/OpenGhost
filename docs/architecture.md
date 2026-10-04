@@ -96,8 +96,8 @@ window's web contents. It also hosts browser automation through [`desktop/browse
 PDF reading through [`desktop/pdf.js`](../desktop/pdf.js).
 
 The main process routes backend envelopes; it does not dispatch ABP methods or retain session/turn history. Backend
-IPC uses `backend:send`, `backend:message` and `backend:status`. `backend:send` is fire-and-forget: no IPC response
-reports whether the host accepted the write.
+IPC uses `backend:send`, `backend:message` and `backend:status`. `backend:send` is an invoke that resolves `false` when
+the host refused the message or its stdin write failed; the client then fails that request at once.
 
 ## 4. Backend client and JSON-RPC / JSON Lines transport
 
@@ -468,7 +468,7 @@ Lifecycle in [`desktop/main.js`](../desktop/main.js) and [`desktop/backend-host.
 - **Recovery configuration:** `session.get` restores identity and display events, not canonical model/thinking/mode
   configuration. Recovered turns are initialized from frontend settings/cached selection; no separate authoritative
   configuration resynchronization is performed there.
-- **Delivery and side effects:** unacknowledged IPC writes, Stop before acceptance, reload during a reverse request
+- **Delivery and side effects:** a written but unanswered request, Stop before acceptance, reload during a reverse request
   and already-issued browser actions can have uncertain outcomes. Recovery/identity guards are not exactly-once
   transport or side-effect rollback.
 - **Browser context:** [the ABP contract](backend-interface.md#host-tools) documents the full `BrowserState` emitted by

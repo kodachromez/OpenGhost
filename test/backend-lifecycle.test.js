@@ -13,8 +13,12 @@ const node = () => ({ addEventListener() {}, querySelectorAll: () => [], querySe
 
 function page(t, status = { state: 'running' }, document = { readyState: 'complete' }) {
  const ipc = new EventEmitter(), sent = [];
- ipc.send = (channel, message) => { assert.equal(channel, 'backend:send'); sent.push(message); };
- ipc.invoke = async channel => { assert.equal(channel, 'backend:status'); return status; };
+ // Backend messages go by invoke, which answers whether the host delivered them.
+ ipc.invoke = async (channel, message) => {
+  if (channel === 'backend:send') { sent.push(message); return true; }
+  assert.equal(channel, 'backend:status');
+  return status;
+ };
  let bridge;
  vm.runInNewContext(source('desktop/preload.js'), {
   process: { platform: 'linux' },

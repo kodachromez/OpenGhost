@@ -41,7 +41,8 @@ contextBridge.exposeInMainWorld('openghost', {
  // The external backend: JSON-RPC 2.0 messages both ways (ABP v0, docs/backend-interface.md), and its process's state.
  // This is the only way the page reaches an agent; there is no model, key or tool code on this side.
  backend: {
-  send: message => ipcRenderer.send('backend:send', message),
+  // Resolves false when the message did not reach the backend's stdin, so the request it carried fails at once.
+  send: message => ipcRenderer.invoke('backend:send', message),
   onMessage: callback => subscribe('backend:message', callback),
   onStatus: callback => subscribe('backend:status', callback),
   status: () => ipcRenderer.invoke('backend:status'),

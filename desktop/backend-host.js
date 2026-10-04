@@ -210,15 +210,16 @@ class BackendHost {
   }
  }
 
- // False means rejected (unavailable, invalid, oversized or queue full); never retained for a later retry.
- send(message) {
+ // False means rejected (unavailable, invalid, oversized or queue full); never retained for a later retry. `written`, if
+ // given, is called once an accepted message is written, with the error when the write failed (stdin closed: EPIPE).
+ send(message, written) {
   const stdin = this.child?.stdin;
   if (!stdin?.writable || stdin.writableLength >= MAX_PENDING || validate(message)) return false;
   const line = JSON.stringify(message);
   const bytes = Buffer.byteLength(line, 'utf8');
   if (bytes > MAX_LINE || stdin.writableLength + bytes + 1 > MAX_PENDING) return false;
   // write(false) still accepts the message. Node drains its own queue; our byte cap bounds it even if it never drains.
-  stdin.write(`${line}\n`, 'utf8');
+  stdin.write(`${line}\n`, 'utf8', written);
   return true;
  }
 

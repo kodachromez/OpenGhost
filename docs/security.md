@@ -119,8 +119,9 @@ turn. Incoming approval requests and browser hand-back waits can wait for the us
 
 Important residual limits:
 
-- `backend:send` IPC is fire-and-forget. A host rejection (unavailable child, invalid/oversized line or full queue) is
-  not acknowledged to the renderer; the RPC may only time out. Timeout is not proof of nondelivery or nonexecution.
+- `backend:send` reports only a host rejection (unavailable child, invalid/oversized line or full queue) or a failed
+  stdin write, and the request then fails at once. A successful write is not a delivery acknowledgement from the
+  backend. Timeout is not proof of nondelivery or nonexecution.
 - The host has no durable queue, replay buffer or delivery acknowledgement. Events sent while no page is listening can
   be lost. Session replay requires the backend's recovery journal.
 - Line/stdin bounds are not a total memory, CPU or traffic quota. There are no general JSON-depth, IPC-queue,
@@ -231,11 +232,11 @@ Take Control cancels current steps; hand-back returns a fresh observation instea
 
 Stop freezes local output and cancels approvals/browser work, requests `turn.cancel` when the remote turn ID is known,
 and cancels outstanding turn RPCs with `$/cancelRequest`. Correlated late usage can still update accounting without
-reviving output. Stop does not wait for confirmed remote termination. A start stopped before acknowledgement, an
-unacknowledged write, reload during a host action, or timed-out browser input can have an **unknown or partial outcome**.
-Already-issued input/JavaScript and backend side effects cannot be rolled back. Some attachment/PDF preparation waits
-are not interruptible by Stop; response deadlines do not bound all preparation or
-turn activity. Recover/re-observe before retrying uncertain work, never assume cancellation means nothing happened.
+reviving output. Stop does not wait for confirmed remote termination. A start stopped before acknowledgement, a
+written but unanswered request, reload during a host action, or timed-out browser input can have an **unknown or partial outcome**.
+Already-issued input/JavaScript and backend side effects cannot be rolled back. Stop (or a crash) ends a turn still
+preparing attachments or user context at once, and that turn never starts afterwards, but the preparation itself (an
+attachment/PDF read) runs on to its end in the background; response deadlines do not bound turn activity. Recover/re-observe before retrying uncertain work, never assume cancellation means nothing happened.
 
 ## 7. Session ownership, display caches and persistence
 

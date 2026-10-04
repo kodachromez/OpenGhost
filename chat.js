@@ -898,27 +898,74 @@ class Chat {
 
  async startTurn(conv, turn, input) {
   turn.retryIntent.input = input;
-  turn.controller.signal.throwIfAborted();
+  this.stillRunning(conv, turn);
   await Backend.ready;
   if (!Backend.available) throw Backend.unavailable();
   this.requireRecovery();
+  // The previous turn may have ended by turn.completed before its start was acknowledged; its incarnation comes first.
+  if (conv.acknowledging) {
+   await untilAborted(conv.acknowledging.catch(() => {}), turn.controller.signal);
+   if (!conv.reconciled) throw new BackendError({ code: 'invalid_turn', message: 'The previous turn was not acknowledged. Reconcile this chat before sending again.' });
+  }
   if (!conv.messages.some(entry => entry.backendTurn === turn.id && entry.pendingTurn)) turn.part.entry.pendingTurn = true;
   const params = { sessionId: this.sessionOf(conv), sessionVersion: conv.sessionVersion, clientTurnId: turn.id, input, ...(await this.sessionParams(conv, turn)) };
   await this.checkpoint(conv);
-  turn.controller.signal.throwIfAborted();
+  this.stillRunning(conv, turn);
   if (!Backend.available) throw Backend.unavailable();
   turn.dispatched = true; // After this point, failure is uncertain until recovery or turn.completed.
-  const result = await Backend.request('turn.start', params, { signal: turn.controller.signal });
-  turn.controller.signal.throwIfAborted();
-  if (typeof result?.sessionVersion !== 'string' || !result.sessionVersion
-   || params.sessionVersion !== null && result.sessionVersion !== params.sessionVersion
-   || conv.sessionVersion !== params.sessionVersion || conv.turn !== turn) {
-   turn.invalidStart = true;
-   throw new BackendError({ code: 'invalid_turn', message: 'The backend did not identify a valid matching session version for the accepted turn.' });
-  }
-  this.acknowledgeTurn(conv, turn, result);
-  conv.sessionVersion = result.sessionVersion;
+  const acknowledged = turn.acknowledging = conv.acknowledging = this.acknowledgeStart(conv, turn, params, Backend.request('turn.start', params, { signal: turn.controller.signal }));
+  acknowledged.catch(() => {}).finally(() => { if (conv.acknowledging === acknowledged) conv.acknowledging = null; });
+  await acknowledged;
   return turn.done;
+ }
+
+ // Validates turn.start's acknowledgement. Events may come before it, and turn.completed ends the turn without waiting
+ // for it (drive); one that comes after that is still validated here, and only then is the start settled.
+ async acknowledgeStart(conv, turn, params, request) {
+  try {
+   const result = await request;
+   turn.controller.signal.throwIfAborted();
+   if (typeof result?.sessionVersion !== 'string' || !result.sessionVersion
+    || params.sessionVersion !== null && result.sessionVersion !== params.sessionVersion
+    || conv.sessionVersion !== params.sessionVersion || conv.turn !== turn && !turn.completed) {
+    turn.invalidStart = true;
+    throw new BackendError({ code: 'invalid_turn', message: 'The backend did not identify a valid matching session version for the accepted turn.' });
+   }
+   this.acknowledgeTurn(conv, turn, result);
+   conv.sessionVersion = result.sessionVersion;
+  } catch (error) {
+   turn.startSettled = true;
+   turn.startError = error;
+   if (turn.ended) this.lateStart(conv, turn, params, error);
+   throw error;
+  }
+  turn.startSettled = true;
+  if (turn.ended) this.lateStart(conv, turn, params, null);
+ }
+
+ // The acknowledgement of a start whose turn turn.completed already ended: it settles the turn's pending markers, or,
+ // when it is missing, invalid or failed, requires reconciliation as an invalid start does.
+ lateStart(conv, turn, params, error) {
+  const view = turn.part.view;
+  if (error) {
+   turn.invalidStart = true;
+   if (conv.sessionVersion === params.sessionVersion) conv.reconciled = false;
+   view.retryIntent = null;
+   this.fail(conv, view, error);
+  } else {
+   for (const item of conv.messages) if (item.backendTurn === turn.id) delete item.pendingTurn;
+   view.retryIntent = turn.settledIntent;
+  }
+  view.retryVersion = conv.sessionVersion;
+  if (conv.record && this.library.chat(conv.id)) this.save(conv);
+  this.onChange();
+ }
+
+ // Preparation (attachments, user context, a checkpoint) can outlive its turn: one stopped, crashed or otherwise ended
+ // meanwhile never starts afterwards.
+ stillRunning(conv, turn) {
+  turn.controller.signal.throwIfAborted();
+  if (turn.terminal || conv.turn !== turn) throw aborted();
  }
 
  acknowledgeTurn(conv, turn, result) {
@@ -944,7 +991,7 @@ class Chat {
    this.requireRecovery();
    const params = { sessionId: this.sessionOf(conv), sessionVersion: conv.sessionVersion, clientTurnId: turn.id, failedTurnId: intent.failedTurnId, ...(await this.sessionParams(conv, turn)) };
    await this.checkpoint(conv);
-   turn.controller.signal.throwIfAborted();
+   this.stillRunning(conv, turn);
    if (!Backend.available) throw Backend.unavailable();
    turn.dispatched = true;
    const result = await Backend.request('turn.retry', params, { signal: turn.controller.signal });
@@ -1011,7 +1058,8 @@ class Chat {
   let error = null, finish = null;
   turn.started = new Promise(resolve => { turn.onStarted = resolve; });
   try {
-   finish = await work();
+   // Stop, a crash or turn.completed end the turn at once, even while it still prepares or waits for its start's answer.
+   finish = await Promise.race([work(), turn.done]);
    // Messages sent during a compaction or a model switch start the turn they were waiting for.
    if (turn.quiet && turn.queue.length && conv.turn === turn) finish = await this.continueQueued(conv, turn);
   } catch (e) {
@@ -1304,6 +1352,9 @@ class Chat {
 
  async end(conv, turn, error, finish) {
   if (conv.turn !== turn) return;
+  turn.ended = true;
+  // A start that failed while turn.completed had already ended the turn still fails it.
+  error ||= turn.startError || null;
   turn.steeringController.abort();
   turn.terminal = true;
   turn.early.length = 0;
@@ -1331,10 +1382,13 @@ class Chat {
   if (turn.next) collapse(turn.next.el);
   // Reconcile an uncertain outcome before Send or Retry. Early completion cannot validate a bad start version.
   const uncertain = turn.invalidStart || !turn.completed && (turn.dispatched || turn.remote);
-  if (!uncertain) {
+  // A completed turn whose start is still unacknowledged keeps its pending markers until lateStart settles them.
+  const unacknowledged = !!turn.acknowledging && !turn.startSettled;
+  if (!uncertain && !unacknowledged) {
    for (const item of conv.messages) if (item.backendTurn === turn.id) delete item.pendingTurn;
-  } else if (!turn.quiet) conv.reconciled = false;
-  view.retryIntent = !uncertain ? turn.remote ? { failedTurnId: turn.remote } : turn.retryIntent : null;
+  } else if (uncertain && !turn.quiet) conv.reconciled = false;
+  turn.settledIntent = !uncertain ? turn.remote ? { failedTurnId: turn.remote } : turn.retryIntent : null;
+  view.retryIntent = unacknowledged ? null : turn.settledIntent;
   view.retryVersion = conv.sessionVersion;
   for (const item of turn.queue) this.inputFailure(item, 'This input was not confirmed in the reply. It has not been sent again.');
   turn.queue.length = 0;
