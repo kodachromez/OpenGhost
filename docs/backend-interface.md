@@ -29,7 +29,8 @@ The host starts a backend only when one is configured, in this order:
 2. `backend.json` in the app's user data folder (`~/.config/OpenGhost/` on Linux):
    `{ "command": ["/opt/ghosty/bin/ghosty", "abp"] }`.
 
-With neither, nothing is started: the UI works, and a message gets "No backend is connected" in the chat.
+With neither, nothing is started: the UI works, and chat/settings explain how to configure the backend. Spawn and
+configuration errors, initialization failures, and exit codes/signals are shown rather than a generic disconnected message.
 
 The process starts in the user's home folder with the app's environment. **stdout carries protocol only**; logs go to
 stderr, which the host prints with a `[backend]` prefix. Non-JSON lines are dropped and logged. Parsed values reach the
@@ -38,9 +39,17 @@ Lines are limited to 64 MiB of UTF-8 bytes, excluding LF but including whitespac
 through its next newline before decoding or parsing. Outbound messages have the same limit; the host rejects sends
 that would exceed 64 MiB + 1 byte in Node's stdin write queue (including newlines). Accepted writes drain in order;
 there is no extra host queue. Rejection returns `false` from the host's `send`; renderer IPC delivery remains unacknowledged.
-There is no automatic restart. On quit the host sends `shutdown`, closes stdin, and kills
+There is no automatic restart or reconnect command. After a crash or configuration change, fix any reported error
+and **relaunch OpenGhost**; Retry does not start a backend. Session recovery below reconciles backend-owned sessions,
+not the process. The client's synthetic later `running` status test is not a production restart path.
+On quit the host sends `shutdown`, closes stdin, and kills
 the process after 2 s if it is still running. When the backend exits, however it exits, the host ends whatever it left
 behind in its session (on POSIX the backend leads a session of its own). A page reload sends `initialize` again on the same process.
+
+The preload backend's `onMessage` and `onStatus` subscriptions return unsubscribe functions. Call
+`BackendClient.dispose()` before replacing a client: it detaches those subscriptions, rejects pending calls, aborts
+reverse handlers and clears local listeners/handlers without stopping the process. Re-evaluating `backend-client.js`
+disposes the previous `window.Backend`; new UI bindings still belong to the new client.
 
 ## Envelope
 
@@ -298,7 +307,9 @@ How the UI uses them, in the same terms as 1.3.0:
   correlated late usage after completion/Stop can still be counted and saved there, without reviving output or changing
   the current context meter. Older/unrecognized accounting is ignored. The meter updates only from the active turn's
   usage (`context.used / context.window`).
-- **Stop** (button or Escape) freezes output at once, settles pending cards as denied, and sends `turn.cancel`.
+- **Stop** (Escape in the main chat) freezes output at once, settles pending cards as denied, and sends `turn.cancel`.
+  There is no Stop button; Send stays Send. Menus, dialogs and focused browser views can consume Escape; mini-chat
+  Escape has its own behavior.
   Only the correlated accounting exception above remains; session titles are session-scoped.
 - A message sent while a turn runs is sent with `turn.steer`, and any pending approval card is answered `deny` with
   `reason: 'superseded'`. Messages never accepted stay in the chat unanswered, as in 1.3.0. Messages sent during a

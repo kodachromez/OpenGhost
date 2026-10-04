@@ -3,10 +3,12 @@
 > **This branch (`frontend-only-rust-backend`) is the OpenGhost 1.3.0 interface without its backend.** The agent loop,
 > the model and provider clients, the prompts, the tools and the provider keys are gone; the UI talks to an external
 > backend through one interface, ready for a backend written in Rust. With no backend connected the app opens and
-> works as an interface, and a message gets "No backend is connected". See
+> works as an interface and shows backend configuration/connection errors. There is no automatic backend restart:
+> fix configuration errors and relaunch OpenGhost after a failure or configuration change. See
 > [docs/frontend-only.md](docs/frontend-only.md) for what was removed and
 > [docs/backend-interface.md](docs/backend-interface.md) for the interface. The rest of this README describes
-> OpenGhost 1.3.0 as released, with its own agent.
+> OpenGhost 1.3.0 as released, with its own agent; agent tasks, compaction and permission-mode behavior depend on
+> the external backend on this branch.
 
 **v1.3.0 beta**
 

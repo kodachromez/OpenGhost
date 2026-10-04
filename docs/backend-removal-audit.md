@@ -13,6 +13,10 @@ OpenGhost UI  →  clean backend interface  →  replaceable backend (Pi, Ghosty
 
 The frontend must not depend on whichever backend is chosen.
 
+**Historical proposal, not the current interface:** restart/adapter/mock architecture below describes a proposed
+baseline, not shipped behavior. This branch has no automatic backend restart or reconnect command; relaunch the app
+after a crash or configuration change. See [backend-interface.md](backend-interface.md) for the implemented contract.
+
 ---
 
 ## Contents

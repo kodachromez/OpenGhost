@@ -46,8 +46,22 @@ function fromRpc(error) {
  });
 }
 
+// Process recovery is manual: the desktop host never restarts a stopped backend.
+function processMessage(status) {
+ if (status?.state === 'error') return `Backend error: ${status.error || 'Unable to connect.'} Check OPENGHOST_BACKEND or backend.json, then relaunch OpenGhost.`;
+ if (status?.state === 'exited') {
+  const details = [status.code != null && `exit code ${status.code}`, status.signal && `signal ${status.signal}`].filter(Boolean);
+  return `The backend stopped${details.length ? ` (${details.join(', ')})` : ''}. Relaunch OpenGhost to reconnect.`;
+ }
+ if (status?.state === 'running') return 'The backend is still connecting.';
+ if (status?.state === 'stopped') return 'The backend is not running. Relaunch OpenGhost to reconnect.';
+ if (status?.state === 'disposed') return 'This backend client has been disposed.';
+ return 'No backend is configured. Set OPENGHOST_BACKEND or backend.json, then relaunch OpenGhost.';
+}
+
 class BackendClient {
  // `transport`: { send(message), onMessage(callback), onStatus(callback), status(): Promise<{ state }> }, or null.
+ // Both subscriptions return unsubscribe functions. Dispose this client before replacing it.
  // `hello()`: what the client tells the backend at the handshake (client, host tools, render guide), asked for then.
  constructor(transport, { hello = () => ({}), timeouts = {} } = {}) {
   this.transport = transport;
@@ -63,11 +77,13 @@ class BackendClient {
   this.info = null;
   this.capabilities = {};
   this.process = { state: 'none' };
+  this.failure = null;
+  this.disposed = false;
+  this.subscriptions = [];
   this.ready = new Promise(resolve => { this.settleReady = resolve; });
   if (!transport) { this.settleReady(false); return; }
-  transport.onMessage(message => this.receive(message));
-  transport.onStatus(status => this.onStatus(status));
-  Promise.resolve(transport.status()).then(status => this.onStatus(status), () => this.onStatus({ state: 'none' }));
+  this.subscriptions.push(transport.onMessage(message => this.receive(message)), transport.onStatus(status => this.onStatus(status)));
+  Promise.resolve(transport.status()).then(status => this.onStatus(status), error => this.onStatus({ state: 'error', error: error?.message || 'Unable to read backend status.' }));
  }
 
  get available() {
@@ -80,7 +96,7 @@ class BackendClient {
  }
 
  onStatus(status) {
-  if (!status) return;
+  if (this.disposed || !status) return;
   const same = status.state === this.process.state;
   this.process = status;
   if (status.state === 'running') {
@@ -92,10 +108,14 @@ class BackendClient {
  }
 
  async initialize() {
+  if (this.disposed) return;
   this.state = 'initializing';
+  this.failure = null;
   try {
    await loaded;
+   if (this.disposed) return;
    const result = await this.call('initialize', { ...this.hello(), protocolVersion: PROTOCOL, connectionId: this.connectionId });
+   if (this.disposed) return;
    if (!isObject(result) || typeof result.protocolVersion !== 'string') throw new BackendError({ code: 'protocol_error', message: 'Invalid initialize result: expected a string protocolVersion.' });
    if (result.protocolVersion !== PROTOCOL) throw new BackendError({ code: 'unsupported', message: `Unsupported backend protocolVersion: ${result.protocolVersion} (expected ${PROTOCOL}).` });
    this.info = result?.backend || null;
@@ -104,9 +124,11 @@ class BackendClient {
    this.emit('ready', this.info);
    this.settleReady(true);
   } catch (error) {
+   if (this.disposed) return;
    this.state = 'unavailable';
    this.info = null;
    this.capabilities = {};
+   this.failure ||= new BackendError({ code: 'backend_unavailable', message: `Backend initialization failed: ${error.message} Check the backend and relaunch OpenGhost.` });
    this.emit('closed', { state: 'error', error: error.message });
    this.settleReady(false);
   }
@@ -118,19 +140,32 @@ class BackendClient {
   this.state = 'unavailable';
   this.info = null;
   this.capabilities = {};
-  const error = new BackendError(was === 'ready'
-   ? { code: 'backend_crashed', message: `The backend stopped${status?.code != null ? ` (exit code ${status.code})` : ''}.` }
-   : { code: 'backend_unavailable', message: 'No backend is connected.' });
+  const error = this.failure = new BackendError({
+   code: was === 'ready' ? 'backend_crashed' : 'backend_unavailable', message: processMessage(status),
+  });
   for (const { reject } of this.pending.values()) reject(error);
   this.pending.clear();
   for (const controller of this.incoming.values()) controller.abort();
   this.incoming.clear();
-  if (was === 'ready' || was === 'initializing') this.emit('closed', status);
+  if (was === 'ready' || was === 'initializing' || was === 'connecting') this.emit('closed', status);
   this.settleReady(false);
  }
 
+ // Release bridge subscriptions and outstanding work, without stopping the backend process.
+ dispose() {
+  if (this.disposed) return;
+  this.disposed = true;
+  for (const unsubscribe of this.subscriptions.splice(0)) if (typeof unsubscribe === 'function') unsubscribe();
+  this.close({ state: 'disposed' });
+  this.listeners.clear();
+  this.handlers.clear();
+  this.transport = null;
+ }
+
  unavailable() {
-  return new BackendError({ code: 'backend_unavailable', message: 'No backend is connected.' });
+  return new BackendError({ code: 'backend_unavailable', message: this.failure?.message || (!this.transport
+   ? 'No backend bridge is available. Open the OpenGhost desktop app with a configured backend.'
+   : processMessage(this.process)) });
  }
 
  // A request to the backend. Resolves with its result, rejects with a BackendError (`timeout` when it goes unanswered
@@ -142,6 +177,7 @@ class BackendClient {
  }
 
  call(method, params, { signal } = {}) {
+  if (this.disposed) return Promise.reject(this.unavailable());
   if (signal?.aborted) return Promise.reject(aborted());
   const id = `${this.connectionId}:${this.next++}`;
   return new Promise((resolve, reject) => {
@@ -167,12 +203,13 @@ class BackendClient {
  }
 
  send(message) {
-  this.transport.send(message);
+  if (!this.disposed) this.transport.send(message);
  }
 
  // Events from the backend by method ('message.delta', 'usage', …), and the client's own 'ready' and 'closed';
  // '*' hears every event as (method, params). Returns a function that stops listening.
  on(method, listener) {
+  if (this.disposed) return () => {};
   if (!this.listeners.has(method)) this.listeners.set(method, new Set());
   this.listeners.get(method).add(listener);
   return () => this.listeners.get(method)?.delete(listener);
@@ -189,10 +226,11 @@ class BackendClient {
  // What answers the backend's own requests (approval.request, host.tool): `handler(params, { signal })` returns the
  // result or throws. The signal aborts when the backend sends $/cancelRequest for it.
  handle(method, handler) {
-  this.handlers.set(method, handler);
+  if (!this.disposed) this.handlers.set(method, handler);
  }
 
  receive(message) {
+  if (this.disposed) return;
   const invalid = validate(message);
   if (invalid) {
    if (!isObject(message)) return;
@@ -222,7 +260,7 @@ class BackendClient {
    } else if (this.available) this.emit(message.method, message.params || {});
    return;
   }
-  if (!this.available) { this.replyError(message.id, -32000, 'No backend is connected.', 'backend_unavailable'); return; }
+  if (!this.available) { this.replyError(message.id, -32000, this.unavailable().message, 'backend_unavailable'); return; }
   this.answer(message);
  }
 
@@ -291,6 +329,7 @@ function hello() {
 
 window.BackendError = BackendError;
 window.BackendClient = BackendClient;
+window.Backend?.dispose();
 window.Backend = new BackendClient(window.openghost?.backend || null, { hello });
 window.Backend.explain = explain;
 })();

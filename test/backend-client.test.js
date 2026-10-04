@@ -19,7 +19,7 @@ test('without a backend bridge every request fails as backend_unavailable', asyn
  const window = renderer(['backend-client.js'], {});
  assert.equal(await window.Backend.ready, false);
  assert.equal(window.Backend.available, false);
- await assert.rejects(window.Backend.request('models.list'), error => error.code === 'backend_unavailable');
+ await assert.rejects(window.Backend.request('models.list'), error => error.code === 'backend_unavailable' && /desktop app with a configured backend/.test(error.message));
 });
 
 test('a backend that is configured but not running stays unavailable', async () => {
@@ -159,7 +159,8 @@ test('a backend that exits fails what was waiting with backend_crashed', async (
  await assert.rejects(Backend.request('models.list'), error => error.code === 'backend_unavailable');
 });
 
-test('a backend that comes back is greeted again', async () => {
+// Transport-only compatibility: production has no restart/reconnect command and does not emit this sequence.
+test('a synthetic later running status still initializes the client again', async () => {
  const { transport, Backend } = await connected();
  transport.setStatus({ state: 'exited', code: 0 });
  transport.setStatus({ state: 'running' });
@@ -255,6 +256,7 @@ test('a backend that never answers the handshake ends unavailable instead of ini
  assert.equal(await Backend.ready, false);
  assert.equal(Backend.state, 'unavailable');
  assert.equal(Backend.pending.size, 0);
+ assert.match(Backend.unavailable().message, /initialization failed: The backend did not answer initialize in time.*relaunch OpenGhost/);
 });
 
 test('the shipped deadlines are bounded for every request, longest for sign-in and compaction', () => {

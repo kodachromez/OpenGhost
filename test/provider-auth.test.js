@@ -66,6 +66,7 @@ async function page(catalog = [provider()]) {
  let timerId = 0;
  const Backend = {
   available: false, can: () => true, explain: error => ({ message: error.message }),
+  unavailable: () => ({ code: 'backend_unavailable', message: 'No backend is configured.' }),
   on: (name, fn) => listeners.set(name, fn),
   emit: (name, params) => listeners.get(name)?.(params),
   request(method, params) {

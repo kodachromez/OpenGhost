@@ -430,7 +430,7 @@ class Settings {
   const backend = Backend.available;
   this.list.innerHTML = this.providers.map((provider, index) => section(index, provider.name, provider.methods.map(method =>
    method.type === 'oauth' ? accountRow(method) : keyRow(index, method)).join(''))).join('')
-   || `<p class="settings-status" role="status" data-tone="${backend ? '' : 'error'}">${escapeHtml(I18n.t(backend ? 'settings.backend.empty' : 'settings.backend.none'))}</p>`;
+   || `<p class="settings-status" role="status" data-tone="${backend ? '' : 'error'}">${escapeHtml(backend ? I18n.t('settings.backend.empty') : Backend.explain(Backend.unavailable()).message)}</p>`;
   // IDs are opaque strings, not DOM IDs/selectors (even whitespace and NUL must round-trip).
   [...this.list.querySelectorAll('.provider')].forEach((node, index) => {
    node.dataset.provider = this.providers[index].id;

@@ -1877,7 +1877,7 @@ Backend.on('closed', () => {
  for (const chat of chats) {
   for (const conv of chat.conversations.values()) {
    conv.reconciled = false;
-   conv.turn?.finish({ status: 'error', error: { code: 'backend_crashed', message: '' } });
+   conv.turn?.finish({ status: 'error', error: { code: 'backend_crashed', message: Backend.unavailable().message } });
   }
  }
 });

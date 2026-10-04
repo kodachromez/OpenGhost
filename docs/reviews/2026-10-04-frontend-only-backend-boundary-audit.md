@@ -321,6 +321,8 @@ Existing transcripts are returned and re-saved wholesale, not projected to a dis
 - Browser URL normalization is duplicated in renderer/main (including different IPv6 handling). Browser timeout helpers time out callers rather than underlying work. `SNAPSHOT`/some imports in `desktop/browser.js` are unused. These are cleanup candidates, not reasons to redesign the UI during this audit.
 - Historic README/UI claims about compaction, supported agent tasks and Ask/Auto/Full are not capability-qualified. The earlier audit describes a proposed protocol/mock/adapter architecture beyond what this branch implements; it should not be mistaken for the current compatibility specification.
 
+**Resolution:** Chat/settings now retain configuration, spawn, handshake and exit diagnostics with explicit relaunch guidance. Docs distinguish session recovery from process restart, correct the Stop-button claim and qualify historical proposals/features. Backend preload subscriptions return unsubscribe functions; idempotent client disposal releases subscriptions, pending/reverse work and local handlers before replacement. Existing listener isolation and successful startup/session recovery are preserved; broad chat/browser cleanup is deferred. Validation: `node --test test/backend-lifecycle.test.js test/backend-client.test.js test/backend-envelope.test.js test/provider-auth.test.js test/session-recovery.test.js` — 79 passed.
+
 ### F21 — LOW: executable configuration needs an explicit trust/portability contract
 
 **Evidence:** `desktop/backend-host.js:19–40,70–72`; `desktop/main.js:231,247–264`; `desktop/preload.js`.

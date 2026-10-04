@@ -2,6 +2,12 @@
 
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
+function subscribe(channel, callback) {
+ const listener = (event, data) => callback(data);
+ ipcRenderer.on(channel, listener);
+ return () => ipcRenderer.removeListener(channel, listener);
+}
+
 contextBridge.exposeInMainWorld('openghost', {
  desktop: true,
  platform: process.platform,
@@ -36,8 +42,8 @@ contextBridge.exposeInMainWorld('openghost', {
  // This is the only way the page reaches an agent; there is no model, key or tool code on this side.
  backend: {
   send: message => ipcRenderer.send('backend:send', message),
-  onMessage: callback => ipcRenderer.on('backend:message', (event, message) => callback(message)),
-  onStatus: callback => ipcRenderer.on('backend:status', (event, status) => callback(status)),
+  onMessage: callback => subscribe('backend:message', callback),
+  onStatus: callback => subscribe('backend:status', callback),
   status: () => ipcRenderer.invoke('backend:status'),
  },
 });
