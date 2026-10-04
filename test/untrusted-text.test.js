@@ -52,7 +52,7 @@ function page() {
  };
  window.window = window;
  const context = vm.createContext(window);
- for (const file of ['i18n.js', 'backend-client.js', 'approval-card.js', 'browser-panel.js', 'chat.js']) {
+ for (const file of ['i18n.js', 'backend-protocol.js', 'backend-client.js', 'approval-card.js', 'browser-panel.js', 'chat.js']) {
   vm.runInContext(fs.readFileSync(path.join(ROOT, file), 'utf8'), context, { filename: file });
  }
  return { window, doc };

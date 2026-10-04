@@ -98,13 +98,13 @@ test('the scripted recovery boundary retains an active turn across initialize an
  }
 });
 
-test('lines that are not JSON-RPC are dropped, split lines are joined', () => {
+test('non-JSON lines are dropped, split lines are joined, malformed envelopes reach the RPC peer', () => {
  const messages = [];
  const backend = new BackendHost({ command: null, onMessage: message => messages.push(message), log: quiet });
  backend.receive('{"jsonrpc":"2.0","method":"a"');
  backend.receive(',"params":{}}\nnot json\n{"x":1}\n');
  backend.receive('{"jsonrpc":"2.0","method":"b"}\n');
- assert.deepEqual(messages.map(message => message.method), ['a', 'b']);
+ assert.deepEqual(messages, [{ jsonrpc: '2.0', method: 'a', params: {} }, { x: 1 }, { jsonrpc: '2.0', method: 'b' }]);
 });
 
 test('a backend that dies mid-turn is reported as exited with its code', async () => {

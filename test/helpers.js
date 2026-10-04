@@ -14,7 +14,8 @@ function renderer(files, globals = {}) {
   navigator: { language: 'en-US' }, structuredClone,
  });
  window.window = window;
- for (const file of files) vm.runInContext(fs.readFileSync(path.join(ROOT, file), 'utf8'), context, { filename: file });
+ const scripts = files.flatMap(file => file === 'backend-client.js' ? ['backend-protocol.js', file] : [file]);
+ for (const file of scripts) vm.runInContext(fs.readFileSync(path.join(ROOT, file), 'utf8'), context, { filename: file });
  return window;
 }
 

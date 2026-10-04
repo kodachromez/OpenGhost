@@ -76,6 +76,7 @@ test('every script the page loads exists, and the boundary loads before the UI t
  for (const script of scripts) assert.ok(fs.existsSync(path.join(ROOT, script)), script);
  for (const gone of REMOVED) assert.equal(scripts.includes(gone), false, gone);
  const at = name => scripts.indexOf(name);
+ assert.ok(at('backend-protocol.js') >= 0 && at('backend-protocol.js') < at('backend-client.js'));
  for (const user of ['settings.js', 'chat.js', 'host-tools.js']) assert.ok(at('backend-client.js') < at(user), user);
  assert.ok(at('host-tools.js') < at('chat.js'));
 });

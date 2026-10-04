@@ -10,6 +10,7 @@
 // There is no model, prompt, key or tool code in the app. With no backend connected every request fails with a
 // `backend_unavailable` error, and the chat says so.
 const PROTOCOL = '0.1';
+const { validate, isObject, isId, has } = window.BackendProtocol;
 
 // The handshake waits for the page's scripts, so it can name the host tools and the render guide they define.
 const loaded = typeof document === 'undefined' || document.readyState !== 'loading'
@@ -35,10 +36,14 @@ const aborted = () => new DOMException('Aborted', 'AbortError');
 // model, so theirs are long; everything else is a quick answer.
 const TIMEOUTS = { default: 60e3, 'auth.login': 15 * 60e3, 'session.compact': 10 * 60e3 };
 
-// A JSON-RPC error as the backend sent it: its ABP error in `data` when there is one.
+// Preserve named ABP errors; otherwise normalize JSON-RPC's standard errors in both directions.
+const rpcCode = code => code === -32601 ? 'unsupported' : [-32700, -32600, -32602].includes(code) ? 'invalid_request' : 'unknown';
 function fromRpc(error) {
- const data = error?.data && typeof error.data === 'object' ? error.data : {};
- return new BackendError({ ...data, code: data.code || (error?.code === -32601 ? 'unsupported' : 'unknown'), message: data.message || error?.message || '' });
+ const data = isObject(error.data) ? error.data : {};
+ return new BackendError({ ...data,
+  code: typeof data.code === 'string' && data.code ? data.code : rpcCode(error.code),
+  message: typeof data.message === 'string' && data.message ? data.message : error.message,
+ });
 }
 
 class BackendClient {
@@ -90,7 +95,9 @@ class BackendClient {
   this.state = 'initializing';
   try {
    await loaded;
-   const result = await this.call('initialize', { protocolVersion: PROTOCOL, ...this.hello(), connectionId: this.connectionId });
+   const result = await this.call('initialize', { ...this.hello(), protocolVersion: PROTOCOL, connectionId: this.connectionId });
+   if (!isObject(result) || typeof result.protocolVersion !== 'string') throw new BackendError({ code: 'protocol_error', message: 'Invalid initialize result: expected a string protocolVersion.' });
+   if (result.protocolVersion !== PROTOCOL) throw new BackendError({ code: 'unsupported', message: `Unsupported backend protocolVersion: ${result.protocolVersion} (expected ${PROTOCOL}).` });
    this.info = result?.backend || null;
    this.capabilities = result?.capabilities || {};
    this.state = 'ready';
@@ -186,33 +193,53 @@ class BackendClient {
  }
 
  receive(message) {
-  if (!message || message.jsonrpc !== '2.0') return;
-  if (message.method === undefined) {
+  const invalid = validate(message);
+  if (invalid) {
+   if (!isObject(message)) return;
+   // A response (including a mixed request/response) must never resolve a call or execute a reverse handler.
+   const response = !has(message, 'method') || has(message, 'result') || has(message, 'error');
+   const waiting = has(message, 'id') && isId(message.id) && response && this.pending.get(message.id);
+   if (waiting) {
+    this.pending.delete(message.id);
+    waiting.reject(new BackendError({ code: 'protocol_error', message: invalid.message }));
+   } else if (has(message, 'method') && has(message, 'id')) {
+    this.replyError(isId(message.id) ? message.id : null, invalid.code, invalid.message);
+   }
+   // Uncorrelated response-only envelopes and malformed notifications are ignored.
+   return;
+  }
+  if (!has(message, 'method')) {
    const waiting = this.pending.get(message.id);
    if (!waiting) return;
    this.pending.delete(message.id);
-   if (message.error) waiting.reject(fromRpc(message.error));
+   if (has(message, 'error')) waiting.reject(fromRpc(message.error));
    else waiting.resolve(message.result);
    return;
   }
-  if (message.id === undefined || message.id === null) {
-   if (message.method === '$/cancelRequest') this.incoming.get(message.params?.id)?.abort();
-   else if (this.available && typeof message.method === 'string' && (message.params === undefined || message.params && typeof message.params === 'object' && !Array.isArray(message.params))) this.emit(message.method, message.params || {});
+  if (!has(message, 'id')) {
+   if (message.method === '$/cancelRequest') {
+    if (isId(message.params?.id)) this.incoming.get(message.params.id)?.abort();
+   } else if (this.available) this.emit(message.method, message.params || {});
    return;
   }
+  if (!this.available) { this.replyError(message.id, -32000, 'No backend is connected.', 'backend_unavailable'); return; }
   this.answer(message);
+ }
+
+ replyError(id, code, message, appCode = rpcCode(code)) {
+  this.send({ jsonrpc: '2.0', id, error: { code, message, data: { code: appCode, message } } });
  }
 
  async answer({ id, method, params }) {
   const handler = this.handlers.get(method);
   if (!handler) {
-   this.send({ jsonrpc: '2.0', id, error: { code: -32601, message: `Method not found: ${method}` } });
+   this.replyError(id, -32601, `Method not found: ${method}`);
    return;
   }
   // An id still being answered is not taken again: its handler would run twice, and one answer would take the other's place.
   if (this.incoming.has(id)) {
    const message = `Request ${id} is already being answered`;
-   this.send({ jsonrpc: '2.0', id, error: { code: -32600, message, data: { code: 'duplicate_request', message } } });
+   this.replyError(id, -32600, message, 'duplicate_request');
    return;
   }
   const controller = new AbortController();
@@ -223,7 +250,7 @@ class BackendClient {
   } catch (error) {
    if (this.incoming.get(id) !== controller) return;
    const code = error instanceof BackendError ? error.code : error?.name === 'AbortError' ? 'cancelled' : 'unknown';
-   this.send({ jsonrpc: '2.0', id, error: { code: -32000, message: error?.message || code, data: { code, message: error?.message || code } } });
+   this.replyError(id, code === 'unsupported' ? -32601 : code === 'invalid_request' ? -32602 : -32000, error?.message || code, code);
   } finally {
    if (this.incoming.get(id) === controller) this.incoming.delete(id);
   }

@@ -39,7 +39,7 @@ function backend({ exists = true, recovery = true } = {}) {
     (async () => {
      const p = request.params;
      switch (request.method) {
-      case 'initialize': return { capabilities: { sessions: { recovery: state.recovery } } };
+      case 'initialize': return { protocolVersion: '0.1', capabilities: { sessions: { recovery: state.recovery } } };
       case 'session.get': {
        state.gets++;
        const result = state.exists ? { exists: true, sessionVersion: state.version, revision: state.revision,
@@ -83,7 +83,7 @@ async function page(storage, server) {
   I18n: { t: key => key }, Usage: { record() {}, parts: () => null },
  });
  window.window = window;
- for (const file of ['backend-client.js', 'library.js', 'chat.js']) vm.runInContext(fs.readFileSync(path.join(ROOT, file), 'utf8'), window, { filename: file });
+ for (const file of ['backend-protocol.js', 'backend-client.js', 'library.js', 'chat.js']) vm.runInContext(fs.readFileSync(path.join(ROOT, file), 'utf8'), window, { filename: file });
  // Replace rendering only; session ownership, load, send, streaming, drive/end and Library persistence are real.
  Object.assign(window.Chat.prototype, {
   followBottom() {}, stopFollow() {}, pin() {}, syncBottom() {},

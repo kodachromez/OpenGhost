@@ -25,10 +25,10 @@ function paddedLine(bytes, value = message) {
 }
 
 function outgoing(bytes, character = 'x') {
- const value = { jsonrpc: '2.0', method: 'send', params: '' };
+ const value = { jsonrpc: '2.0', method: 'send', params: { text: '' } };
  const room = bytes - Buffer.byteLength(JSON.stringify(value));
  const width = Buffer.byteLength(character);
- value.params = character.repeat(Math.floor(room / width)) + 'x'.repeat(room % width);
+ value.params.text = character.repeat(Math.floor(room / width)) + 'x'.repeat(room % width);
  return value;
 }
 

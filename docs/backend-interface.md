@@ -32,7 +32,8 @@ The host starts a backend only when one is configured, in this order:
 With neither, nothing is started: the UI works, and a message gets "No backend is connected" in the chat.
 
 The process starts in the user's home folder with the app's environment. **stdout carries protocol only**; logs go to
-stderr, which the host prints with a `[backend]` prefix. A line that isn't a JSON-RPC 2.0 object is dropped and logged.
+stderr, which the host prints with a `[backend]` prefix. Non-JSON lines are dropped and logged. Parsed values reach the
+renderer RPC peer for envelope validation, so a malformed response with a matching ID can fail its call immediately.
 Lines are limited to 64 MiB of UTF-8 bytes, excluding LF but including whitespace/CR. Oversized input is discarded
 through its next newline before decoding or parsing. Outbound messages have the same limit; the host rejects sends
 that would exceed 64 MiB + 1 byte in Node's stdin write queue (including newlines). Accepted writes drain in order;
@@ -45,6 +46,16 @@ behind in its session (on POSIX the backend leads a session of its own). A page 
 
 JSON-RPC 2.0. Requests have an `id`, notifications don't, and **both sides send requests**. Either side may cancel a
 request it sent with the notification `$/cancelRequest { id }`. A cancelled request is still answered.
+
+Envelopes are validated before dispatch: one non-array object with `jsonrpc:'2.0'`, a string method for requests/events,
+optional object (not array/null) `params`, and string or safe-integer IDs. IDs match exactly, including type; there is no
+coercion. Responses require an ID and exactly one of `result` (including `null`) or `error` (object with integer `code`
+and string `message`), with no method/params. A null ID is accepted only for uncorrelated RPC errors and is ignored.
+Batches, malformed notifications and uncorrelatable responses are ignored without dispatch. Malformed responses with
+a matching ID reject locally as `protocol_error`; unknown/late IDs never settle another call. Identifiable malformed
+reverse requests receive `-32600`/`invalid_request`, or `-32602`/`invalid_request` for non-object params, without running
+a handler. An invalid request ID is returned as null. Outbound host sends use the same envelope validator.
+
 The client gives up on any request it sent, `initialize` included, that goes unanswered for 60 seconds (15 minutes for
 `auth.login`, 10 for `session.compact`): it fails locally with `timeout`, the client sends `$/cancelRequest`, and the
 late answer is ignored.
@@ -62,8 +73,12 @@ type AbpError = {
 }
 ```
 
-The client adds two codes of its own: `backend_unavailable` (no backend, or not initialized) and `backend_crashed`
-(the process exited while something was waiting for it). JSON-RPC `-32601` (method not found) becomes `unsupported`.
+Local errors include `backend_unavailable` (no backend, or not initialized), `backend_crashed` (the process exited
+while something was waiting), `timeout`, and `protocol_error` (a malformed correlated response). Without a named ABP
+error, JSON-RPC `-32601` becomes `unsupported`, `-32700`/`-32600`/`-32602` become `invalid_request`, and other codes become
+`unknown`. Named ABP errors are preserved. Reverse handlers throwing `unsupported` or `invalid_request` use `-32601`
+or `-32602`; other execution errors remain `-32000` with their ABP code (or `unknown` for an ordinary exception).
+Successful tool results with `isError:true` are unchanged.
 
 ## Handshake
 
@@ -86,8 +101,9 @@ initialize({
 }
 ```
 
-Until `initialize` succeeds every request fails with `backend_unavailable`. The frontend checks these capabilities
-(anything not listed is read as false):
+The initialize result must be an object with `protocolVersion:'0.1'`; missing/malformed or unsupported versions leave
+the client unavailable. Until negotiation succeeds, outbound and reverse requests fail with `backend_unavailable`.
+The frontend checks these capabilities (anything not listed is read as false):
 
 | Capability | What the frontend does with it |
 |---|---|

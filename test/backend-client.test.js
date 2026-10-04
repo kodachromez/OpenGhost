@@ -166,7 +166,7 @@ test('a backend that comes back is greeted again', async () => {
  await tick();
  const init = transport.last();
  assert.equal(init.method, 'initialize');
- transport.deliver({ id: init.id, result: { capabilities: { titles: true } } });
+ transport.deliver({ id: init.id, result: { protocolVersion: '0.1', capabilities: { titles: true } } });
  await tick();
  assert.equal(Backend.available, true);
  assert.equal(Backend.can('titles'), true);

@@ -10,6 +10,7 @@
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+const { validate } = require('../backend-protocol');
 
 // UTF-8 bytes per line, excluding LF (but including any whitespace/CR), in either direction.
 const MAX_LINE = 64 * 1024 * 1024;
@@ -84,8 +85,6 @@ function configured({ env = process.env, userData = '' } = {}) {
  }
  return parseCommand(saved?.command);
 }
-
-const isMessage = value => !!value && typeof value === 'object' && !Array.isArray(value) && value.jsonrpc === '2.0';
 
 class BackendHost {
  constructor({ command = null, cwd, onMessage = () => {}, onStatus = () => {}, log = console } = {}) {
@@ -180,15 +179,16 @@ class BackendHost {
     this.log.error(`[backend] not a JSON line: ${line.slice(0, 200)}`);
     continue;
    }
-   if (isMessage(message)) this.onMessage(message);
-   else this.log.error(`[backend] not a JSON-RPC 2.0 message: ${line.slice(0, 200)}`);
+   // The RPC peer must see malformed envelopes too, so it can reject a matching call or answer an invalid request.
+   // This host only frames JSON; it never dispatches methods.
+   this.onMessage(message);
   }
  }
 
  // False means rejected (unavailable, invalid, oversized or queue full); never retained for a later retry.
  send(message) {
   const stdin = this.child?.stdin;
-  if (!stdin?.writable || stdin.writableLength >= MAX_PENDING || !isMessage(message)) return false;
+  if (!stdin?.writable || stdin.writableLength >= MAX_PENDING || validate(message)) return false;
   const line = JSON.stringify(message);
   const bytes = Buffer.byteLength(line, 'utf8');
   if (bytes > MAX_LINE || stdin.writableLength + bytes + 1 > MAX_PENDING) return false;

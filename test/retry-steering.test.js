@@ -34,9 +34,9 @@ async function setup(t) {
   matchMedia: () => ({ matches: true }), I18n: { t: key => key, has: () => false }, Usage: { parts: () => null },
  });
  window.window = window;
- for (const file of ['backend-client.js', 'chat.js']) vm.runInContext(fs.readFileSync(path.join(ROOT, file), 'utf8'), window, { filename: file });
+ for (const file of ['backend-protocol.js', 'backend-client.js', 'chat.js']) vm.runInContext(fs.readFileSync(path.join(ROOT, file), 'utf8'), window, { filename: file });
  await tick();
- transport.deliver({ id: transport.last().id, result: { capabilities: { sessions: { recovery: true } } } });
+ transport.deliver({ id: transport.last().id, result: { protocolVersion: '0.1', capabilities: { sessions: { recovery: true } } } });
  const Backend = window.Backend;
  await Backend.ready;
  t.after(() => Backend.close({ state: 'exited' }));

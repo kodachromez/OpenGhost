@@ -28,14 +28,14 @@ async function setup({ reduced = true, loaded = true } = {}) {
   openghost: { platform: 'linux', releaseFolder: async path => released.push(path) },
  });
  window.window = window;
- for (const file of ['backend-client.js', 'library.js', 'chat.js', 'chat-list.js']) {
+ for (const file of ['backend-protocol.js', 'backend-client.js', 'library.js', 'chat.js', 'chat-list.js']) {
   vm.runInContext(fs.readFileSync(path.join(ROOT, file), 'utf8'), window, { filename: file });
  }
  const transport = fakeTransport(), explain = window.Backend.explain;
  window.Backend = new window.BackendClient(transport);
  window.Backend.explain = explain;
  await tick();
- transport.deliver({ id: transport.last().id, result: { capabilities: { sessions: { delete: true, side: true } } } });
+ transport.deliver({ id: transport.last().id, result: { protocolVersion: '0.1', capabilities: { sessions: { delete: true, side: true } } } });
  await window.Backend.ready;
  const records = [
   { id: 'a', folder: '/project' }, { id: 'b', folder: '/project' },

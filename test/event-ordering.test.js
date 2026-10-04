@@ -24,7 +24,7 @@ function setup() {
   I18n: { t: key => key },
  });
  window.window = window;
- for (const file of ['backend-client.js', 'chat.js']) vm.runInContext(fs.readFileSync(path.join(ROOT, file), 'utf8'), window, { filename: file });
+ for (const file of ['backend-protocol.js', 'backend-client.js', 'chat.js']) vm.runInContext(fs.readFileSync(path.join(ROOT, file), 'utf8'), window, { filename: file });
  window.Backend.request = async () => ({});
  const chat = Object.create(window.Chat.prototype);
  Object.assign(chat, {

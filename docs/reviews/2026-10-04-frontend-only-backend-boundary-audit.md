@@ -255,6 +255,8 @@ An empty/malformed approval presentation object suppresses the JSON-arguments fa
 
 **Recommendation:** validate envelopes, negotiated protocol, known message payloads, and host command parameters before dispatch; define application errors vs RPC errors; cap presentation sizes while preserving accessible full details. Unknown tool names should remain displayable, not executable by frontend fallback.
 
+**Resolution (envelope/protocol scope):** shared validation now checks envelope kind, named params, safe IDs and exclusive result/error shapes before dispatch; malformed correlated responses fail with `protocol_error`, while unknown/mismatched IDs and malformed notifications are ignored. Reverse envelope/params failures use `-32600`/`-32602` with `invalid_request`; unknown methods remain `-32601`/`unsupported`, and named ABP errors are preserved. Only negotiated `protocolVersion:'0.1'` enables traffic. Focused coverage: `test/backend-envelope.test.js`, client/transport regressions and valid-traffic integration checks. Browser argument schemas, approval presentation limits and uncorrelatable parse/size failures are unchanged.
+
 ### F16 — MEDIUM: browser lifecycle/results are not deterministic enough for unconstrained agent scheduling
 
 **Evidence:** `host-tools.js`; `browser-panel.js:218–278,484–568`; `desktop/browser.js:101–108,154–205,288–347,406–435,484–623`.

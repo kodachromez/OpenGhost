@@ -36,7 +36,7 @@ function load() {
  };
  window.HostTools = { has: () => true, result: (args, answer) => ({ content: [{ type: 'text', text: answer?.text || '' }] }) };
  window.I18n = { t: key => key, has: () => true };
- for (const file of ['backend-client.js', 'chat.js']) vm.runInContext(fs.readFileSync(path.join(ROOT, file), 'utf8'), window, { filename: file });
+ for (const file of ['backend-protocol.js', 'backend-client.js', 'chat.js']) vm.runInContext(fs.readFileSync(path.join(ROOT, file), 'utf8'), window, { filename: file });
  return { window, cards, ran, cancelled };
 }
 
