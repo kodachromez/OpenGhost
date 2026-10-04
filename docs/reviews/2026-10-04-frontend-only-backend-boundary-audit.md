@@ -297,6 +297,8 @@ Existing transcripts are returned and re-saved wholesale, not projected to a dis
 
 **Recommendation:** keep render syntax/examples, move behavioral prompting to the backend. Define an explicit legacy display migration/projection and supported retention policy instead of quietly retaining arbitrary model-facing history. Do not revive the old backend to open these chats.
 
+**Resolution:** Render guidance now describes syntax/capabilities only; removed visualization mandates, answer/layout preferences, media-sourcing rules and file-listing policy without adding frontend agent policy. Main/mini and sealed chats use an allowlisted display projection on read/save, migrating legacy image slots and uncounted-reply stats while dropping provider history and malformed fields; required recovery IDs remain. The supported lazy migration is documented in `docs/frontend-only.md`. Validation: `node --test test/legacy-display.test.js test/session-recovery.test.js` — 17 passed.
+
 ### F19 — LOW: residual frontend token estimate and provider-specific presentation defaults
 
 **Evidence:** `settings-general.js:10,17–19,131`; `user-context.js:8–15`; `settings-usage.js:9–10,31`; `settings.js:4,91`.

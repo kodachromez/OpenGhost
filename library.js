@@ -32,6 +32,76 @@ function spaceName(title) {
  return name;
 }
 
+// Saved chats are display caches, never backend history. This allowlist is also the legacy reader:
+// only image_url slots and the presence of old steps are needed from model-shaped data.
+const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+const array = value => Array.isArray(value) ? value : [];
+const count = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
+function fields(value, strings = [], numbers = []) {
+ const out = {};
+ for (const key of strings) if (typeof value?.[key] === 'string') out[key] = value[key];
+ for (const key of numbers) if (count(value?.[key])) out[key] = value[key];
+ return out;
+}
+const usageKeys = ['input', 'cached', 'written', 'output', 'requests'];
+const usageOf = value => fields(value, [], usageKeys);
+
+function displayStats(value) {
+ const out = fields(value, [], ['version', 'uncounted']);
+ if (Array.isArray(value?.models)) out.models = value.models.filter(object).map(model => ({
+  input: 0, cached: 0, written: 0, output: 0, requests: 0, ...fields(model, ['id', 'name'], usageKeys),
+ }));
+ if (Array.isArray(value?.turns)) out.turns = value.turns.filter(object).map(turn => ({ m: 0, t: 0, c: 0, ...fields(turn, [], ['m', 't', 'c']) }));
+ if (object(value?.mini)) out.mini = { input: 0, cached: 0, written: 0, output: 0, requests: 0, ...usageOf(value.mini) };
+ if (object(value?.context)) out.context = { used: 0, window: 0, ...fields(value.context, [], ['used', 'window']) };
+ return out;
+}
+
+function displayAttachments(entry) {
+ // Keep invalid image slots empty rather than shifting later images onto the wrong attachment.
+ const urls = array(entry.content).filter(part => part?.type === 'image_url').map(part => typeof part.image_url?.url === 'string' ? part.image_url.url : '');
+ let image = 0;
+ return array(entry.attachments).filter(item => object(item) && typeof item.name === 'string').map(item => {
+  const out = fields(item, ['name', 'note'], ['size', 'width', 'height']);
+  out.image = item.image === true || item.kind === 'image';
+  if (out.image) {
+   const legacy = urls[image++];
+   const url = [item.url, item.dataUrl, legacy].find(value => typeof value === 'string' && value);
+   if (url) out.url = url;
+  }
+  if (object(item.pasted)) out.pasted = fields(item.pasted, ['preview'], ['lines']);
+  if (object(item.video)) out.video = fields(item.video, ['poster'], ['duration']);
+  return out;
+ });
+}
+
+function displayMessages(messages) {
+ return array(messages).flatMap(entry => {
+  if (!object(entry) || !['user', 'assistant', 'compact', 'stats', 'moved'].includes(entry.role)) return [];
+  const out = { role: entry.role };
+  if (entry.role === 'stats') return [{ ...out, stats: displayStats(entry.stats) }];
+  if (entry.role === 'moved') return [out];
+  // These IDs/flags are frontend recovery checkpoints, not model requests or provider-native history.
+  Object.assign(out, fields(entry, ['backendTurn', 'clientInputId']));
+  if (entry.pendingTurn === true) out.pendingTurn = true;
+  if (entry.role === 'user') {
+   out.text = typeof entry.text === 'string' ? entry.text : typeof entry.content === 'string' ? entry.content : '';
+   if (typeof entry.content === 'string') out.content = out.text;
+   Object.assign(out, fields(entry, ['inputError']));
+   if (Array.isArray(entry.attachments)) out.attachments = displayAttachments(entry);
+  } else {
+   Object.assign(out, fields(entry, ['model']));
+   if (object(entry.usage)) out.usage = usageOf(entry.usage);
+   if (entry.role === 'assistant') {
+    out.content = typeof entry.content === 'string' ? entry.content : '';
+    if (typeof entry.turn === 'string' || count(entry.turn)) out.turn = entry.turn;
+    if (!out.usage && (entry.uncounted === true || array(entry.steps).length)) out.uncounted = true;
+   }
+  }
+  return [out];
+ });
+}
+
 class Library {
  constructor(store, onChange) {
   this.store = store;
@@ -239,14 +309,14 @@ class Library {
  async conversation(id) {
   const data = await this.store.read(`chats/${id}`).catch(() => null);
   const body = data?.sealed ? await ChatLock.open(this.keys.get(id), data.sealed) : data;
-  return { messages: Array.isArray(body?.messages) ? body.messages : [], tokens: Number(body?.tokens) || 0 };
+  return { messages: displayMessages(body?.messages), tokens: count(body?.tokens) ? body.tokens : 0 };
  }
 
  // A protected chat is sealed with the key it has when the save is asked for, so locking right after a reply loses nothing.
  saveMessages(id, messages, tokens = 0, { required = false } = {}) {
   const chat = this.chat(id), key = chat?.lock ? this.keys.get(id) : null;
   if (!chat || (chat.lock && !key)) return required ? Promise.reject(new Error('Cannot save the session recovery checkpoint.')) : Promise.resolve();
-  const body = structuredClone({ messages, tokens });
+  const body = { messages: displayMessages(messages), tokens: count(tokens) ? tokens : 0 };
   return this.queue(id, async () => this.store.write(`chats/${id}`, key ? { version: 1, sealed: await ChatLock.seal(key, body) } : { version: 1, ...body }), required);
  }
 
@@ -257,14 +327,14 @@ class Library {
   return this.queue(id, async () => {
    const data = await this.store.read(`mini/${id}`).catch(() => null);
    const body = data?.sealed ? await ChatLock.open(this.keys.get(id), data.sealed) : data;
-   return { messages: Array.isArray(body?.messages) ? body.messages : [], tokens: Number(body?.tokens) || 0, seen: Number(body?.seen) || 0 };
+   return { messages: displayMessages(body?.messages), tokens: count(body?.tokens) ? body.tokens : 0, seen: count(body?.seen) ? body.seen : 0 };
   }).then(body => body || { messages: [], tokens: 0, seen: 0 });
  }
 
  saveSide(id, { messages, tokens = 0, seen = 0 }, { required = false } = {}) {
   const chat = this.chat(id), key = chat?.lock ? this.keys.get(id) : null;
   if (!chat || (chat.lock && !key)) return required ? Promise.reject(new Error('Cannot save the session recovery checkpoint.')) : Promise.resolve();
-  const body = structuredClone({ messages, tokens, seen });
+  const body = { messages: displayMessages(messages), tokens: count(tokens) ? tokens : 0, seen: count(seen) ? seen : 0 };
   return this.queue(id, async () => this.store.write(`mini/${id}`, key ? { version: 1, sealed: await ChatLock.seal(key, body) } : { version: 1, ...body }), required);
  }
 
@@ -278,7 +348,8 @@ class Library {
   try {
    const data = await this.store.read(`mini/${id}`);
    if (!data || !!data.sealed === !!key) return;
-   const body = data.sealed ? await ChatLock.open(this.keys.get(id), data.sealed) : { messages: data.messages, tokens: data.tokens, seen: data.seen };
+   const source = data.sealed ? await ChatLock.open(this.keys.get(id), data.sealed) : data;
+   const body = { messages: displayMessages(source?.messages), tokens: count(source?.tokens) ? source.tokens : 0, seen: count(source?.seen) ? source.seen : 0 };
    await this.store.write(`mini/${id}`, key ? { version: 1, sealed: await ChatLock.seal(key, body) } : { version: 1, ...body });
   } catch {}
  }
@@ -312,7 +383,7 @@ class Library {
     throw error;
    }
    done = true;
-   await this.store.write(`chats/${id}`, { version: 1, sealed: await ChatLock.seal(key, { messages: body.messages, tokens: body.tokens }) });
+   await this.store.write(`chats/${id}`, { version: 1, sealed: await ChatLock.seal(key, { messages: displayMessages(body.messages), tokens: count(body.tokens) ? body.tokens : 0 }) });
    await this.reseal(id, key);
   });
   this.changed();
@@ -348,7 +419,7 @@ class Library {
   let done = false;
   await this.queue(id, async () => {
    const body = loaded || await this.conversation(id);
-   await this.store.write(`chats/${id}`, { version: 1, messages: body.messages, tokens: body.tokens });
+   await this.store.write(`chats/${id}`, { version: 1, messages: displayMessages(body.messages), tokens: count(body.tokens) ? body.tokens : 0 });
    await this.reseal(id, null);
    chat.title = this.titles.get(id) ?? '';
    delete chat.lock;

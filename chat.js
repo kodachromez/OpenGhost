@@ -53,12 +53,12 @@ function combine(inputs) {
 }
 
 // A pasted text keeps only its first line and length here; the text itself went to the backend with the message.
-// A picture keeps itself, to be shown again when the chat opens; a video its place on the disk and the frame its card shows.
+// A picture keeps itself, to be shown again when the chat opens; a video keeps its duration and preview frame.
 const slim = ({ name, size, image, width, height, note, pasted, payload }) => ({
  name, size, image: !!image, width, height, note,
  url: image && payload?.type === 'image' ? payload.url : undefined,
  pasted: pasted && { preview: pasted.preview, lines: pasted.lines },
- video: payload?.type === 'video' ? { path: payload.path, duration: payload.duration, poster: payload.poster } : undefined,
+ video: payload?.type === 'video' ? { duration: payload.duration, poster: payload.poster } : undefined,
 });
 function splitQuotes(text) {
  const quotes = [];
@@ -1278,7 +1278,7 @@ class Chat {
  openPart(conv, turn, view = null) {
   view ||= this.assistantMessage(conv);
   if (!view.el.isConnected) conv.list.append(view.el);
-  // Each part of a reply notes the model that wrote it, for the chat's stats and for a model that later takes over.
+  // Each part of a reply notes the model that wrote it, for the chat's stats.
   const entry = { role: 'assistant', content: '', turn: turn.id, model: turn.config.id, backendTurn: turn.id };
   conv.messages.push(entry);
   view.el.__entry = entry;
@@ -1447,7 +1447,7 @@ class Chat {
    if (entry.role !== 'assistant' && entry.role !== 'compact') continue;
    const turn = entry.role === 'assistant' ? entry.turn || entry : null;
    if (!entry.usage) {
-    if (turn && entry.steps?.length) uncounted.add(turn);
+    if (turn && entry.uncounted) uncounted.add(turn);
     continue;
    }
    const model = entry.model || this.modelOf(conv);
@@ -1534,11 +1534,9 @@ class Chat {
  }
 
  promptOf(entry) {
-  // A picture is kept with its message; chats from before 1.3.0's frontend-only build kept it in what the model was sent.
-  const urls = Array.isArray(entry.content) ? entry.content.filter(part => part.type === 'image_url').map(part => part.image_url.url) : [];
-  let k = 0;
+  // Library projects legacy images onto display attachments before they reach the renderer.
   const attachments = (entry.attachments || []).map(item => ({
-   ...item, info: FileKinds.describe(item.name), url: item.image ? item.url || urls[k++] || '' : item.video?.poster || '', duration: item.video?.duration || 0,
+   ...item, info: FileKinds.describe(item.name), url: item.image ? item.url || '' : item.video?.poster || '', duration: item.video?.duration || 0,
   }));
   return { text: entry.text || '', attachments };
  }

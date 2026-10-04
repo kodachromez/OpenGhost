@@ -60,8 +60,17 @@ No backend tests existed on `main` to remove (it had no tests at all).
   `tools.js`; new IPC `backend:*`, `browser:run`/`browser:cancel` (host tools), `media:video-info` (YouTube oEmbed only).
 - `desktop/browser.js`, `desktop/pdf.js`, `desktop/browser-preload.js`: unchanged.
 
-Saved chats now hold a display copy only (text, attachments with their preview, model, usage, compaction markers, stats
-cards). Chats saved by 1.3.0 still open: their model-facing parts are ignored, and pictures are still found in them.
+Saved chats hold a display copy only. `library.js` projects main and mini chats on read and every write (including
+sealed saves and lock changes), retaining user/assistant text, attachment previews and metadata, reply grouping,
+model labels and numeric usage, compaction/stats/moved markers. `backendTurn`, `clientInputId`, `pendingTurn` and
+`inputError` remain only for recovery and input-status display; the cache is never imported as backend history.
+
+The version-1/1.3.0 display reader remains supported: legacy `content[].image_url.url` slots migrate to named image
+attachments, and nonempty assistant `steps` without usage become an `uncounted` flag for stats. Only those legacy
+fields are inspected; tool/system messages, provider-native blocks, reasoning, cache hints, compaction summaries and
+raw attachment payloads are discarded. Malformed entries/fields are skipped or rendered empty, not interpreted as
+provider messages. Reads do not rewrite the source; the next save persists only the projection, with no model-history
+round trip or old-backend dependency.
 
 ## What can still reach the network
 
@@ -86,8 +95,8 @@ isolation or exercise live provider endpoints.
 - **Approval presentation.** 1.3.0 worked out a command's effect (delete, install, …) in the app as a safety net. That
   analysis was tied to the removed tools' names (`run_bash`, `write_file`, …) and was removed with them; a backend must
   send `presentation` or the card falls back to the tool name and its JSON arguments.
-- **Storage keys.** The effort preference is still stored under `deepseek.effort`, and saved chats from 1.3.0 still
-  contain their old model-facing history, which nothing reads now.
+- **Storage keys.** The effort preference is still stored under `deepseek.effort`. Untouched 1.3.0 files can still
+  contain old model-facing history; the display migration above removes it on save.
 - **Provider colors.** Settings → Usage keeps 1.3.0's colors for the provider ids it knew (`chatgpt`, `openai`,
   `anthropic`, `deepseek`, plus `openai-codex`); other providers take the palette in turn.
 - **Frontend-held policy that a backend may want.** The chat folder for chats without a project
