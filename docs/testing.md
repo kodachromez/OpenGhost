@@ -2,7 +2,7 @@
 
 Use focused tests during normal development. The test files, [package scripts](../package.json), and [build workflow](../.github/workflows/build.yml) define the available checks; there is no separate lint, typecheck, or coverage script.
 
-All commands below run from the repository root. Use Node 22, as CI does. The standalone Electron scripts depend on Node's built-in `fetch` and `WebSocket`. Run `npm ci` when the locked Electron/build dependencies need installing; it is setup, not a test.
+All commands below run from the repository root. Use Node 22.12 or newer; CI uses Node 22. The standalone Electron scripts depend on Node's built-in `fetch` and `WebSocket`. Run `npm ci` when the locked Electron/build dependencies need installing; it is setup, not a test.
 
 ## Quick commands
 
@@ -105,7 +105,7 @@ Add `cancellation.test.js` and `turn-identity.test.js` when the change touches c
 | Subprocess lifecycle and JSON lines in `desktop/backend-host.js` | `backend-host.test.js` | Real scripted subprocess traffic, reinitialize/recovery and deduplication, split/non-JSON lines, malformed envelopes reaching the client, spawn failure, crash status, graceful shutdown, and descendant cleanup. |
 | Framing and outbound flow control in `desktop/backend-host.js` | `backend-transport.test.js` | The 64 MiB UTF-8 byte boundary, split multibyte characters, oversized-line discard/resynchronization, outbound limits, bounded backpressure, and FIFO drain using a controlled writable stream. |
 
-Transport limit tests allocate large buffers; they are not necessary for a label or layout edit. Process-tree assertions read Linux `/proc` and skip on other platforms. The POSIX symlink/path-resolution case in `backend-config.test.js` skips on Windows; parser tests still cover Windows-shaped paths.
+Transport limit tests allocate large buffers; reserve their focused runs for transport changes. Process-tree assertions read Linux `/proc` and skip on other platforms. The POSIX symlink/path-resolution case in `backend-config.test.js` skips on Windows; parser tests still cover Windows-shaped paths.
 
 ### Security and regression checks
 
@@ -203,7 +203,7 @@ The screenshots are build/startup aids, not asserted UI tests. Workflow artifact
 
 ## When to broaden the checks
 
-- **Normal focused change:** run the relevant Node file(s) from the map. Add neighboring ownership/lifecycle tests if the change crosses modules. Do not run transport stress tests or package the app merely to edit presentation text.
+- **Normal focused change:** run the relevant Node file(s) from the map. Add neighboring ownership/lifecycle tests if the change crosses modules. For code changes, finish with `npm test` as described in the [development guide](development.md#important-npm-scripts-and-checks); do not package the app merely to edit presentation text.
 - **DOM, preload/IPC, startup, or webview integration:** add the relevant real-Electron script when mocks cannot establish the behavior. A pure browser change may need the browser script without the application smoke test; a catalog/startup change may need smoke without browser lifecycle checks.
 - **Shared/cross-cutting change:** use `npm test` when touching common client/event/storage contracts, script loading, shared helpers, dependencies, or several subsystems, and for broader release validation. This is the full Node suite, not all available Electron checks.
 - **Packaging/runtime/release change:** build when changing Electron/build versions, packaging files/entry points, icons/platform configuration, or preparing/verifying a distributable. Use packaged smoke when validating packaged behavior. Ordinary renderer logic, CSS, and documentation work does not inherently require a build.

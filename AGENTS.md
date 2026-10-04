@@ -119,7 +119,7 @@ Rendering goes through `StreamView` -> `Markdown`, then local `Diagram`, `Tex`, 
 - Stop aborts locally at once, denies pending approvals, cancels browser steps/waits, and requests `turn.cancel` when the remote ID is known. Late text/tools/completion must not revive the turn.
 - Inputs sent during a normal turn use serialized `turn.steer` calls in user input order, even if attachments finish in another order. RPC acceptance is not the placement event: `input.accepted` moves the bubble into the reply. Rejected/unconfirmed inputs stay visible with an error and are not automatically resent.
 - Inputs during manual compaction or a model switch wait, then are combined in order into a new `turn.start` input. This is not ordinary steering.
-- Retry before dispatch can reuse the original input/preparation context held in memory. After an uncertain dispatch it must reconcile first. An accepted failed turn is retried with `turn.retry` naming the exact `failedTurnId` and matching session incarnation. Respect `retryable: false`, `action: 'none'`, and invalid-request errors.
+- Main-chat Retry before dispatch can reuse the original input/preparation context held in memory. After an uncertain dispatch it must reconcile first. An accepted failed turn is retried with `turn.retry` naming the exact `failedTurnId` and matching session incarnation. Respect `retryable: false`, `action: 'none'`, and invalid-request errors.
 - Manual compaction requires `compaction.manual` and a recovered, idle chat with history. `session.compact` and model-switch `session.configure` carry a client operation identity for their compaction/usage events. The backend decides what to summarize and whether switching requires compaction.
 
 ## Persistence, recovery, locking, and deletion
@@ -158,7 +158,7 @@ Read `Chat.reconcile`, `recoverTurn`, `checkpoint`, `onEvent`, and `end` togethe
 
 `chat-lock.js` supplies PBKDF2/AES-GCM; `Library` handles sealing titles and main/mini display caches; `lock-ui.js` supplies the controls/screens. Passwords are not stored; unlocked keys/titles live in memory. Leaving a protected chat relocks its view; an in-flight reply can finish saving before its cleartext state is dropped.
 
-This protects the **local view/display cache only**. It does not encrypt backend history, credentials, workspace files, browser state, standing instructions, or usage. Preserve the crash-safe ordering in `protect`/`unprotect` and use the display projection on sealed as well as plain saves. Do not promise a backend-history wipe or a password-recovery mechanism.
+This protects the **local view/display cache only**. It does not encrypt backend history, credentials, workspace files, browser state, standing instructions, or usage. Preserve the write ordering in `protect`/`unprotect` and use the display projection on sealed as well as plain saves. Protection changes are not transactional: a crash can leave lock metadata with plaintext messages, and mini-cache resealing is best-effort. Do not promise a backend-history wipe or a password-recovery mechanism.
 
 ### Deletion
 
@@ -272,7 +272,7 @@ Preserve the distinction between the app renderer's CSP and browser guests' netw
 
 ### Commands
 
-Run from the repository root. Node 22 is used by build automation; the standalone E2E scripts use built-in `fetch` and `WebSocket`. `npm ci` installs the locked Electron/build dependencies when setup is needed. There are no runtime npm dependencies.
+Run from the repository root. Locked build dependencies require Node 22.12 or newer; build automation uses Node 22. The standalone E2E scripts use built-in `fetch` and `WebSocket`. `npm ci` installs the locked Electron/build dependencies when setup is needed. There are no runtime npm dependencies.
 
 ```sh
 npm test                                  # node --test test/*.test.js

@@ -7,7 +7,7 @@ The frontend owns presentation, attachment preparation, local display caches and
 ## Prerequisites
 
 - Git and a checkout of this repository.
-- Node.js **22.12 or newer in the 22.x line**, with npm. The build workflow uses Node 22; locked build dependencies require at least 22.12. The Electron smoke harness also uses Node's built-in `fetch` and `WebSocket`.
+- Node.js **22.12 or newer**, with npm. The build workflow uses Node 22; locked build dependencies require at least 22.12. The Electron smoke harness also uses Node's built-in `fetch` and `WebSocket`.
 - A Linux environment that can run Electron, including its system libraries and sandbox support. Interactive development needs a graphical desktop; the E2E scripts launch Electron headlessly. The build workflow uses Ubuntu, but this repository does not specify a complete distro-by-distro system-package installation recipe.
 - Network access for `npm ci` and any packaging-tool downloads. Electron and electron-builder are development dependencies; there are no runtime npm dependencies.
 - For actual agent responses, a trusted executable implementing [the backend interface](backend-interface.md), including `sessions.recovery`. No backend, provider account or API key is needed for the Node tests or scripted smoke tests.
@@ -239,7 +239,7 @@ Follow `attachments.js` -> `attachment-reader.js`/`file-kinds.js` -> `chat.js` `
 
 Test picker/drop/paste, delayed preparation, notes, failed reads and reload previews with image, text, PDF, video and unsupported files. Preserve bounded extraction, image resizing and cleanup. PDF reading lives in `desktop/pdf.js`/`desktop/pdf.html` and extracts selectable text, not OCR. Video preparation supplies metadata/preview and a local path when available, not frontend video interpretation.
 
-Prepared backend input and saved display attachments are different shapes: `slim` and `Library.displayAttachments` retain previews, not complete inputs for later resend. If changing ABP attachment fields, update the contract too.
+Prepared backend input and saved display attachments are different shapes: `slim` in `chat.js` and `displayAttachments` in `library.js` retain previews, not complete inputs for later resend. If changing ABP attachment fields, update the contract too.
 
 Standing instructions/pinned files use `settings-general.js` and `user-context.js`, reusing the reader. These are saved snapshots, not watched files. Local character/file limits are storage/payload guardrails, not model token/context estimates. `UserContext.forBackend()` supplies structured context; prompt assembly remains in the backend.
 

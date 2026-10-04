@@ -1,6 +1,6 @@
 # OpenGhost-Frontend
 
-OpenGhost Frontend is an Electron desktop interface for external AI agent backends, available for Windows, macOS and Linux. It combines streaming chat, rich visual responses, local conversation management and a shared browser in a plain JavaScript, HTML and CSS interface.
+OpenGhost Frontend is an Electron desktop interface for external AI agent backends, with packaging targets for Windows, macOS and Linux. It combines streaming chat, rich visual responses, local conversation management and a shared browser in a plain JavaScript, HTML and CSS interface.
 
 **This repository is frontend-only.** It does not include an agent runtime or model-provider clients. A separately installed, compatible backend supplies the agent loop, provider integrations, authentication, model-facing session history and non-browser agent tools. The app launches without a backend, but generating responses requires one.
 
@@ -126,8 +126,11 @@ After changing configuration or resolving a backend failure, relaunch the app. T
 
 - [Backend interface](docs/backend-interface.md) — configuration, RPC methods, events, capabilities and session recovery.
 - [Browser host-tool lifecycle](docs/browser-host-tools.md) — browser targeting, user control, cancellation and result metadata.
-- [Frontend boundary notes](docs/frontend-only.md) — component ownership, persistence and networking details.
-- [Backend separation audit](docs/backend-removal-audit.md) and [boundary review](docs/reviews/2026-10-04-frontend-only-backend-boundary-audit.md) — historical design and review context, not the current protocol specification.
+- [Architecture](docs/architecture.md) — current component ownership, persistence and lifecycle.
+- [Development](docs/development.md) — setup, platform limits and contributor workflow.
+- [Testing](docs/testing.md) — available checks and coverage limits.
+- [Security](docs/security.md) — trust boundaries, protection scope and remaining limits.
+- [Frontend separation notes](docs/frontend-only.md), [backend separation audit](docs/backend-removal-audit.md) and [boundary review](docs/reviews/2026-10-04-frontend-only-backend-boundary-audit.md) — historical migration/design/review context, not current implementation or protocol specifications.
 
 ## License
 

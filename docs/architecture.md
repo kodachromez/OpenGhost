@@ -1,6 +1,6 @@
 # OpenGhost-Frontend architecture
 
-This document describes the current implementation on `frontend-only-rust-backend`, not a proposed redesign.
+This document describes the current frontend implementation, not a proposed redesign.
 OpenGhost is an Electron frontend connected to a separately configured, trusted local backend process. The
 frontend implements the client side of Agent Backend Protocol (ABP), protocol version `0.1`. It does not implement
 model/provider execution or an agent loop.
@@ -428,9 +428,10 @@ and `data` initial URLs. Browser permissions are limited to sanitized clipboard 
 The small guest preload reports only a site name when it observes password submission; it does not transmit the
 password. Automation still observes/acts on signed-in pages, so backend host-tool access is privileged.
 
-Main applies its `fromApp` check (window web contents and a `file:` sender-frame URL) to backend, browser, PDF,
-media, theme-changing and folder-release paths. Not every IPC handler uses that check: store and folder pick/reveal/
-location handlers rely on the exposed preload surface and their own argument handling. Store keys are constrained;
+Main applies its `fromApp` check (sender type `window` and a `file:` sender-frame URL) to backend, browser, PDF,
+media, theme-changing and folder-release paths. It does not match the exact app web contents or HTML URL.
+Not every IPC handler uses that check: store and folder pick/reveal/location handlers rely on the exposed preload
+surface and their own argument handling. Store keys are constrained;
 folder reveal and PDF reading are not restricted to the selected project root. The bridge is narrow, but is not a
 per-project filesystem permission system.
 
@@ -472,6 +473,6 @@ Lifecycle in [`desktop/main.js`](../desktop/main.js) and [`desktop/backend-host.
 - **Mini-chat asymmetry:** Clear does not await backend deletion. Also, `SideChat.resume(conv, config)` currently
   forwards only those two arguments, while `Chat.resume` requires a retry intent; the main-chat Retry path cannot
   be assumed to work identically in mini chats. These are current implementation limitations, not promised behavior.
-- **Browser schema detail:** the runtime snapshot/targeting fields described above are richer than the abbreviated
-  `BrowserState` shape in the general ABP document. Use the current browser implementation and lifecycle contract
-  for integration; tab positions and submission hints are not stable targets or authentication authority.
+- **Browser context:** [the ABP contract](backend-interface.md#host-tools) documents the full `BrowserState` emitted by
+  `BrowserPanel.snapshot()`. Tab positions and submission hints are not stable targets or authentication authority;
+  use stable tab/page identities as described in [Browser host-tool lifecycle](browser-host-tools.md).
