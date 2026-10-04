@@ -121,8 +121,8 @@ turn.cancel({ sessionId, turnId }) → null
 
 // Sessions
 session.get({ sessionId, clientTurnId?: string }) → SessionRecovery
-session.configure({ sessionId, sessionVersion: string, model?, provider?, thinking?, permissionMode? }) → { model, thinking, permissionMode }
-session.compact({ sessionId, sessionVersion: string }) → { ok: boolean }      // resolves when the compaction is over
+session.configure({ sessionId, sessionVersion: string, clientTurnId?, model?, provider?, thinking?, permissionMode? }) → { model, thinking, permissionMode }
+session.compact({ sessionId, sessionVersion: string, clientTurnId }) → { ok: boolean }      // resolves when the compaction is over
 session.delete({ sessionId }) → null
 
 type SessionParams = {
@@ -214,10 +214,18 @@ approval cards stay until the backend answers them with `approval.resolved`.
 
 ## Backend → client events (notifications)
 
-Every event carries `sessionId`; the frontend routes it to the chat window that holds that session and ignores events
-for sessions it doesn't have. Turn events carry `turnId` and are ignored unless they belong to the turn on screen (events
-that arrive before the frontend knows the turn's id are held until it does). Recovery-capable backends must send `seq`;
-the recovery snapshot's revision filters duplicate replay/live events. General live gap detection is not implemented.
+Every session event carries `sessionId` and a nonnegative safe-integer `seq`, strictly increasing within that session
+incarnation (including across turns). Retransmit an event with its original `seq`, never a new one. Missing/invalid,
+duplicate and backwards sequences are ignored, including live events; gaps are allowed, not repaired. Recovery replay
+has its own sequence gate, and the snapshot revision is the live boundary. Global auth/catalog/log notifications are
+exceptions. Notifications are delivered only while the client is ready; listener failures do not block other listeners.
+
+Turn events must name the accepted `turnId`. `turn.started` may bind it early only with the exact `clientTurnId` from
+start/retry; its ID must agree with the RPC response. Never reuse turn IDs or message IDs within a session incarnation.
+Message delta/completion and usage may omit `turnId` only when a known `messageId` identifies their owner. Up to 256
+ordered early events (including message-only deltas) wait for the start identity; overflow and unknown-message events
+are ignored. Standalone compact/model-switch requests carry `clientTurnId`: echo it, without `turnId`, on their
+compaction/usage events. Uncorrelated session-only usage/compaction is ignored, never assigned to the current turn.
 
 ```ts
 turn.started      { sessionId, turnId, clientTurnId }
@@ -226,11 +234,12 @@ message.delta     { sessionId, messageId, text }                 // appended
 message.completed { sessionId, messageId, text?, finishReason? } // text, when sent, replaces the message's text
 reasoning.delta   { sessionId, messageId, text }                 // ignored: 1.3.0 shows no reasoning
 tool.started      { sessionId, turnId, toolCallId, name, title? }// shows the ghost "working" status
-tool.progress / tool.completed                                   // ignored: 1.3.0 has no tool cards
+tool.progress     { sessionId, turnId, toolCallId, ... }           // no tool cards; ignored
+tool.completed    { sessionId, turnId, toolCallId, ... }           // seals the call; no tool cards
 approval.resolved { sessionId, turnId, approvalId, decision: 'allow' | 'deny' }   // settles a pending card
-compaction.started   { sessionId, turnId?, reason?: 'auto' | 'manual' | 'model-switch' }
-compaction.completed { sessionId, turnId?, ok: boolean }
-usage             { sessionId, turnId?, messageId?, provider, model, modelName?, input, cached, written, output,
+compaction.started   { sessionId, turnId?, clientTurnId?, reason?: 'auto' | 'manual' | 'model-switch' }
+compaction.completed { sessionId, turnId?, clientTurnId?, ok: boolean }
+usage             { sessionId, turnId?, messageId?, clientTurnId?, provider, model, modelName?, input, cached, written, output,
                     requests?, context?: { used, window } }
 input.accepted    { sessionId, turnId, clientInputId }           // a steered message joined the history
 session.updated   { sessionId, title? }                          // the chat's title, unless the user renamed it
@@ -244,13 +253,23 @@ How the UI uses them, in the same terms as 1.3.0:
 
 - A reply is a **part** in the chat. All messages of a turn go into the same part, separated by a blank line, until a
   steered message is accepted (`input.accepted`: the user's bubble joins the history and the reply goes on below it) or
-  a compaction starts mid-turn.
+  a compaction starts mid-turn. Each message keeps its own buffer and original part in start order; interleaving and
+  finalizing an earlier message are supported. A duplicate start never resets text. Deltas/finals before a message's
+  start are ignored; its first completion seals it (even without final text). A tool start is likewise idempotent and
+  cannot reopen a completed call.
+- `turn.completed` is terminal immediately: it freezes existing text even if some messages have not finalized.
+  Later text/tool/completion events are ignored, not allowed to reopen the turn. Send authoritative final text before
+  turn completion; no message-finalization wait is imposed on otherwise valid streams.
 - `finishReason` `length`, `content_filter` or `insufficient_system_resource` puts the matching note under the reply.
   A turn with no text gets "The model returned an empty response".
-- `usage` feeds the local usage ledger (Settings → Usage), the per-reply numbers of the stats card, and the context
-  fill shown in the plus menu (`context.used / context.window`).
-- **Stop** (button or Escape) ends the turn on screen at once, settles pending cards as denied, and sends `turn.cancel`.
-  Anything the backend still sends for that turn is ignored.
+- `usage` is incremental, deduplicated by `seq`. With `messageId`, it charges that message's original part; turn-only
+  usage charges the first reply part, and standalone compaction usage charges its summary. Unknown or conflicting
+  identities are ignored. The last 16 local turns retain accounting entry references until recovery/lock/unload;
+  correlated late usage after completion/Stop can still be counted and saved there, without reviving output or changing
+  the current context meter. Older/unrecognized accounting is ignored. The meter updates only from the active turn's
+  usage (`context.used / context.window`).
+- **Stop** (button or Escape) freezes output at once, settles pending cards as denied, and sends `turn.cancel`.
+  Only the correlated accounting exception above remains; session titles are session-scoped.
 - A message sent while a turn runs is sent with `turn.steer`, and any pending approval card is answered `deny` with
   `reason: 'superseded'`. Messages never accepted stay in the chat unanswered, as in 1.3.0. Messages sent during a
   manual compaction or a model switch start a new `turn.start` after it, joined into one input.

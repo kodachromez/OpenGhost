@@ -60,7 +60,6 @@ const slim = ({ name, size, image, width, height, note, pasted, payload }) => ({
  pasted: pasted && { preview: pasted.preview, lines: pasted.lines },
  video: payload?.type === 'video' ? { path: payload.path, duration: payload.duration, poster: payload.poster } : undefined,
 });
-const join = (base, text) => [base.trimEnd(), text.trim()].filter(Boolean).join('\n\n');
 function splitQuotes(text) {
  const quotes = [];
  let rest = text || '', m;
@@ -235,7 +234,7 @@ class Chat {
   this.settings.setModel(id);
   this.summarize(conv, turn, async () => {
    const config = this.config(conv);
-   await Backend.request('session.configure', { sessionId: this.sessionOf(conv), sessionVersion: conv.sessionVersion, model: config.model, provider: config.provider, thinking: config.effort }, { signal: turn.controller.signal });
+   await Backend.request('session.configure', { sessionId: this.sessionOf(conv), sessionVersion: conv.sessionVersion, clientTurnId: turn.id, model: config.model, provider: config.provider, thinking: config.effort }, { signal: turn.controller.signal });
    turn.switch = '';
    turn.config = config;
    return null;
@@ -268,7 +267,7 @@ class Chat {
   const turn = this.begin(conv, this.config(conv));
   turn.compacting = true;
   this.summarize(conv, turn, async () => {
-   await Backend.request('session.compact', { sessionId: this.sessionOf(conv), sessionVersion: conv.sessionVersion }, { signal: turn.controller.signal });
+   await Backend.request('session.compact', { sessionId: this.sessionOf(conv), sessionVersion: conv.sessionVersion, clientTurnId: turn.id }, { signal: turn.controller.signal });
    turn.compacting = false;
    return null;
   });
@@ -384,7 +383,8 @@ class Chat {
      throw new BackendError({ code: 'invalid_recovery', message: 'The backend returned an invalid session recovery response.' });
     }
     conv.sessionVersion = result.sessionVersion;
-    conv.revision = result.revision;
+    conv.revision = conv.eventSeq = result.revision;
+    conv.eventTurns = [];
     if (pending && result.turn?.clientTurnId !== pending.backendTurn) {
      throw new BackendError({ code: 'turn_missing', message: 'The backend did not accept the saved turn. Its display copy is preserved; it has not been sent again. Start a new chat or restore the backend session.' });
     }
@@ -473,6 +473,7 @@ class Chat {
    if (!conv.locked || conv.turn) return;
    this.library.relock(conv.id);
    conv.messages = [];
+   conv.eventTurns = [];
    conv.tokens = 0;
    conv.ready = null;
    conv.list.replaceChildren();
@@ -667,7 +668,7 @@ class Chat {
   if (this.active?.turn) this.abort(this.active);
  }
 
- // Stopping ends the turn here at once; the backend is told to stop too, and what it still sends for that turn is ignored.
+ // Stopping freezes the turn here at once; only correlated usage can still be counted afterwards.
  abort(conv) {
   const turn = conv.turn;
   if (!turn) return;
@@ -813,10 +814,16 @@ class Chat {
  begin(conv, config) {
   const turn = conv.turn = {
    id: uid(), remote: '', controller: new AbortController(), config, part: null, parts: [], next: null, queue: [], approvals: new Set(),
-   messages: new Set(), requests: new Set(), early: [], prompt: null, compaction: null, releases: new Set(), steps: new Set(), text: false, finishReason: null,
+   messages: new Map(), tools: new Map(), requests: new Set(), early: [], prompt: null, compaction: null, releases: new Set(), steps: new Set(), text: false, finishReason: null,
   };
+  // A bounded accounting tail, not permission to resume old output. Recovery replaces it with its snapshot.
+  (conv.eventTurns ||= []).push(turn);
+  if (conv.eventTurns.length > 16) conv.eventTurns.shift();
   turn.done = new Promise((resolve, reject) => {
    turn.finish = ({ status, finishReason, error } = {}) => {
+    if (turn.terminal) return;
+    turn.terminal = true;
+    turn.early.length = 0;
     if (status === 'done') resolve(finishReason || turn.finishReason || null);
     else if (status === 'cancelled') reject(aborted());
     else reject(error instanceof Error ? error : new BackendError(error || {}));
@@ -948,46 +955,74 @@ class Chat {
  }
 
  setRemote(conv, turn, id) {
-  if (turn.remote || !id) return;
+  if (typeof id !== 'string' || !id) return;
+  if (turn.remote && turn.remote !== id) throw new BackendError({ code: 'invalid_turn', message: 'The backend returned conflicting turn identities.' });
+  if (turn.remote || conv.turn !== turn || turn.terminal) return;
+  if (conv.eventTurns.some(other => other !== turn && other.remote === id)) throw new BackendError({ code: 'invalid_turn', message: 'The backend reused an old turn identity.' });
   turn.remote = id;
   turn.onStarted?.();
-  for (const [method, params] of turn.early.splice(0)) this.onEvent(conv, method, params);
+  // These events already passed the sequence gate, including message-only deltas held behind their start.
+  for (const [method, params] of turn.early.splice(0)) this.applyEvent(conv, turn, method, params);
  }
 
- // An event from the backend for one of this chat's sessions. Events of a turn that is over, or of another one, are let go.
+ // Admit each session sequence once, before buffering. A gap is allowed; a replay or backwards sequence is not.
  onEvent(conv, method, p) {
+  if (!p || !Number.isSafeInteger(p.seq) || p.seq < 0) return;
   const replaying = conv.turn?.replaying;
   if (conv.recoveryEvents && !replaying) { conv.recoveryEvents.push([method, p]); return; }
-  if (!replaying && Number.isSafeInteger(p.seq)) {
-   if (p.seq <= (conv.revision ?? -1)) return;
-  }
+  const sequence = replaying ? conv.turn : conv;
+  if (p.seq <= (sequence.eventSeq ?? (replaying ? -1 : conv.revision ?? -1))) return;
+  sequence.eventSeq = p.seq;
   if (method === 'session.updated') { this.onSession(conv, p); return; }
-  const turn = conv.turn;
-  if (!turn) return;
+  const current = conv.turn;
   if (method === 'turn.started') {
-   if (p.clientTurnId ? p.clientTurnId === turn.id : !turn.remote) this.setRemote(conv, turn, p.turnId);
+   if (current && !current.terminal && p.clientTurnId === current.id) this.setRemote(conv, current, p.turnId);
    return;
   }
-  if (p.turnId) {
-   if (!turn.remote) { turn.early.push([method, p]); return; }
-   if (p.turnId !== turn.remote) return;
-  } else if (p.messageId && method !== 'message.started' && !turn.messages.has(p.messageId)) {
-   return;
+  // Usage alone may reach a retained old turn. Never infer ownership from whichever turn happens to be current.
+  const turns = method === 'usage' ? conv.eventTurns || [] : current ? [current] : [];
+  const turn = turns.find(item => p.turnId ? item.remote === p.turnId
+   : p.clientTurnId ? item.quiet && item.id === p.clientTurnId : p.messageId && item.messages.has(p.messageId));
+  if (turn) { this.applyEvent(conv, turn, method, p); return; }
+  if (current && !current.remote && !current.quiet && !current.terminal && (p.turnId || p.messageId) && current.early.length < 256) {
+   current.early.push([method, p]);
   }
+ }
+
+ applyEvent(conv, turn, method, p) {
+  if (p.turnId && p.turnId !== turn.remote || p.clientTurnId && p.clientTurnId !== turn.id) return;
+  if (!p.turnId && !['message.delta', 'message.completed', 'usage', 'compaction.started', 'compaction.completed'].includes(method)) return;
+  if (p.messageId && (method === 'usage' || method === 'message.delta' || method === 'message.completed') && !turn.messages.has(p.messageId)) return;
+  if (method.startsWith('compaction.') && !p.turnId && (!turn.quiet || p.clientTurnId !== turn.id)) return;
+  if (method === 'usage') { this.onUsage(conv, turn, p); return; }
+  if (conv.turn !== turn || turn.terminal || turn.controller.signal.aborted) return;
   switch (method) {
-   case 'message.started': this.messageStarted(turn, p); break;
-   case 'message.delta': this.messageText(conv, turn, p.messageId, String(p.text ?? ''), false); break;
-   case 'message.completed':
+   case 'message.started': this.messageStarted(conv, turn, p); break;
+   case 'message.delta':
+    if (typeof p.text === 'string') this.messageText(conv, turn, p.messageId, p.text, false);
+    break;
+   case 'message.completed': {
+    const message = turn.messages.get(p.messageId);
+    if (!message || message.completed) break;
     if (typeof p.text === 'string') this.messageText(conv, turn, p.messageId, p.text, true);
+    message.completed = true;
+    if (message.part !== turn.part) this.closePart(conv, message.part);
     if (p.finishReason) turn.finishReason = p.finishReason;
     break;
-   case 'tool.started': this.showGhost(turn.next || turn.part.view); break;
+   }
+   case 'tool.started':
+    if (!p.toolCallId || turn.tools.has(p.toolCallId)) break;
+    turn.tools.set(p.toolCallId, 'started');
+    this.showGhost(turn.next || turn.part.view);
+    break;
+   case 'tool.completed':
+    if (p.toolCallId) turn.tools.set(p.toolCallId, 'completed');
+    break;
    case 'approval.resolved':
     for (const pending of turn.approvals) if (pending.id === p.approvalId) pending.card.settle(p.decision === 'allow' ? 'allow' : 'deny');
     break;
    case 'compaction.started': this.compactionStarted(conv, turn, p); break;
    case 'compaction.completed': this.compactionDone(conv, turn, !!p.ok); break;
-   case 'usage': this.onUsage(conv, turn, p); break;
    case 'input.accepted': {
     let item = turn.queue.find(entry => entry.id === p.clientInputId);
     if (!item && turn.replaying && p.input) {
@@ -1000,38 +1035,48 @@ class Chat {
     if (item) this.takeQueue(conv, turn, [item]);
     break;
    }
-   case 'turn.completed': turn.completed = true; turn.finish(p); break;
+   case 'turn.completed':
+    if (!['done', 'cancelled', 'error'].includes(p.status)) break;
+    turn.completed = true;
+    turn.finish(p);
+    break;
    default: break;
   }
  }
 
  // Replies come in parts: a part holds every message of the reply until a message the user sent in between, or a
  // compaction, starts the next one.
- messageStarted(turn, p) {
-  if (p.messageId) turn.messages.add(p.messageId);
-  const part = turn.part;
-  part.base = part.entry.content;
-  part.text = '';
+ messageStarted(conv, turn, p) {
+  if (!p.turnId || typeof p.messageId !== 'string' || !p.messageId || p.role && p.role !== 'assistant') return;
+  if (conv.eventTurns.some(item => item.messages.has(p.messageId))) return;
+  const part = turn.part, message = { part, text: '', completed: false };
+  turn.messages.set(p.messageId, message);
+  (part.messages ||= []).push(message);
  }
 
  messageText(conv, turn, messageId, text, whole) {
-  if (messageId && !turn.messages.has(messageId)) return;
-  const part = turn.part, view = part.view;
-  part.text = whole ? text : (part.text || '') + text;
-  if (!part.text.trim()) return;
-  turn.text = true;
-  part.entry.content = join(part.base || '', part.text);
+  const message = turn.messages.get(messageId);
+  if (!message || message.completed) return;
+  message.text = whole ? text : message.text + text;
+  const { part } = message, { view } = part;
+  part.entry.content = part.messages.map(item => item.text.trim()).filter(Boolean).join('\n\n');
+  turn.text = turn.parts.some(item => item.entry.content.trim());
   this.dismissGhost(view);
   view.stream.push(part.entry.content);
  }
 
  onUsage(conv, turn, usage) {
+  const entry = usage.messageId ? turn.messages.get(usage.messageId)?.part.entry
+   : turn.quiet ? turn.compactionEntry : turn.parts[0]?.entry;
+  if (!entry) return;
   if (!turn.replaying) Usage.record(usage);
-  spend(turn.compaction?.entry || turn.part.entry, usage);
-  if (usage.context) {
+  spend(entry, usage);
+  // Old accounting must never roll the current turn's context meter back.
+  if (usage.context && conv.turn === turn && !turn.terminal) {
    conv.tokens = Number(usage.context.used) || 0;
    conv.window = Number(usage.context.window) || 0;
   }
+  if (turn.terminal && conv.record && this.library.chat(conv.id)) this.save(conv);
  }
 
  // The backend names the chat; a chat renamed by hand keeps the user's name.
@@ -1163,27 +1208,37 @@ class Chat {
   const entry = { role: 'assistant', content: '', turn: turn.id, model: turn.config.id, backendTurn: turn.id };
   conv.messages.push(entry);
   view.el.__entry = entry;
-  turn.part = { view, entry, base: '', text: '' };
+  turn.part = { view, entry, messages: [] };
   turn.parts.push(turn.part);
  }
 
- closePart(conv, { view, entry }) {
+ closePart(conv, { view, entry, messages = [] }) {
   this.dismissGhost(view);
-  if (!entry.content && !entry.usage && !entry.pendingTurn) drop(conv.messages, entry);
+  // Even an empty entry keeps its position for late final text or usage. It has no restored view until it has text.
   view.stream.finish().then(() => {
    view.el.classList.remove('is-streaming');
-   if (!entry.content.trim()) collapse(view.el);
+   if (!entry.content.trim() && messages.every(message => message.completed)) collapse(view.el);
   });
  }
 
  async end(conv, turn, error, finish) {
   if (conv.turn !== turn) return;
+  turn.terminal = true;
+  turn.early.length = 0;
+  for (const message of turn.messages.values()) message.completed = true;
+  for (const part of turn.parts) if (part !== turn.part) this.closePart(conv, part);
   const { view, entry } = turn.part, aborted = error?.name === 'AbortError';
   for (const pending of turn.approvals) pending.card.settle('deny');
   // A browser step the turn still has running, or waiting for the user to hand the browser back, ends with it.
   for (const release of turn.releases) release('abort');
   for (const stop of turn.steps) stop();
   conv.turn = null;
+  // Keep only entry identities for late accounting, not the old turn's views, attachments or callbacks.
+  conv.eventTurns = conv.eventTurns.map(item => item !== turn ? item : {
+   id: turn.id, remote: turn.remote, terminal: true, quiet: turn.quiet, compactionEntry: turn.compactionEntry,
+   parts: turn.parts.map(({ entry }) => ({ entry })),
+   messages: new Map([...turn.messages].map(([id, { part }]) => [id, { part: { entry: part.entry } }])),
+  });
   if (turn.compaction) this.compactionDone(conv, turn, false);
   else if (error && !aborted && (turn.switch || turn.compacting)) this.failedNotice(conv, turn);
   if (turn.switch && this.library.chat(conv.id)) {
@@ -1191,7 +1246,6 @@ class Chat {
    this.settings.setModel(turn.switch);
   }
   window.browserPanel?.drive(conv, false);
-  if (!entry.content && !entry.usage && !entry.pendingTurn) drop(conv.messages, entry);
   if (turn.next) collapse(turn.next.el);
   // Reconcile an uncertain outcome before Send or Retry, rather than implicitly starting again.
   if (turn.completed) {
@@ -1253,6 +1307,7 @@ class Chat {
    at = part.entry;
   }
   turn.compaction = { notice, at, entry: { role: 'compact', model: turn.config.id, backendTurn: turn.quiet ? undefined : turn.id } };
+  turn.compactionEntry = turn.compaction.entry;
   if (conv === this.active) this.followBottom();
  }
 

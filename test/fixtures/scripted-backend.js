@@ -151,9 +151,9 @@ const handlers = {
   return null;
  },
  'session.configure': params => ({ model: params.model, thinking: params.thinking, permissionMode: params.permissionMode }),
- 'session.compact'({ sessionId }) {
-  event('compaction.started', { sessionId, reason: 'manual' });
-  event('compaction.completed', { sessionId, ok: true });
+ 'session.compact'({ sessionId, clientTurnId }) {
+  event('compaction.started', { sessionId, clientTurnId, turnId: undefined, reason: 'manual' });
+  event('compaction.completed', { sessionId, clientTurnId, turnId: undefined, ok: true });
   return { ok: true };
  },
  'session.delete': ({ sessionId }) => { sessions.delete(sessionId); subscribed.delete(sessionId); return null; },

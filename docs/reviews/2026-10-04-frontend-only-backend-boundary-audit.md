@@ -169,6 +169,8 @@ Stop aborts `turn.done`, but `drive()` is still awaiting `work()`. Attachment re
 
 **Recommendation:** explicit event IDs/sequence and epoch rules; turn identity on every turn event; per-message state; bounded early buffering; idempotent usage; and a definition of post-cancellation accounting separate from visible text suppression. Until fixed, Rust must serialize messages, emit each event once, and obey the ordering recipe in §7.
 
+**Resolution:** session sequence gates now reject duplicate/backwards events; exact turn correlation and bounded early buffering protect new turns. Per-message buffers/finalization preserve interleaved text and original-part usage; completion/Stop freeze output immediately, with bounded, correlated late accounting kept separate. Tool starts are idempotent, and notification state checks/listener isolation protect routing. `docs/backend-interface.md` defines these rules (including explicit identity for standalone compaction), superseding the F09 ordering workarounds in §7. Focused regressions: `test/event-ordering.test.js` and notification cases in `test/backend-client.test.js`; recovery and reverse-request identity tests also pass. No tool-card UI or live gap repair was added.
+
 ### F10 — HIGH: untrusted browser URL becomes HTML in app chrome (**reproduced**)
 
 **Evidence:** `browser-panel.js:29–33,337–355`.

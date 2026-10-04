@@ -76,6 +76,33 @@ test('events reach their listeners and the * listener', async () => {
  assert.deepEqual(all, ['message.delta', 'usage']);
 });
 
+test('notifications are delivered only while ready and malformed envelopes do not reach listeners', async () => {
+ const { transport, Backend } = await connected();
+ const seen = [];
+ Backend.on('*', method => seen.push(method));
+ transport.deliver({ method: 'message.delta', params: 'bad' });
+ transport.deliver({ method: 'message.delta', params: [] });
+ transport.deliver({ method: 123, params: {} });
+ transport.deliver({ method: 'models.changed' }); // No parameters is valid for this global notification.
+ Backend.state = 'initializing';
+ transport.deliver({ method: 'message.delta', params: { text: 'too early' } });
+ transport.setStatus({ state: 'exited' });
+ transport.deliver({ method: 'message.delta', params: { text: 'too late' } });
+ assert.deepEqual(seen, ['models.changed']);
+});
+
+test('a failing notification listener cannot block other listeners or wildcard chat routing', async t => {
+ const { transport, Backend } = await connected();
+ const diagnostic = t.mock.method(console, 'error', () => {});
+ const seen = [];
+ Backend.on('message.delta', () => { throw new Error('listener failure'); });
+ Backend.on('message.delta', p => seen.push(p.text));
+ Backend.on('*', method => seen.push(method));
+ assert.doesNotThrow(() => transport.deliver({ method: 'message.delta', params: { text: 'still routed' } }));
+ assert.deepEqual(seen, ['still routed', 'message.delta']);
+ assert.equal(diagnostic.mock.callCount(), 1);
+});
+
 test('reverse requests are answered by their handler, and $/cancelRequest aborts one', async () => {
  const { transport, Backend } = await connected();
  Backend.handle('approval.request', async params => ({ decision: params.tool === 'ok' ? 'allow' : 'deny' }));

@@ -172,8 +172,11 @@ class BackendClient {
  }
 
  emit(method, params) {
-  for (const listener of this.listeners.get(method) || []) listener(params, method);
-  if (method !== 'ready' && method !== 'closed') for (const listener of this.listeners.get('*') || []) listener(method, params);
+  const call = (listener, ...args) => {
+   try { listener(...args); } catch (error) { console.error('Backend event listener failed', method, error); }
+  };
+  for (const listener of this.listeners.get(method) || []) call(listener, params, method);
+  if (method !== 'ready' && method !== 'closed') for (const listener of this.listeners.get('*') || []) call(listener, method, params);
  }
 
  // What answers the backend's own requests (approval.request, host.tool): `handler(params, { signal })` returns the
@@ -194,7 +197,7 @@ class BackendClient {
   }
   if (message.id === undefined || message.id === null) {
    if (message.method === '$/cancelRequest') this.incoming.get(message.params?.id)?.abort();
-   else this.emit(message.method, message.params || {});
+   else if (this.available && typeof message.method === 'string' && (message.params === undefined || message.params && typeof message.params === 'object' && !Array.isArray(message.params))) this.emit(message.method, message.params || {});
    return;
   }
   this.answer(message);
