@@ -48,6 +48,7 @@ class BackendClient {
   this.transport = transport;
   this.hello = hello;
   this.timeouts = { ...TIMEOUTS, ...timeouts };
+  this.connectionId = globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
   this.next = 1;
   this.pending = new Map();
   this.listeners = new Map();
@@ -89,7 +90,7 @@ class BackendClient {
   this.state = 'initializing';
   try {
    await loaded;
-   const result = await this.call('initialize', { protocolVersion: PROTOCOL, ...this.hello() });
+   const result = await this.call('initialize', { protocolVersion: PROTOCOL, ...this.hello(), connectionId: this.connectionId });
    this.info = result?.backend || null;
    this.capabilities = result?.capabilities || {};
    this.state = 'ready';
@@ -135,7 +136,7 @@ class BackendClient {
 
  call(method, params, { signal } = {}) {
   if (signal?.aborted) return Promise.reject(aborted());
-  const id = this.next++;
+  const id = `${this.connectionId}:${this.next++}`;
   return new Promise((resolve, reject) => {
    let timer;
    const settle = done => value => { clearTimeout(timer); signal?.removeEventListener('abort', stop); done(value); };

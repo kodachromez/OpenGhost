@@ -243,11 +243,11 @@ class Library {
  }
 
  // A protected chat is sealed with the key it has when the save is asked for, so locking right after a reply loses nothing.
- saveMessages(id, messages, tokens = 0) {
+ saveMessages(id, messages, tokens = 0, { required = false } = {}) {
   const chat = this.chat(id), key = chat?.lock ? this.keys.get(id) : null;
-  if (!chat || (chat.lock && !key)) return Promise.resolve();
-  const body = { messages, tokens };
-  return this.queue(id, async () => this.store.write(`chats/${id}`, key ? { version: 1, sealed: await ChatLock.seal(key, body) } : { version: 1, ...body }));
+  if (!chat || (chat.lock && !key)) return required ? Promise.reject(new Error('Cannot save the session recovery checkpoint.')) : Promise.resolve();
+  const body = structuredClone({ messages, tokens });
+  return this.queue(id, async () => this.store.write(`chats/${id}`, key ? { version: 1, sealed: await ChatLock.seal(key, body) } : { version: 1, ...body }), required);
  }
 
  // The mini chat over a chat keeps its messages apart from the chat's, next to them, and sealed with the chat's key when it has
@@ -261,11 +261,11 @@ class Library {
   }).then(body => body || { messages: [], tokens: 0, seen: 0 });
  }
 
- saveSide(id, { messages, tokens = 0, seen = 0 }) {
+ saveSide(id, { messages, tokens = 0, seen = 0 }, { required = false } = {}) {
   const chat = this.chat(id), key = chat?.lock ? this.keys.get(id) : null;
-  if (!chat || (chat.lock && !key)) return Promise.resolve();
-  const body = { messages, tokens, seen };
-  return this.queue(id, async () => this.store.write(`mini/${id}`, key ? { version: 1, sealed: await ChatLock.seal(key, body) } : { version: 1, ...body }));
+  if (!chat || (chat.lock && !key)) return required ? Promise.reject(new Error('Cannot save the session recovery checkpoint.')) : Promise.resolve();
+  const body = structuredClone({ messages, tokens, seen });
+  return this.queue(id, async () => this.store.write(`mini/${id}`, key ? { version: 1, sealed: await ChatLock.seal(key, body) } : { version: 1, ...body }), required);
  }
 
  clearSide(id) {
@@ -284,11 +284,13 @@ class Library {
  }
 
  // Writes of one chat's messages go out one after another, in the order they were asked for.
- queue(id, job) {
-  const next = (this.writes.get(id) || Promise.resolve()).then(job).catch(() => {});
+ queue(id, job, required = false) {
+  const work = (this.writes.get(id) || Promise.resolve()).then(job);
+  const next = work.catch(() => {});
   this.writes.set(id, next);
   next.then(() => { if (this.writes.get(id) === next) this.writes.delete(id); });
-  return next;
+  // Ordinary display saves remain best-effort; a pre-dispatch recovery checkpoint must fail closed.
+  return required ? work : next;
  }
 
  // Puts a password on a chat. The index takes the lock first and the messages are sealed after it,

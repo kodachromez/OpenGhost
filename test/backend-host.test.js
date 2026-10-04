@@ -65,10 +65,37 @@ test('messages go to the backend as JSON lines and come back parsed', async () =
  assert.equal(backend.send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '0.1' } }), true);
  const reply = await next(message => message.id === 1);
  assert.equal(reply.result.protocolVersion, '0.1');
- backend.send({ jsonrpc: '2.0', id: 2, method: 'turn.start', params: { sessionId: 's1', clientTurnId: 'c1', input: { text: 'hello' } } });
+ backend.send({ jsonrpc: '2.0', id: 2, method: 'turn.start', params: { sessionId: 's1', sessionVersion: null, clientTurnId: 'c1', input: { text: 'hello' } } });
  await next(message => message.method === 'turn.completed');
  await backend.stop();
  assert.equal(statuses.at(-1).state, 'exited');
+});
+
+test('the scripted recovery boundary retains an active turn across initialize and deduplicates creation', async () => {
+ const { backend, messages, next } = host();
+ backend.start();
+ const request = async (id, method, params) => {
+  backend.send({ jsonrpc: '2.0', id, method, params });
+  return next(message => message.id === id);
+ };
+ try {
+  await request('page1:1', 'initialize', { connectionId: 'page1' });
+  const params = { sessionId: 's1', sessionVersion: null, clientTurnId: 'c1', input: { text: 'hang' } };
+  const start = await request('page1:2', 'turn.start', params);
+  await next(message => message.method === 'message.delta');
+  await request('page2:1', 'initialize', { connectionId: 'page2' });
+  const recovered = (await request('page2:2', 'session.get', { sessionId: 's1', clientTurnId: 'c1' })).result;
+  assert.equal(recovered.sessionVersion, start.result.sessionVersion);
+  assert.equal(recovered.turn.turnId, start.result.turnId);
+  assert.equal(recovered.turn.input.text, 'hang');
+  assert.ok(recovered.turn.events.some(event => event.method === 'message.delta'));
+  const repeated = await request('page2:3', 'turn.start', params);
+  assert.deepEqual(repeated.result, start.result);
+  assert.equal(messages.filter(message => message.method === 'turn.started').length, 1);
+  assert.deepEqual((await request('page2:4', 'session.get', { sessionId: 'missing' })).result, { exists: false });
+ } finally {
+  await backend.stop();
+ }
 });
 
 test('lines that are not JSON-RPC are dropped, split lines are joined', () => {
@@ -83,7 +110,7 @@ test('lines that are not JSON-RPC are dropped, split lines are joined', () => {
 test('a backend that dies mid-turn is reported as exited with its code', async () => {
  const { backend, statuses, next } = host();
  backend.start();
- backend.send({ jsonrpc: '2.0', id: 1, method: 'turn.start', params: { sessionId: 's', clientTurnId: 'c', input: { text: 'crash' } } });
+ backend.send({ jsonrpc: '2.0', id: 1, method: 'turn.start', params: { sessionId: 's', sessionVersion: null, clientTurnId: 'c', input: { text: 'crash' } } });
  await next(message => message.method === 'message.delta');
  await new Promise(resolve => setTimeout(resolve, 200));
  assert.deepEqual({ state: statuses.at(-1).state, code: statuses.at(-1).code }, { state: 'exited', code: 3 });

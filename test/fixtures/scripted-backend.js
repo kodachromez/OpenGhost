@@ -16,7 +16,21 @@ let nextId = 1;
 let seq = 0;
 
 const send = message => process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', ...message })}\n`);
-const event = (method, params) => send({ method, params: { seq: ++seq, ...params } });
+const subscribed = new Set();
+const event = (method, params) => {
+ const session = sessions.get(params.sessionId);
+ params = { seq: ++seq, turnId: session?.current, ...params };
+ const saved = [...(session?.recovery.values() || [])].find(turn => turn.turnId === params.turnId);
+ saved?.events.push({ method, params });
+ if (method === 'turn.completed' && saved) {
+  saved.active = false;
+  if (session.current === params.turnId) session.current = null;
+ }
+ if (subscribed.has(params.sessionId)) send({ method, params });
+};
+const displayInput = input => input ? { text: input.text || '', attachments: (input.attachments || []).map(item => ({
+ name: item.name, size: item.size, image: item.kind === 'image', url: item.dataUrl, width: item.width, height: item.height, note: item.note,
+})) } : null;
 const ask = (method, params) => new Promise(resolve => {
  const id = `b${nextId++}`;
  waiting.set(id, resolve);
@@ -28,7 +42,7 @@ const CAPABILITIES = {
  thinking: { visible: false },
  tools: { events: true, hostTools: true },
  approvals: { modes: ['ask', 'auto', 'full'] },
- sessions: { list: false, delete: true, rename: false, side: true, edit: false, encrypted: false },
+ sessions: { recovery: true, list: false, delete: true, rename: false, side: true, edit: false, encrypted: false },
  compaction: { manual: true, auto: false, onModelSwitch: true },
  usage: { tokens: true, cost: false, context: true, limits: true },
  auth: { providers: true },
@@ -41,8 +55,7 @@ let hello = null;
 
 async function turn(sessionId, turnId, params) {
  const text = String(params.input?.text || '');
- const session = sessions.get(sessionId) || { turns: 0 };
- sessions.set(sessionId, session);
+ const session = sessions.get(sessionId);
  session.turns++;
  session.current = turnId;
  const live = () => session.current === turnId;
@@ -80,6 +93,9 @@ async function turn(sessionId, turnId, params) {
 const handlers = {
  initialize(params) {
   hello = params;
+  subscribed.clear();
+  for (const resolve of waiting.values()) resolve({ result: { decision: 'deny', status: 'cancelled' } });
+  waiting.clear();
   return { protocolVersion: '0.1', backend: { name: 'scripted-test-backend', version: '0', platform: process.platform }, capabilities: CAPABILITIES };
  },
  shutdown() {
@@ -96,18 +112,36 @@ const handlers = {
  'auth.setKey': ({ key }) => ({ connected: !!key, keySaved: !!key }),
  'models.list': () => [{ id: 'm1', provider: 'test', name: 'Test model', contextWindow: 1000, vision: true, thinkingLevels: ['none', 'low', 'high'], defaultThinking: 'low' }],
  'account.limits': () => ({ plan: 'test', windows: [{ seconds: 18000, used: 25, resets: Date.now() + 3600000 }], balances: [{ currency: 'USD', total: 4.2 }] }),
+ 'session.get'({ sessionId, clientTurnId }) {
+  const session = sessions.get(sessionId);
+  if (!session) return { exists: false };
+  subscribed.add(sessionId);
+  const recovered = clientTurnId ? session.recovery.get(clientTurnId) : [...session.recovery.values()].find(item => item.active);
+  return { exists: true, sessionVersion: session.version, revision: seq, turn: recovered || null };
+ },
  'turn.start'(params) {
+  let session = sessions.get(params.sessionId);
+  const previous = session?.recovery.get(params.clientTurnId);
+  if (previous) return { turnId: previous.turnId, sessionVersion: session.version };
+  if (params.sessionVersion === null ? !!session : !session || params.sessionVersion !== session.version) throw new Error('session_conflict');
+  if (session?.current) throw new Error('turn_active');
+  if (!session) {
+   session = { turns: 0, version: `s${nextId++}`, recovery: new Map() };
+   sessions.set(params.sessionId, session);
+  }
   const turnId = `t${nextId++}`;
+  session.current = turnId;
+  session.recovery.set(params.clientTurnId, { clientTurnId: params.clientTurnId, turnId, input: displayInput(params.input), events: [], active: true });
+  subscribed.add(params.sessionId);
   setImmediate(() => turn(params.sessionId, turnId, params));
-  return { turnId };
+  return { turnId, sessionVersion: session.version };
  },
  'turn.retry'(params) {
-  const turnId = `t${nextId++}`;
-  setImmediate(() => turn(params.sessionId, turnId, { ...params, input: { text: 'retry' } }));
-  return { turnId };
+  if (!params.sessionVersion) throw new Error('session_missing');
+  return handlers['turn.start'](params);
  },
- 'turn.steer'({ sessionId, turnId, clientInputId }) {
-  setImmediate(() => event('input.accepted', { sessionId, turnId, clientInputId, messageId: `u-${clientInputId}` }));
+ 'turn.steer'({ sessionId, turnId, clientInputId, input }) {
+  setImmediate(() => event('input.accepted', { sessionId, turnId, clientInputId, messageId: `u-${clientInputId}`, input: displayInput(input) }));
   return { accepted: true };
  },
  'turn.cancel'({ sessionId, turnId }) {
@@ -122,7 +156,7 @@ const handlers = {
   event('compaction.completed', { sessionId, ok: true });
   return { ok: true };
  },
- 'session.delete': () => null,
+ 'session.delete': ({ sessionId }) => { sessions.delete(sessionId); subscribed.delete(sessionId); return null; },
 };
 
 readline.createInterface({ input: process.stdin }).on('line', async line => {

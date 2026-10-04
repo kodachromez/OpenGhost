@@ -127,6 +127,8 @@ class Conversation {
   this.scrollTop = 0;
   this.unread = false;
   this.ready = null;
+  this.reconciled = false;
+  this.sessionVersion = undefined;
  }
 
  get id() {
@@ -224,7 +226,8 @@ class Chat {
  // its own window; the chat shows that as it would its own compaction.
  switchModel(id) {
   const conv = this.active;
-  if (!conv?.record || conv.turn || conv.deleting || id === this.modelOf(conv)) return;
+  if (!conv?.record || conv.turn || conv.deleting || conv.recovering || id === this.modelOf(conv)) return;
+  if (!conv.reconciled) { this.reconcile(conv); return; }
   if (!this.hasHistory(conv) || !Backend.available) { this.setModel(id); return; }
   const turn = this.begin(conv, this.config(conv));
   turn.switch = this.modelOf(conv);
@@ -232,7 +235,7 @@ class Chat {
   this.settings.setModel(id);
   this.summarize(conv, turn, async () => {
    const config = this.config(conv);
-   await Backend.request('session.configure', { sessionId: this.sessionOf(conv), model: config.model, provider: config.provider, thinking: config.effort }, { signal: turn.controller.signal });
+   await Backend.request('session.configure', { sessionId: this.sessionOf(conv), sessionVersion: conv.sessionVersion, model: config.model, provider: config.provider, thinking: config.effort }, { signal: turn.controller.signal });
    turn.switch = '';
    turn.config = config;
    return null;
@@ -243,7 +246,7 @@ class Chat {
  // nothing is being written.
  get canCompact() {
   const conv = this.active;
-  return !!conv?.record && !conv.turn && !conv.locked && !conv.deleting && Backend.can('compaction.manual') && this.hasHistory(conv);
+  return !!conv?.record && conv.reconciled && !conv.recovering && !conv.turn && !conv.locked && !conv.deleting && Backend.can('compaction.manual') && this.hasHistory(conv);
  }
 
  // Whether the chat on screen has anything to count: a message in it, and no reply being written.
@@ -265,7 +268,7 @@ class Chat {
   const turn = this.begin(conv, this.config(conv));
   turn.compacting = true;
   this.summarize(conv, turn, async () => {
-   await Backend.request('session.compact', { sessionId: this.sessionOf(conv) }, { signal: turn.controller.signal });
+   await Backend.request('session.compact', { sessionId: this.sessionOf(conv), sessionVersion: conv.sessionVersion }, { signal: turn.controller.signal });
    turn.compacting = false;
    return null;
   });
@@ -345,12 +348,117 @@ class Chat {
   });
  }
 
- load(conv) {
-  return this.library.conversation(conv.id).then(({ messages, tokens }) => {
-   conv.messages = messages;
-   conv.tokens = tokens;
-   this.restore(conv);
-  });
+ async load(conv) {
+  const { messages, tokens } = await this.library.conversation(conv.id);
+  conv.messages = messages;
+  conv.tokens = tokens;
+  this.restore(conv);
+  await this.reconcile(conv);
+ }
+
+ // Read backend-owned history, never import the display cache. A durable pending marker identifies an uncertain
+ // start even if the page died before its response. Never resend that start automatically.
+ reconcile(conv) {
+  if (conv.recovering) return conv.recovering;
+  if (conv.turn && conv.reconciled) return Promise.resolve();
+  const events = conv.recoveryEvents = [];
+  conv.reconciled = false;
+  conv.recoveryNotice?.remove();
+  conv.recovering = (async () => {
+   try {
+    await Backend.ready;
+    if (!Backend.available) throw Backend.unavailable();
+    this.requireRecovery();
+    const pending = conv.messages.find(entry => entry.pendingTurn);
+    const result = await Backend.request('session.get', { sessionId: this.sessionOf(conv), clientTurnId: pending?.backendTurn });
+    if (!result?.exists) {
+     // An unopened mini chat is new, unlike an old main chat with a missing display file.
+     if (this instanceof SideChat && !conv.messages.length) {
+      conv.sessionVersion = null;
+      conv.reconciled = true;
+      return;
+     }
+     throw new BackendError({ code: 'session_missing', message: 'The backend session is missing. This chat is kept for display only. Restore the backend session or start a new chat.' });
+    }
+    if (typeof result.sessionVersion !== 'string' || !Number.isSafeInteger(result.revision) || result.revision < 0) {
+     throw new BackendError({ code: 'invalid_recovery', message: 'The backend returned an invalid session recovery response.' });
+    }
+    conv.sessionVersion = result.sessionVersion;
+    conv.revision = result.revision;
+    if (pending && result.turn?.clientTurnId !== pending.backendTurn) {
+     throw new BackendError({ code: 'turn_missing', message: 'The backend did not accept the saved turn. Its display copy is preserved; it has not been sent again. Start a new chat or restore the backend session.' });
+    }
+    if (result.turn) this.recoverTurn(conv, result.turn);
+    conv.reconciled = true;
+    // get is an atomic replay/live boundary. Notifications that raced it are applied only once.
+    conv.recoveryEvents = null;
+    for (const [method, params] of events) this.onEvent(conv, method, params);
+    await this.checkpoint(conv);
+   } catch (error) {
+    conv.reconciled = false;
+    const notice = conv.recoveryNotice = document.createElement('div');
+    notice.className = 'message-error';
+    notice.textContent = Backend.explain(error).message;
+    notice.append(this.action(I18n.t('chat.retry'), () => this.reconcile(conv)));
+    conv.list.append(notice);
+   } finally {
+    conv.recoveryEvents = null;
+    conv.recovering = null;
+    this.onChange();
+   }
+  })();
+  return conv.recovering;
+ }
+
+ requireRecovery() {
+  if (!Backend.can('sessions.recovery')) throw new BackendError({ code: 'unsupported', message: 'The backend does not support session recovery. Update the backend before continuing this chat.' });
+ }
+
+ recoverTurn(conv, snapshot) {
+  const { clientTurnId, turnId, input, events } = snapshot;
+  if (!clientTurnId || !turnId || !Array.isArray(events)) throw new BackendError({ code: 'invalid_recovery', message: 'The backend returned an invalid turn recovery response.' });
+  // Rebuild only the incomplete turn; completed text and frontend-only annotations stay put.
+  const queued = conv.messages.filter(entry => entry.backendTurn === clientTurnId && entry.clientInputId);
+  const cachedPrompts = conv.messages.filter(entry => entry.backendTurn === clientTurnId && entry.role === 'user' && !entry.clientInputId);
+  conv.messages = conv.messages.filter(entry => entry.backendTurn !== clientTurnId);
+  conv.list.replaceChildren();
+  this.restore(conv);
+  const turn = this.begin(conv, this.config(conv));
+  turn.id = clientTurnId;
+  turn.replaying = true;
+  turn.recoveryInputs = new Map(queued.map(entry => [entry.clientInputId, entry]));
+  if (input) {
+   const prompts = cachedPrompts.length ? cachedPrompts : [{ role: 'user', text: input.text, content: input.text, attachments: input.attachments || [], backendTurn: clientTurnId, pendingTurn: true }];
+   turn.prompt = prompts[0];
+   for (const entry of prompts) {
+    conv.messages.push(entry);
+    const bubble = this.userMessage(this.promptOf(entry));
+    conv.list.append(bubble);
+    this.nodes.set(entry, bubble);
+   }
+  }
+  this.openPart(conv, turn);
+  if (!input) turn.part.entry.pendingTurn = true;
+  const driving = this.drive(conv, turn, () => turn.done);
+  this.setRemote(conv, turn, turnId);
+  for (const event of events) this.onEvent(conv, event.method, event.params);
+  turn.replaying = false;
+  // Queued inputs the backend did not accept stay visible, but are never silently sent a second time.
+  for (const entry of queued) {
+   if (conv.messages.some(item => item.clientInputId === entry.clientInputId)) continue;
+   conv.messages.push(entry);
+   const bubble = this.userMessage(this.promptOf(entry));
+   conv.list.append(bubble);
+   this.nodes.set(entry, bubble);
+   turn.queue.push({ id: entry.clientInputId, entry, prompt: this.promptOf(entry), bubble });
+  }
+  return driving;
+ }
+
+ // The index (session identity) and display checkpoint must reach storage before any turn can be accepted.
+ async checkpoint(conv) {
+  await this.library.persist();
+  await this.library.saveMessages(conv.id, conv.messages, conv.tokens, { required: true });
  }
 
  isLocked(id) {
@@ -520,7 +628,8 @@ class Chat {
 
  send(text, attachments = []) {
   const conv = this.active;
-  if (conv.locked || conv.deleting) return false;
+  if (conv.locked || conv.deleting || conv.recovering) return false;
+  if (conv.record && !conv.reconciled) { this.reconcile(conv); return false; }
   const config = this.config(conv);
   this.anchor = null;
   // With a backend but no model it offers, the settings say how to connect one. With no backend at all the message goes
@@ -531,6 +640,8 @@ class Chat {
   }
   if (!conv.record) {
    conv.record = this.library.create({ folder: conv.folder, text, attachments });
+   conv.sessionVersion = null; // Explicit create-only precondition, never an upsert of an old chat.
+   conv.reconciled = true;
    this.library.update(conv.id, { model: this.modelOf(conv) });
    this.conversations.set(conv.id, conv);
    this.draft = null;
@@ -569,7 +680,7 @@ class Chat {
  onModeChange() {
   if (!Backend.available) return;
   for (const conv of this.conversations.values()) {
-   if (conv.turn) Backend.request('session.configure', { sessionId: this.sessionOf(conv), permissionMode: this.settings.mode }).catch(() => {});
+   if (conv.turn && conv.reconciled && !conv.recovering) Backend.request('session.configure', { sessionId: this.sessionOf(conv), sessionVersion: conv.sessionVersion, permissionMode: this.settings.mode }).catch(() => {});
   }
  }
 
@@ -731,12 +842,13 @@ class Chat {
 
  run(conv, prompt, config, bubble) {
   const turn = this.begin(conv, config);
-  const entry = turn.prompt = { role: 'user', text: prompt.text, attachments: prompt.attachments.map(slim), content: prompt.text };
+  const entry = turn.prompt = { role: 'user', text: prompt.text, attachments: prompt.attachments.map(slim), content: prompt.text, backendTurn: turn.id, pendingTurn: true };
   conv.messages.push(entry);
   if (bubble) this.nodes.set(entry, bubble);
   this.openPart(conv, turn);
   this.onChange();
   return this.drive(conv, turn, async () => {
+   await this.checkpoint(conv);
    const input = await inputOf(prompt);
    // A video's place and frame are known only once it is read.
    entry.attachments = prompt.attachments.map(slim);
@@ -746,8 +858,15 @@ class Chat {
 
  async startTurn(conv, turn, input) {
   turn.controller.signal.throwIfAborted();
-  const params = { sessionId: this.sessionOf(conv), clientTurnId: turn.id, input, ...(await this.sessionParams(conv, turn)) };
+  await Backend.ready;
+  if (!Backend.available) throw Backend.unavailable();
+  this.requireRecovery();
+  if (!conv.messages.some(entry => entry.backendTurn === turn.id && entry.pendingTurn)) turn.part.entry.pendingTurn = true;
+  const params = { sessionId: this.sessionOf(conv), sessionVersion: conv.sessionVersion, clientTurnId: turn.id, input, ...(await this.sessionParams(conv, turn)) };
+  await this.checkpoint(conv);
+  turn.controller.signal.throwIfAborted();
   const result = await Backend.request('turn.start', params, { signal: turn.controller.signal });
+  if (result?.sessionVersion) conv.sessionVersion = result.sessionVersion;
   if (result?.turnId) this.setRemote(conv, turn, result.turnId);
   return turn.done;
  }
@@ -755,9 +874,13 @@ class Chat {
  resume(conv, config) {
   const turn = this.begin(conv, config);
   this.openPart(conv, turn);
+  turn.part.entry.pendingTurn = true;
   this.onChange();
   return this.drive(conv, turn, async () => {
-   const params = { sessionId: this.sessionOf(conv), clientTurnId: turn.id, ...(await this.sessionParams(conv, turn)) };
+   this.requireRecovery();
+   const params = { sessionId: this.sessionOf(conv), sessionVersion: conv.sessionVersion, clientTurnId: turn.id, ...(await this.sessionParams(conv, turn)) };
+   await this.checkpoint(conv);
+   turn.controller.signal.throwIfAborted();
    const result = await Backend.request('turn.retry', params, { signal: turn.controller.signal });
    if (result?.turnId) this.setRemote(conv, turn, result.turnId);
    return turn.done;
@@ -775,6 +898,9 @@ class Chat {
    conv.list.append(bubble, turn.next.el);
   }
   const item = { id: uid(), prompt, bubble, input: null };
+  item.entry = { role: 'user', text: prompt.text, content: prompt.text, attachments: prompt.attachments.map(slim), backendTurn: turn.id, clientInputId: item.id };
+  conv.messages.push(item.entry);
+  this.nodes.set(item.entry, bubble);
   turn.queue.push(item);
   this.dismissGhost(turn.part.view);
   for (const pending of turn.approvals) pending.card.settle(SUPERSEDED);
@@ -784,10 +910,13 @@ class Chat {
 
  async steer(conv, turn, item) {
   try {
+   await this.checkpoint(conv);
    item.input = await inputOf(item.prompt);
+   item.entry.attachments = item.prompt.attachments.map(slim);
+   await this.checkpoint(conv);
    if (conv.turn !== turn || turn.quiet || !turn.queue.includes(item)) return;
    await turn.started;
-   if (conv.turn !== turn || !turn.queue.includes(item)) return;
+   if (conv.turn !== turn || turn.controller.signal.aborted || !turn.queue.includes(item)) return;
    await Backend.request('turn.steer', { sessionId: this.sessionOf(conv), turnId: turn.remote, clientInputId: item.id, input: item.input, host: { browser: window.browserPanel?.snapshot() || null } });
   } catch {}
  }
@@ -809,6 +938,10 @@ class Chat {
   const items = turn.queue.splice(0);
   turn.quiet = false;
   turn.config = this.config(conv);
+  // These become the initial input, not steering. Keep their separate display bubbles on recovery.
+  for (const item of items) delete item.entry.clientInputId;
+  turn.prompt = items[0].entry;
+  turn.prompt.pendingTurn = true;
   this.takeQueue(conv, turn, items);
   const inputs = await Promise.all(items.map(item => item.input || inputOf(item.prompt)));
   return this.startTurn(conv, turn, combine(inputs));
@@ -823,6 +956,11 @@ class Chat {
 
  // An event from the backend for one of this chat's sessions. Events of a turn that is over, or of another one, are let go.
  onEvent(conv, method, p) {
+  const replaying = conv.turn?.replaying;
+  if (conv.recoveryEvents && !replaying) { conv.recoveryEvents.push([method, p]); return; }
+  if (!replaying && Number.isSafeInteger(p.seq)) {
+   if (p.seq <= (conv.revision ?? -1)) return;
+  }
   if (method === 'session.updated') { this.onSession(conv, p); return; }
   const turn = conv.turn;
   if (!turn) return;
@@ -851,11 +989,18 @@ class Chat {
    case 'compaction.completed': this.compactionDone(conv, turn, !!p.ok); break;
    case 'usage': this.onUsage(conv, turn, p); break;
    case 'input.accepted': {
-    const item = turn.queue.find(entry => entry.id === p.clientInputId);
+    let item = turn.queue.find(entry => entry.id === p.clientInputId);
+    if (!item && turn.replaying && p.input) {
+     const prompt = { text: p.input.text, attachments: p.input.attachments || [] };
+     const bubble = this.userMessage(prompt);
+     conv.list.append(bubble);
+     const entry = turn.recoveryInputs.get(p.clientInputId) || { role: 'user', text: prompt.text, content: prompt.text, attachments: prompt.attachments, backendTurn: turn.id, clientInputId: p.clientInputId };
+     item = { id: p.clientInputId, prompt, bubble, entry };
+    }
     if (item) this.takeQueue(conv, turn, [item]);
     break;
    }
-   case 'turn.completed': turn.finish(p); break;
+   case 'turn.completed': turn.completed = true; turn.finish(p); break;
    default: break;
   }
  }
@@ -881,7 +1026,7 @@ class Chat {
  }
 
  onUsage(conv, turn, usage) {
-  Usage.record(usage);
+  if (!turn.replaying) Usage.record(usage);
   spend(turn.compaction?.entry || turn.part.entry, usage);
   if (usage.context) {
    conv.tokens = Number(usage.context.used) || 0;
@@ -901,6 +1046,7 @@ class Chat {
  // for a turn that ended or was stopped gets null (answered as cancelled), and one for another turn, or a step asked
  // twice, is refused with `stale_turn` before anything shows or runs.
  async claim(conv, p, signal, key) {
+  if (conv.recovering) await conv.recovering;
   const turn = conv.turn;
   if (turn && !turn.remote && !turn.controller.signal.aborted && !signal.aborted) {
    await Promise.race([turn.started, turn.done, new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }))]).catch(() => {});
@@ -999,8 +1145,10 @@ class Chat {
    if (at >= 0) turn.queue.splice(at, 1);
   }
   this.closePart(conv, turn.part);
-  for (const { prompt, bubble } of items) {
-   const entry = { role: 'user', text: prompt.text, attachments: prompt.attachments.map(slim), content: prompt.text };
+  for (const item of items) {
+   const { prompt, bubble } = item;
+   if (item.entry) drop(conv.messages, item.entry);
+   const entry = item.entry || { role: 'user', text: prompt.text, attachments: prompt.attachments.map(slim), content: prompt.text, backendTurn: turn.id, clientInputId: item.id };
    conv.messages.push(entry);
    this.nodes.set(entry, bubble);
   }
@@ -1012,7 +1160,7 @@ class Chat {
   view ||= this.assistantMessage(conv);
   if (!view.el.isConnected) conv.list.append(view.el);
   // Each part of a reply notes the model that wrote it, for the chat's stats and for a model that later takes over.
-  const entry = { role: 'assistant', content: '', turn: turn.id, model: turn.config.id };
+  const entry = { role: 'assistant', content: '', turn: turn.id, model: turn.config.id, backendTurn: turn.id };
   conv.messages.push(entry);
   view.el.__entry = entry;
   turn.part = { view, entry, base: '', text: '' };
@@ -1021,7 +1169,7 @@ class Chat {
 
  closePart(conv, { view, entry }) {
   this.dismissGhost(view);
-  if (!entry.content && !entry.usage) drop(conv.messages, entry);
+  if (!entry.content && !entry.usage && !entry.pendingTurn) drop(conv.messages, entry);
   view.stream.finish().then(() => {
    view.el.classList.remove('is-streaming');
    if (!entry.content.trim()) collapse(view.el);
@@ -1043,14 +1191,13 @@ class Chat {
    this.settings.setModel(turn.switch);
   }
   window.browserPanel?.drive(conv, false);
-  if (!entry.content && !entry.usage) drop(conv.messages, entry);
+  if (!entry.content && !entry.usage && !entry.pendingTurn) drop(conv.messages, entry);
   if (turn.next) collapse(turn.next.el);
-  // Messages the backend never took stay in the chat as they were sent.
-  for (const { prompt, bubble } of turn.queue.splice(0)) {
-   const item = { role: 'user', text: prompt.text, attachments: prompt.attachments.map(slim), content: prompt.text };
-   conv.messages.push(item);
-   this.nodes.set(item, bubble);
-  }
+  // Reconcile an uncertain outcome before Send or Retry, rather than implicitly starting again.
+  if (turn.completed) {
+   for (const item of conv.messages) if (item.backendTurn === turn.id) delete item.pendingTurn;
+  } else if (!turn.quiet) conv.reconciled = false;
+  turn.queue.length = 0;
   if (conv.record && this.library.chat(conv.id)) this.save(conv);
   if (conv !== this.active) conv.unread = true;
   this.dismissGhost(view);
@@ -1105,7 +1252,7 @@ class Chat {
    part.view.el.before(notice);
    at = part.entry;
   }
-  turn.compaction = { notice, at, entry: { role: 'compact', model: turn.config.id } };
+  turn.compaction = { notice, at, entry: { role: 'compact', model: turn.config.id, backendTurn: turn.quiet ? undefined : turn.id } };
   if (conv === this.active) this.followBottom();
  }
 
@@ -1315,7 +1462,8 @@ class Chat {
  }
 
  retry(conv, view) {
-  if (conv.turn || conv.deleting) return;
+  if (conv.turn || conv.deleting || conv.recovering) return;
+  if (!conv.reconciled) { this.reconcile(conv); return; }
   const config = this.config(conv);
   if (Backend.available && !config.ready) {
    this.settings.open(I18n.t('settings.key.needed'), config.provider);
@@ -1449,7 +1597,8 @@ class SideChat extends Chat {
    chat: id => id === record.id ? record : null,
    update: (id, changes) => id === record.id ? Object.assign(record, changes) : null,
    conversation: id => library.side(id).then(body => { state.seen = body.seen; return body; }),
-   saveMessages: (id, messages, tokens) => library.saveSide(id, { messages, tokens, seen: state.seen }),
+   saveMessages: (id, messages, tokens, options) => library.saveSide(id, { messages, tokens, seen: state.seen }, options),
+   persist: () => library.persist(),
    clear: id => library.clearSide(id),
    isProtected: () => false,
    isLocked: () => false,
@@ -1526,6 +1675,10 @@ class SideChat extends Chat {
   return this.driving = super.resume(conv, config);
  }
 
+ recoverTurn(conv, snapshot) {
+  return this.driving = super.recoverTurn(conv, snapshot);
+ }
+
  // Resolves once no reply is being written here and what the last one wrote is on its way to the disk.
  idle() {
   return Promise.resolve(this.driving).catch(() => {});
@@ -1539,6 +1692,8 @@ class SideChat extends Chat {
   if (Backend.can('sessions.delete')) Backend.request('session.delete', { sessionId: this.sessionOf(conv) }).catch(() => {});
   conv.messages = [];
   conv.tokens = 0;
+  conv.sessionVersion = null; // Clear explicitly starts over; the backend still enforces create-only acceptance.
+  conv.revision = undefined;
   this.state.seen = 0;
   this.waiting = null;
   conv.list.replaceChildren();
@@ -1581,7 +1736,10 @@ Backend.handle('host.tool', (params, { signal }) => {
 // A backend that goes away mid-reply ends every reply being written with an error, and the chat says so.
 Backend.on('closed', () => {
  for (const chat of chats) {
-  for (const conv of chat.conversations.values()) conv.turn?.finish({ status: 'error', error: { code: 'backend_crashed', message: '' } });
+  for (const conv of chat.conversations.values()) {
+   conv.reconciled = false;
+   conv.turn?.finish({ status: 'error', error: { code: 'backend_crashed', message: '' } });
+  }
  }
 });
 

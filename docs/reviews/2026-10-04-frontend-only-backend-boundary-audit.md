@@ -98,6 +98,8 @@ The backend owns authoritative history, but the frontend only persists its displ
 
 **Recommendation:** define page-reinitialization semantics and durable session recovery before integration. Keep display caches frontend-owned, but make backend session existence, revision, and recovery explicit. Rust must currently persist sessions independently and treat repeated `initialize` as a connection reset; that still cannot restore missing frontend text.
 
+**Resolution:** saved chats now reconcile through capability-gated `session.get` before continuing. Durable pre-dispatch turn/input checkpoints and backend display replay recover active or missed completed turns without resending them; a snapshot revision fences replay from live events. Missing sessions/unknown turns fail visibly without replacing the display cache or importing it as model history. Explicit session-incarnation/create-only guards prevent implicit empty-session creation; renderer-scoped RPC IDs and connection-reset semantics cover reload. Contract: `docs/backend-interface.md`; focused regressions: `test/session-recovery.test.js`. The external backend must implement the negotiated recovery contract; legacy backends fail closed.
+
 ### F05 — HIGH: “locked chat” does not protect backend history
 
 **Evidence:** `library.js:296–356`, `chat-lock.js`, `chat.js:359–423,703–710`; capabilities are stored but `sessions.encrypted` is not checked.

@@ -68,6 +68,7 @@ The client sends `initialize` once the backend process is running and the page h
 ```ts
 initialize({
   protocolVersion: '0.1',
+  connectionId: string,             // fresh per renderer; RPC ids are "<connectionId>:<counter>"
   client: { name: 'OpenGhost', version: '1.3.0', platform: 'linux' | 'darwin' | 'win32', locale: string },
   host: {
     tools: HostToolSchema[],      // the built-in browser's tools, see "Host tools"
@@ -89,6 +90,7 @@ Until `initialize` succeeds every request fails with `backend_unavailable`. The 
 | `auth.providers` | Settings → Providers asks `auth.providers`; without it the page says there is nothing to connect |
 | `compaction.manual` | "Compact chat" in the plus menu is offered |
 | `sessions.delete` | Deleting a chat (or clearing a mini chat) sends `session.delete` |
+| `sessions.recovery` | Required for turns: `session.get`, durable turn replay, and atomic session/version guards below. Without it chats remain display-only |
 | `usage.limits` | Settings → Usage asks `account.limits` for each connected provider |
 
 The rest of the audit's `Capabilities` (turns, thinking, tools, approvals, attachments, titles, userContext) may be
@@ -106,16 +108,17 @@ auth.logout({ provider }) → ProviderStatus
 account.limits({ provider }) → AccountLimits | null
 models.list({}) → Model[]
 
-// Turns. sessionId is the frontend's chat id; a mini chat's is "<chat id>:mini". The backend creates a session the first
-// time it sees an id.
-turn.start({ sessionId, clientTurnId, input: Input, ...SessionParams }) → { turnId }
-turn.retry({ sessionId, clientTurnId, ...SessionParams }) → { turnId }      // run again from the history, no new input
+// Turns. sessionId is the frontend's chat id; a mini chat's is "<chat id>:mini".
+// sessionVersion: null is explicitly create-only; a string requires that existing session incarnation.
+turn.start({ sessionId, sessionVersion: string | null, clientTurnId, input: Input, ...SessionParams }) → { turnId, sessionVersion: string }
+turn.retry({ sessionId, sessionVersion: string, clientTurnId, ...SessionParams }) → { turnId }      // run again from the history, no new input
 turn.steer({ sessionId, turnId, clientInputId, input: Input, host }) → { accepted: boolean }
 turn.cancel({ sessionId, turnId }) → null
 
 // Sessions
-session.configure({ sessionId, model?, provider?, thinking?, permissionMode? }) → { model, thinking, permissionMode }
-session.compact({ sessionId }) → { ok: boolean }      // resolves when the compaction is over
+session.get({ sessionId, clientTurnId?: string }) → SessionRecovery
+session.configure({ sessionId, sessionVersion: string, model?, provider?, thinking?, permissionMode? }) → { model, thinking, permissionMode }
+session.compact({ sessionId, sessionVersion: string }) → { ok: boolean }      // resolves when the compaction is over
 session.delete({ sessionId }) → null
 
 type SessionParams = {
@@ -142,6 +145,55 @@ type UserContext = { instructions: string, files: { id, name, size, kind: 'text'
 type BrowserState = { open: boolean, tabs: { n: number, title: string, url: string, active: boolean }[], signedIn: { host: string, at: number }[] }
 ```
 
+### Session recovery (`sessions.recovery`)
+
+```ts
+type DisplayInput = { text: string, attachments: DisplayAttachment[] }
+// Display attachments use the frontend cache shape: name, size, image?, url?, width?, height?, note?,
+// pasted?: {preview, lines}, video?: {path, duration, poster}. No model prompt/tool history is returned.
+type SessionRecovery = { exists: false } | {
+  exists: true,
+  sessionVersion: string,                 // durable, opaque incarnation; changes if deleted/recreated
+  revision: number,                       // safe integer: atomic high-water seq of this snapshot
+  turn: null | {
+    clientTurnId: string, turnId: string,
+    input: DisplayInput | null,            // original accepted input; null for turn.retry
+    events: { method: string, params: object }[], // ordered turn display events, from its beginning through revision
+  },
+}
+```
+
+- On opening a saved main/mini chat (including after reload/unlock), the frontend calls `session.get` before allowing
+  continuation. The frontend keeps its chat index and display cache; it does **not** send that cache back as history.
+  With no pending checkpoint, return the active turn, or `null` when idle. With `clientTurnId`, return exactly that
+  accepted turn, even if completed while the UI was absent; return `null` if never accepted. Never create in `get`.
+- Before dispatching start/retry/steer, the frontend durably saves its index and display checkpoint, with the turn/input
+  client IDs. Storage failure prevents dispatch. Accepted turn input and its display-event journal must be durable
+  **before** the backend acknowledges acceptance or emits events. Keep completed recovery journals addressable by
+  `clientTurnId`: a renderer may have been absent for an arbitrary time. This journal is a display projection, not the
+  backend's model-facing transcript. Include `input.accepted.input: DisplayInput` for accepted steering in replay.
+- `session.get` atomically subscribes this connection to the session and returns its snapshot. Every subsequent
+  session notification has a monotonically increasing safe-integer `seq` greater than `revision`. The frontend
+  buffers notifications during get, ignores those already in the snapshot, rebuilds only the pending turn, and
+  reattaches its original `turnId`. Replay includes message/compaction/usage/input events and, if terminal,
+  `turn.completed`. Do not replay reverse requests as events. Completed cached chats and frontend annotations remain
+  untouched; replay does not re-charge the frontend usage ledger. General live-stream gap repair is not added here.
+- Repeated `initialize` with a new `connectionId` replaces the renderer connection, **not** its sessions or active
+  turns. Invalidate old reverse RPCs and old replies; pause renderer-dependent work until that session's `get` has
+  subscribed the new page. Send pending approvals under fresh RPC IDs after get. A host action whose old execution
+  outcome is unknown must not be repeated automatically; reconcile/cancel that tool step in the backend. Unopened
+  sessions retain their recovery journal until opened. App exit may stop execution, but sessions/journals must survive
+  backend process restart and report the actual terminal or recoverable state.
+- `turn.start` checks `sessionVersion` atomically with acceptance. `null` permits creation only when absent (new
+  frontend chat or unused mini chat); a string requires the exact existing incarnation. Missing/mismatched versions
+  fail with `session_conflict`/`session_missing`, **never** an implicit empty session. Retry/configure/compact require
+  an existing incarnation too. Reject a different start while a turn is active. Deduplicate accepted starts/retries
+  by `(sessionId, clientTurnId)` and steering by `(sessionId, turnId, clientInputId)` before executing anything again;
+  repeated identical requests return the original identity, conflicting reuse fails.
+- Missing sessions (including legacy visible chats), unsupported recovery, and unknown pending turns fail closed with
+  an existing-style error and recovery Retry. The display cache is preserved. Restore the backend session or start a
+  new chat; there is no automatic import, resend, reset, or `session.create`. A rejected Send keeps the composer text.
+
 **Chat/folder deletion.** `session.delete` deletes only the exact `sessionId` and acknowledges after erasure; an absent
 session succeeds with `null` so retry is safe. The frontend explicitly deletes both `<chat id>` and `<chat id>:mini`,
 then removes that chat's local records. Folder deletion snapshots its children and commits each acknowledged chat;
@@ -160,7 +212,8 @@ approval cards stay until the backend answers them with `approval.resolved`.
 
 Every event carries `sessionId`; the frontend routes it to the chat window that holds that session and ignores events
 for sessions it doesn't have. Turn events carry `turnId` and are ignored unless they belong to the turn on screen (events
-that arrive before the frontend knows the turn's id are held until it does). `seq` may be sent; it isn't checked yet.
+that arrive before the frontend knows the turn's id are held until it does). Recovery-capable backends must send `seq`;
+the recovery snapshot's revision filters duplicate replay/live events. General live gap detection is not implemented.
 
 ```ts
 turn.started      { sessionId, turnId, clientTurnId }
@@ -271,8 +324,8 @@ replace" when `keySaved` is true, and an emptied field sends `auth.setKey({ key:
 
 ## Not in this version
 
-From the audit's ABP v0, these are not used yet: `session.create`/`session.get`/`session.list` (the frontend keeps its
-own chat list and a display copy of each chat), `session.rename`, `session.editMessage` (editing a diagram changes only
+From the audit's ABP v0, these are not used yet: `session.create`/`session.list` (the frontend keeps its
+own chat list and a display copy of each chat; `session.get` is the recovery contract above), `session.rename`, `session.editMessage` (editing a diagram changes only
 the frontend's copy), `turn.followUp`, `context.update` (the browser state goes with each turn instead), `seq` gap
 detection, `tool.*` and `reasoning.*` rendering, and capability gating of the mode picker, effort slider and mini chat.
 

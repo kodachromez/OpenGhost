@@ -8,7 +8,7 @@ const local = {
   try { return JSON.parse(localStorage.getItem(PREFIX + key)); } catch { return null; }
  },
  async write(key, value) {
-  try { localStorage.setItem(PREFIX + key, JSON.stringify(value)); } catch {}
+  localStorage.setItem(PREFIX + key, JSON.stringify(value));
  },
  async remove(key) {
   localStorage.removeItem(PREFIX + key);
