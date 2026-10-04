@@ -220,18 +220,26 @@ test('missing records and imported mini-ID collisions never delete another sessi
  assert.ok(f.library.chat('a:mini'));
 });
 
-test('new work cannot recreate a session while its deletion awaits ACK', async () => {
+test('new work cannot recreate a session while its deletion awaits ACK', async t => {
  const f = await setup();
+ t.after(() => f.window.Backend.close({ state: 'exited' }));
+ // Start from a usable chat: deletion, not missing recovery state or capability, must block compaction.
+ Object.assign(f.selected, { reconciled: true, messages: [{ role: 'user', text: 'Existing message' }] });
+ f.window.Backend.capabilities.compaction = { manual: true };
  f.chat.active = f.selected;
+ assert.equal(f.chat.canCompact, true);
  const pending = f.list.remove('a');
  assert.equal(f.chat.send('new message'), false);
  assert.equal(f.chat.canCompact, false);
+ assert.equal(f.chat.compactNow(), false);
  f.chat.retry(f.selected, {});
  f.chat.switchModel('new-model');
+ assert.deepEqual(f.transport.sent.filter(message => message.method !== 'initialize').map(message => message.method), ['session.delete']);
  assert.deepEqual(f.ids(), ['a']);
  await f.answer('a', 'Try again later');
  await pending;
  assert.equal(f.selected.deleting, false, 'a failed deletion releases the chat for use and retry');
+ assert.equal(f.chat.canCompact, true, 'a refused deletion restores compaction eligibility');
 });
 
 test('a chat added while folder deletion awaits ACK is not silently removed', async () => {
