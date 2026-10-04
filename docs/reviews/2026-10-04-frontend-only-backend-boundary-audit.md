@@ -69,6 +69,8 @@ No **CRITICAL** finding is established. **HIGH** means a safety/data-loss/reliab
 
 **Recommendation:** one globally unique job ID, a per-turn set of jobs/reverse requests, cancellation latched before registration, and an explicit browser control lease checked immediately before side effects. Decide concurrency at panel level, not just per guest. Do not mistake a cancelled result for proof that no side effect occurred.
 
+**Resolution (2026-10-04):** every `host.tool` step now gets its own abort controller, tied to both the request's signal and the turn's, with a job ID unique across main and side chats. Stop therefore fans out to every step and hand-back waiter of the turn and answers `cancelled` at once, and late browser results are dropped. Before it acts, `BrowserPanel.run` checks for Stop and for user control (after `ensure()`, and before `browser_tabs` mutations). Take Control cancels the steps under way: a step stopped that way waits for the hand-back and reports `handed-back`, while one that already finished keeps its real result. The main process checks for abort after the cursor delay and between the input actions of click and type, the sleep-only wait can be interrupted, and a cancelled run is marked `stopped`. Regression tests: `test/cancellation.test.js`. A turn that ends (including on `turn.completed`) stops its outstanding steps too. Navigation, screenshot and read are still not interrupted mid-call.
+
 ### F03 — HIGH: folder deletion does not delete backend sessions (**reproduced**)
 
 **Evidence:** `chat-list.js:491–496,530–532`; `library.js:212–233`; `chat.js:427–443,1474–1488`.

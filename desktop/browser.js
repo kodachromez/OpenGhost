@@ -540,6 +540,7 @@ async function act(found, name, args, signal) {
    }
    check();
    await pointer(found, x, y);
+   check();
    await mouse(guest, x, y, args.double ? 2 : 1);
    await settle(guest);
    return state(guest, { note });
@@ -550,15 +551,18 @@ async function act(found, name, args, signal) {
     const spot = await world(guest, `__og.point(${Number(args.ref)})`);
     check();
     await pointer(found, spot.x, spot.y);
+    check();
     await mouse(guest, spot.x, spot.y);
     await sleep(80);
    }
+   check();
    if (args.clear !== false) {
     await press(guest, 'Control+A');
     if (!text) await press(guest, 'Delete');
    }
+   check();
    if (text) await guest.debugger.sendCommand('Input.insertText', { text });
-   if (args.submit) { await sleep(60); await press(guest, 'Enter'); }
+   if (args.submit) { await sleep(60); check(); await press(guest, 'Enter'); }
    await settle(guest);
    return state(guest);
   }
@@ -606,7 +610,7 @@ async function act(found, name, args, signal) {
      await sleep(400);
     }
    } else {
-    await sleep(seconds * 1000);
+    while (Date.now() < until) { check(); await sleep(Math.min(250, until - Date.now())); }
    }
    await settle(guest);
    return state(guest, { note: args.text ? (found ? `"${args.text}" is on the page.` : `"${args.text}" did not appear within ${seconds} s.`) : '' });

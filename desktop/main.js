@@ -118,7 +118,8 @@ async function runBrowser(id, name, args, sender) {
  try {
   return await Browser.run(name, args && typeof args === 'object' ? args : {}, sender, controller.signal);
  } catch (error) {
-  return { error: error.message };
+  // `stopped`: the step was cancelled and ended before its next action, so the page may show only part of it.
+  return controller.signal.aborted ? { error: error.message, stopped: true } : { error: error.message };
  } finally {
   browserJobs.delete(key);
  }

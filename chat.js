@@ -20,6 +20,8 @@ const SUPERSEDED = 'superseded';
 
 const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 const samePath = (a, b) => Library.samePath(a, b);
+// Browser steps are told apart across every chat on the page, the main one and its side chats alike.
+let browserSteps = 0;
 const uid = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
 // One attachment as the backend gets it (ABP Attachment), once the app has read it: the picture of an image, the text of
@@ -146,7 +148,6 @@ class Chat {
   this.active = null;
   this.draft = null;
   this.opening = 0;
-  this.tools = 0;
   this.follow = true;
   this.lastTop = 0;
   this.followFrame = 0;
@@ -541,8 +542,6 @@ class Chat {
   const turn = conv.turn;
   if (!turn) return;
   turn.controller.abort();
-  turn.release?.('abort');
-  if (turn.tool) window.browserPanel?.cancel(turn.tool);
   for (const pending of turn.approvals) pending.card.settle('deny');
   if (turn.remote) Backend.request('turn.cancel', { sessionId: this.sessionOf(conv), turnId: turn.remote }).catch(() => {});
  }
@@ -684,7 +683,7 @@ class Chat {
  begin(conv, config) {
   const turn = conv.turn = {
    id: uid(), remote: '', controller: new AbortController(), config, part: null, parts: [], next: null, queue: [], approvals: new Set(),
-   messages: new Set(), requests: new Set(), early: [], prompt: null, compaction: null, tool: '', text: false, finishReason: null,
+   messages: new Set(), requests: new Set(), early: [], prompt: null, compaction: null, releases: new Set(), steps: new Set(), text: false, finishReason: null,
   };
   turn.done = new Promise((resolve, reject) => {
    turn.finish = ({ status, finishReason, error } = {}) => {
@@ -760,7 +759,7 @@ class Chat {
   turn.queue.push(item);
   this.dismissGhost(turn.part.view);
   for (const pending of turn.approvals) pending.card.settle(SUPERSEDED);
-  turn.release?.('message');
+  for (const release of turn.releases) release('message');
   this.steer(conv, turn, item);
  }
 
@@ -920,38 +919,58 @@ class Chat {
  }
 
  // The backend asks the app to run one of its host tools: the built-in browser. While the user has taken control of the
- // browser the step waits for them to hand it back, then reports what the page is now instead.
+ // browser the step waits for them to hand it back, then reports what the page is now instead; a step the user takes the
+ // browser from midway stops before its next action and does the same. Stopping the turn, or the backend cancelling the
+ // request, stops the step at once and answers cancelled: what it still brings back is dropped.
  async onHostTool(conv, p, signal) {
   const panel = window.browserPanel;
   if (!panel || !window.HostTools?.has(p.name)) throw new BackendError({ code: 'unsupported', message: `The app has no host tool ${p.name}` });
   const turn = await this.claim(conv, p, signal, p.toolCallId && `tool call ${p.toolCallId}`);
   if (!turn) return { status: 'cancelled', content: [] };
+  const cancelled = () => signal.aborted || turn.controller.signal.aborted || conv.turn !== turn;
   this.showGhost(turn.next || turn.part.view);
   panel.drive(conv, true);
   let handed = false;
-  if (panel.userHas) {
-   const why = await new Promise(resolve => {
-    turn.release = resolve;
-    panel.waitForAgent().then(() => resolve('back'));
-    signal.addEventListener('abort', () => resolve('abort'), { once: true });
-   });
-   turn.release = null;
-   if (why === 'abort' || signal.aborted || turn.controller.signal.aborted || conv.turn !== turn) return { status: 'cancelled', content: [] };
-   if (why === 'message') return { status: 'cancelled', reason: 'message', content: [] };
-   handed = true;
-  }
-  const id = turn.tool = `${conv.id}-${++this.tools}`;
-  const stop = () => panel.cancel(id);
-  signal.addEventListener('abort', stop, { once: true });
-  try {
-   const answer = await panel.run(handed ? 'browser_snapshot' : p.name, handed ? {} : p.args || {}, { id });
-   if (signal.aborted || turn.controller.signal.aborted || conv.turn !== turn) return { status: 'cancelled', content: [] };
+  for (;;) {
+   if (panel.userHas) {
+    const why = await this.awaitHandBack(turn, panel, signal);
+    if (why === 'abort' || cancelled()) return { status: 'cancelled', content: [] };
+    if (why === 'message') return { status: 'cancelled', reason: 'message', content: [] };
+    handed = true;
+   }
+   const id = `${conv.id}-${++browserSteps}`, job = new AbortController();
+   const stop = () => { job.abort(); panel.cancel(id); };
+   signal.addEventListener('abort', stop, { once: true });
+   turn.controller.signal.addEventListener('abort', stop, { once: true });
+   turn.steps.add(stop);
+   let answer;
+   try {
+    const stopped = new Promise(resolve => job.signal.addEventListener('abort', resolve, { once: true }));
+    answer = await Promise.race([panel.run(handed ? 'browser_snapshot' : p.name, handed ? {} : p.args || {}, { id, signal: job.signal }), stopped]);
+   } finally {
+    signal.removeEventListener('abort', stop);
+    turn.controller.signal.removeEventListener('abort', stop);
+    turn.steps.delete(stop);
+   }
+   if (cancelled()) return { status: 'cancelled', content: [] };
+   if (answer?.taken) continue;
    const result = HostTools.result(p.args || {}, answer);
    return { ...result, status: handed ? 'handed-back' : result.isError ? 'error' : 'ok' };
-  } finally {
-   signal.removeEventListener('abort', stop);
-   if (turn.tool === id) turn.tool = '';
   }
+ }
+
+ // Until the user hands the browser back ('back'), sends a message instead ('message'), or the step is stopped ('abort').
+ async awaitHandBack(turn, panel, signal) {
+  let release;
+  const why = await new Promise(resolve => {
+   release = resolve;
+   turn.releases.add(release);
+   panel.waitForAgent().then(() => resolve('back'));
+   signal.addEventListener('abort', () => resolve('abort'), { once: true });
+   turn.controller.signal.addEventListener('abort', () => resolve('abort'), { once: true });
+  });
+  turn.releases.delete(release);
+  return why;
  }
 
  // The messages the backend took in between its steps join the chat, and the reply goes on in a new part under them.
@@ -995,8 +1014,8 @@ class Chat {
   const { view, entry } = turn.part, aborted = error?.name === 'AbortError';
   for (const pending of turn.approvals) pending.card.settle('deny');
   // A browser step the turn still has running, or waiting for the user to hand the browser back, ends with it.
-  turn.release?.('abort');
-  if (turn.tool) window.browserPanel?.cancel(turn.tool);
+  for (const release of turn.releases) release('abort');
+  for (const stop of turn.steps) stop();
   conv.turn = null;
   if (turn.compaction) this.compactionDone(conv, turn, false);
   else if (error && !aborted && (turn.switch || turn.compacting)) this.failedNotice(conv, turn);

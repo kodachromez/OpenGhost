@@ -62,6 +62,8 @@ class BrowserPanel {
   this.control = 'agent';
   this.lent = null;
   this.waiters = [];
+  // The agent's browser steps under way, by id: taking control stops them.
+  this.jobs = new Set();
   this.cursorAt = null;
   this.accounts = read(ACCOUNTS) || [];
   const saved = read(STORE) || {};
@@ -452,6 +454,7 @@ class BrowserPanel {
 
  take() {
   this.control = 'user';
+  for (const id of this.jobs) this.cancel(id);
   this.sync();
   this.active?.view?.focus();
  }
@@ -498,16 +501,26 @@ class BrowserPanel {
  // then land in the page. So between the agent's steps the keyboard is back where the user was, and a step that types or
  // presses keys where the page's focus is gets the keyboard back first, exactly as it would have had it without the user:
  // what the agent does and sees stays the same, and Escape reaches the app during every other step.
- async run(name, args, { id }) {
+ //
+ // A step acts only while the agent has the browser: one stopped (`signal`) or taken over by the user before it acts does
+ // nothing, and one stopped midway in the main process ends before its next action. A step the user took the browser
+ // from answers { taken: true }; the chat then waits for the browser to be handed back.
+ async run(name, args, { id, signal }) {
   if (!bridge?.run) return { error: 'The browser is only available in the desktop app' };
   const back = document.activeElement;
+  const halt = () => signal?.aborted ? { error: 'Stopped by the user', stopped: true } : this.control === 'user' ? { taken: true } : null;
+  this.jobs.add(id);
   try {
-   if (name === 'browser_tabs') return await this.tabsTool(args, { id });
+   if (name === 'browser_tabs') return await this.tabsTool(args, { id, halt });
    const tab = await this.ensure();
+   const held = halt();
+   if (held) return held;
    const keys = name === 'browser_press' || (name === 'browser_type' && (args.ref === undefined || args.ref === null || args.ref === ''));
    if (keys && this.lent === tab.view) tab.view.focus();
-   return await bridge.run(id, name, { ...args, tab: tab.id });
+   const result = await bridge.run(id, name, { ...args, tab: tab.id });
+   return result?.stopped && this.control === 'user' && !signal?.aborted ? { taken: true } : result;
   } finally {
+   this.jobs.delete(id);
    this.giveBack(back);
   }
  }
@@ -525,7 +538,7 @@ class BrowserPanel {
   bridge?.cancel?.(id);
  }
 
- async tabsTool(args, { id }) {
+ async tabsTool(args, { id, halt = () => null }) {
   const action = String(args.action || 'list').toLowerCase();
   const pick = () => {
    const tab = this.tabs[Math.round(Number(args.tab)) - 1];
@@ -533,16 +546,19 @@ class BrowserPanel {
    return tab;
   };
   try {
+   if (['new', 'switch', 'close'].includes(action) && halt()) return halt();
    if (action === 'new') {
     const tab = this.newTab('', { focus: false });
     if (!args.url) return { text: `Opened a new empty tab.\n\nTabs:\n${this.tabsText()}` };
     await this.ensure();
+    if (halt()) return halt();
     const result = await bridge.run(id, 'browser_navigate', { url: args.url, tab: tab.id });
     return result.error ? result : { ...result, text: `Tabs:\n${this.tabsText()}\n\n${result.text}` };
    }
    if (action === 'switch') {
     this.select(pick());
     const tab = await this.ensure();
+    if (halt()) return halt();
     return bridge.run(id, 'browser_snapshot', { tab: tab.id });
    }
    if (action === 'close') {
