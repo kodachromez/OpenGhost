@@ -212,6 +212,8 @@ Approvals are generic enough to name unknown tools and display JSON fallback arg
 
 **Recommendation:** distinguish retry-start from retry-accepted-turn; correlate retries explicitly and define idempotency. Honor steering acceptance/errors and preserve input order. Abort/drain pending steering work when its turn ends.
 
+**Resolution:** Retry now preserves undelivered input, targets accepted failures by `failedTurnId`, and reconciles uncertain dispatches without resending; missing identity/context and explicit no-retry errors fail closed. Steering is serialized, reports rejection/errors, and aborts/drains on turn end with unconfirmed inputs visibly retained. Contract: `docs/backend-interface.md`; focused regressions: `test/retry-steering.test.js` plus session-recovery coverage. Approval/mode behavior is unchanged.
+
 ### F13 — MEDIUM: model/capability defaults invent backend behavior
 
 **Evidence:** `settings.js:4–10,75–85,247–312`; `model-stage.js:56–60,389–442`; `script.js:70–83`; `mini-chat.js:107–113`.

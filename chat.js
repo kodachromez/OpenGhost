@@ -94,6 +94,16 @@ function spend(entry, usage) {
 
 const aborted = () => new DOMException('Aborted', 'AbortError');
 
+// Stop waiting even when attachment preparation (or a start acknowledgement) never settles.
+function untilAborted(promise, signal) {
+ return new Promise((resolve, reject) => {
+  const stop = () => reject(aborted());
+  if (signal.aborted) stop();
+  else signal.addEventListener('abort', stop, { once: true });
+  Promise.resolve(promise).then(resolve, reject).finally(() => signal.removeEventListener('abort', stop));
+ });
+}
+
 function settle(root) {
  for (const animation of root.getAnimations({ subtree: true })) {
   if (animation.effect?.getComputedTiming().iterations === Infinity) continue;
@@ -816,11 +826,14 @@ class Chat {
    id: uid(), remote: '', controller: new AbortController(), config, part: null, parts: [], next: null, queue: [], approvals: new Set(),
    messages: new Map(), tools: new Map(), requests: new Set(), early: [], prompt: null, compaction: null, releases: new Set(), steps: new Set(), text: false, finishReason: null,
   };
+  turn.steeringController = new AbortController();
+  turn.steering = Promise.resolve();
   // A bounded accounting tail, not permission to resume old output. Recovery replaces it with its snapshot.
   (conv.eventTurns ||= []).push(turn);
   if (conv.eventTurns.length > 16) conv.eventTurns.shift();
   turn.done = new Promise((resolve, reject) => {
    turn.finish = ({ status, finishReason, error } = {}) => {
+    turn.steeringController.abort();
     if (turn.terminal) return;
     turn.terminal = true;
     turn.early.length = 0;
@@ -850,6 +863,7 @@ class Chat {
  run(conv, prompt, config, bubble) {
   const turn = this.begin(conv, config);
   const entry = turn.prompt = { role: 'user', text: prompt.text, attachments: prompt.attachments.map(slim), content: prompt.text, backendTurn: turn.id, pendingTurn: true };
+  turn.retryIntent = { prompts: [prompt], entries: [entry] };
   conv.messages.push(entry);
   if (bubble) this.nodes.set(entry, bubble);
   this.openPart(conv, turn);
@@ -864,6 +878,7 @@ class Chat {
  }
 
  async startTurn(conv, turn, input) {
+  turn.retryIntent.input = input;
   turn.controller.signal.throwIfAborted();
   await Backend.ready;
   if (!Backend.available) throw Backend.unavailable();
@@ -872,24 +887,42 @@ class Chat {
   const params = { sessionId: this.sessionOf(conv), sessionVersion: conv.sessionVersion, clientTurnId: turn.id, input, ...(await this.sessionParams(conv, turn)) };
   await this.checkpoint(conv);
   turn.controller.signal.throwIfAborted();
+  if (!Backend.available) throw Backend.unavailable();
+  turn.dispatched = true; // After this point, failure is uncertain until recovery or turn.completed.
   const result = await Backend.request('turn.start', params, { signal: turn.controller.signal });
   if (result?.sessionVersion) conv.sessionVersion = result.sessionVersion;
-  if (result?.turnId) this.setRemote(conv, turn, result.turnId);
+  this.acknowledgeTurn(conv, turn, result);
   return turn.done;
  }
 
- resume(conv, config) {
+ acknowledgeTurn(conv, turn, result) {
+  if (typeof result?.turnId !== 'string' || !result.turnId) throw new BackendError({ code: 'invalid_turn', message: 'The backend did not identify the accepted turn.' });
+  this.setRemote(conv, turn, result.turnId);
+ }
+
+ resume(conv, config, intent) {
+  if (!intent || !intent.failedTurnId && !intent.prompts?.length) return;
   const turn = this.begin(conv, config);
+  turn.retryIntent = intent;
+  for (const entry of intent.entries || []) { entry.backendTurn = turn.id; entry.pendingTurn = true; }
+  turn.prompt = intent.entries?.[0] || null;
   this.openPart(conv, turn);
   turn.part.entry.pendingTurn = true;
   this.onChange();
   return this.drive(conv, turn, async () => {
+   if (!intent.failedTurnId) {
+    const input = intent.input || combine(await Promise.all(intent.prompts.map(inputOf)));
+    for (let i = 0; i < intent.entries.length; i++) intent.entries[i].attachments = intent.prompts[i].attachments.map(slim);
+    return this.startTurn(conv, turn, input);
+   }
    this.requireRecovery();
-   const params = { sessionId: this.sessionOf(conv), sessionVersion: conv.sessionVersion, clientTurnId: turn.id, ...(await this.sessionParams(conv, turn)) };
+   const params = { sessionId: this.sessionOf(conv), sessionVersion: conv.sessionVersion, clientTurnId: turn.id, failedTurnId: intent.failedTurnId, ...(await this.sessionParams(conv, turn)) };
    await this.checkpoint(conv);
    turn.controller.signal.throwIfAborted();
+   if (!Backend.available) throw Backend.unavailable();
+   turn.dispatched = true;
    const result = await Backend.request('turn.retry', params, { signal: turn.controller.signal });
-   if (result?.turnId) this.setRemote(conv, turn, result.turnId);
+   this.acknowledgeTurn(conv, turn, result);
    return turn.done;
   });
  }
@@ -912,20 +945,40 @@ class Chat {
   this.dismissGhost(turn.part.view);
   for (const pending of turn.approvals) pending.card.settle(SUPERSEDED);
   for (const release of turn.releases) release('message');
-  this.steer(conv, turn, item);
+  if (!turn.quiet) turn.steering = turn.steering.then(() => this.steer(conv, turn, item));
+ }
+
+ inputFailure(item, message) {
+  item.entry.inputError = message;
+  const box = document.createElement('div');
+  box.className = 'message-error';
+  box.textContent = message;
+  item.bubble.append(box);
  }
 
  async steer(conv, turn, item) {
+  const signal = turn.steeringController.signal;
   try {
-   await this.checkpoint(conv);
-   item.input = await inputOf(item.prompt);
+   signal.throwIfAborted();
+   await untilAborted(this.checkpoint(conv), signal);
+   signal.throwIfAborted();
+   const input = await untilAborted(inputOf(item.prompt), signal);
+   signal.throwIfAborted();
+   item.input = input;
    item.entry.attachments = item.prompt.attachments.map(slim);
-   await this.checkpoint(conv);
-   if (conv.turn !== turn || turn.quiet || !turn.queue.includes(item)) return;
-   await turn.started;
-   if (conv.turn !== turn || turn.controller.signal.aborted || !turn.queue.includes(item)) return;
-   await Backend.request('turn.steer', { sessionId: this.sessionOf(conv), turnId: turn.remote, clientInputId: item.id, input: item.input, host: { browser: window.browserPanel?.snapshot() || null } });
-  } catch {}
+   await untilAborted(this.checkpoint(conv), signal);
+   await untilAborted(turn.started, signal);
+   signal.throwIfAborted();
+   if (conv.turn !== turn || !turn.queue.includes(item)) return;
+   const result = await Backend.request('turn.steer', { sessionId: this.sessionOf(conv), turnId: turn.remote, clientInputId: item.id, input, host: { browser: window.browserPanel?.snapshot() || null } }, { signal });
+   signal.throwIfAborted();
+   if (result?.accepted !== true) throw new BackendError({ code: 'steering_rejected', message: 'The backend did not accept this steering input.' });
+  } catch (error) {
+   if (signal.aborted) return;
+   drop(turn.queue, item);
+   this.inputFailure(item, `${Backend.explain(error).message} This input has not been sent again.`);
+   this.save(conv);
+  }
  }
 
  async drive(conv, turn, work) {
@@ -950,6 +1003,7 @@ class Chat {
   turn.prompt = items[0].entry;
   turn.prompt.pendingTurn = true;
   this.takeQueue(conv, turn, items);
+  turn.retryIntent = { prompts: items.map(item => item.prompt), entries: items.map(item => item.entry) };
   const inputs = await Promise.all(items.map(item => item.input || inputOf(item.prompt)));
   return this.startTurn(conv, turn, combine(inputs));
  }
@@ -1194,6 +1248,7 @@ class Chat {
    const { prompt, bubble } = item;
    if (item.entry) drop(conv.messages, item.entry);
    const entry = item.entry || { role: 'user', text: prompt.text, attachments: prompt.attachments.map(slim), content: prompt.text, backendTurn: turn.id, clientInputId: item.id };
+   delete entry.inputError;
    conv.messages.push(entry);
    this.nodes.set(entry, bubble);
   }
@@ -1223,6 +1278,7 @@ class Chat {
 
  async end(conv, turn, error, finish) {
   if (conv.turn !== turn) return;
+  turn.steeringController.abort();
   turn.terminal = true;
   turn.early.length = 0;
   for (const message of turn.messages.values()) message.completed = true;
@@ -1248,14 +1304,19 @@ class Chat {
   window.browserPanel?.drive(conv, false);
   if (turn.next) collapse(turn.next.el);
   // Reconcile an uncertain outcome before Send or Retry, rather than implicitly starting again.
-  if (turn.completed) {
+  const uncertain = !turn.completed && (turn.dispatched || turn.remote);
+  if (!uncertain) {
    for (const item of conv.messages) if (item.backendTurn === turn.id) delete item.pendingTurn;
   } else if (!turn.quiet) conv.reconciled = false;
+  view.retryIntent = !uncertain ? turn.remote ? { failedTurnId: turn.remote } : turn.retryIntent : null;
+  view.retryVersion = conv.sessionVersion;
+  for (const item of turn.queue) this.inputFailure(item, 'This input was not confirmed in the reply. It has not been sent again.');
   turn.queue.length = 0;
   if (conv.record && this.library.chat(conv.id)) this.save(conv);
   if (conv !== this.active) conv.unread = true;
   this.dismissGhost(view);
   this.onChange();
+  await turn.steering;
   await view.stream.finish();
   view.el.classList.remove('is-streaming');
   const text = !!entry.content.trim();
@@ -1438,7 +1499,11 @@ class Chat {
 
  // What a saved entry shows as when its chat opens; `last` marks the reply that ends its turn.
  entryView(entry, last) {
-  if (entry.role === 'user') return this.userMessage(this.promptOf(entry));
+  if (entry.role === 'user') {
+   const bubble = this.userMessage(this.promptOf(entry));
+   if (entry.inputError) this.inputFailure({ entry, bubble }, entry.inputError);
+   return bubble;
+  }
   if (entry.role === 'compact') return this.compactNotice(false);
   if (entry.role === 'stats') {
    const el = StatsCard.build(entry.stats);
@@ -1512,13 +1577,15 @@ class Chat {
   const actions = document.createElement('div');
   actions.className = 'message-actions';
   if (settings) actions.append(this.action(I18n.t('chat.open-settings'), () => this.settings.open()));
-  actions.append(this.action(I18n.t('chat.retry'), () => this.retry(conv, view)));
+  view.retryAllowed = error?.retryable !== false && error?.action !== 'none' && !['invalid_request', 'invalid_params'].includes(error?.code);
+  if (view.retryAllowed && (view.retryIntent || !conv.reconciled)) actions.append(this.action(I18n.t('chat.retry'), () => this.retry(conv, view)));
   view.el.append(box, actions);
  }
 
  retry(conv, view) {
-  if (conv.turn || conv.deleting || conv.recovering) return;
+  if (conv.turn || conv.deleting || conv.recovering || view.retryAllowed === false) return;
   if (!conv.reconciled) { this.reconcile(conv); return; }
+  if (!view.retryIntent || view.retryVersion !== conv.sessionVersion) return;
   const config = this.config(conv);
   if (Backend.available && !config.ready) {
    this.settings.open(I18n.t('settings.key.needed'), config.provider);
@@ -1527,7 +1594,7 @@ class Chat {
   for (const node of view.el.querySelectorAll('.message-error, .message-actions')) node.remove();
   if (!conv.messages.includes(view.el.__entry)) view.el.remove();
   if (conv === this.active) this.follow = true;
-  this.resume(conv, config);
+  this.resume(conv, config, view.retryIntent);
   if (conv === this.active) this.followBottom();
  }
 

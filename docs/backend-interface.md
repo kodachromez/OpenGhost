@@ -115,7 +115,7 @@ models.list({}) → Model[]
 // Turns. sessionId is the frontend's chat id; a mini chat's is "<chat id>:mini".
 // sessionVersion: null is explicitly create-only; a string requires that existing session incarnation.
 turn.start({ sessionId, sessionVersion: string | null, clientTurnId, input: Input, ...SessionParams }) → { turnId, sessionVersion: string }
-turn.retry({ sessionId, sessionVersion: string, clientTurnId, ...SessionParams }) → { turnId }      // run again from the history, no new input
+turn.retry({ sessionId, sessionVersion: string, clientTurnId, failedTurnId: string, ...SessionParams }) → { turnId } // retry this accepted failed turn, no new input
 turn.steer({ sessionId, turnId, clientInputId, input: Input, host }) → { accepted: boolean }
 turn.cancel({ sessionId, turnId }) → null
 
@@ -198,6 +198,20 @@ type SessionRecovery = { exists: false } | {
   an existing-style error and recovery Retry. The display cache is preserved. Restore the backend session or start a
   new chat; there is no automatic import, resend, reset, or `session.create`. A rejected Send keeps the composer text.
 
+**Retry and steering (F12).** Retry retains the original full input/preparation context in memory when a start was
+never dispatched (offline, preparation or checkpoint failure); an explicit click sends `turn.start`, not a history
+retry. Display-only attachments are never reconstructed as model input. After dispatch, a missing/invalid reply or
+connection loss is uncertain: Retry calls `session.get` with the saved `clientTurnId`, never blindly resends. Missing
+history/identity fails closed. An accepted, terminal failed turn uses `turn.retry` with required `failedTurnId` and the
+same session incarnation. The backend must reject an unknown/non-failed target, never substitute its latest turn.
+The existing client-ID deduplication rules apply to retries too. Explicit `retryable:false`/`action:none` suppress Retry.
+
+Steering preparation and RPCs are serialized in input order. `{accepted:false}` (or an RPC error) is surfaced on the
+input bubble, retained for display, and never silently resent. `{accepted:true}` acknowledges durable acceptance;
+`input.accepted` still places the bubble in the reply. Emit those events in accepted input order, before dependent
+output. Turn completion/error/Stop aborts steering RPCs and drains preparation/start waiters; inputs without an
+acceptance event are visibly marked unconfirmed, not assumed accepted or automatically carried into another turn.
+
 **Chat/folder deletion.** `session.delete` deletes only the exact `sessionId` and acknowledges after erasure; an absent
 session succeeds with `null` so retry is safe. The frontend explicitly deletes both `<chat id>` and `<chat id>:mini`,
 then removes that chat's local records. Folder deletion snapshots its children and commits each acknowledged chat;
@@ -273,8 +287,8 @@ How the UI uses them, in the same terms as 1.3.0:
 - A message sent while a turn runs is sent with `turn.steer`, and any pending approval card is answered `deny` with
   `reason: 'superseded'`. Messages never accepted stay in the chat unanswered, as in 1.3.0. Messages sent during a
   manual compaction or a model switch start a new `turn.start` after it, joined into one input.
-- `turn.completed` with `status: 'error'` shows the error box with Retry (which sends `turn.retry`), plus "Open
-  settings" when `error.action` is `open-settings` or the code is `auth`.
+- `turn.completed` with `status: 'error'` shows the error box with Retry when allowed (targeting that accepted failed
+  turn via `failedTurnId`), plus "Open settings" when `error.action` is `open-settings` or the code is `auth`.
 
 ## Backend → client requests (reverse)
 
