@@ -179,6 +179,8 @@ creates a real `#audit-injected` element in `.browser-url-view`. The probe only 
 
 **Recommendation:** use `textContent` for all URL pieces; test encoded delimiters/quotes/markup. Review other calls to HTML-taking helpers with untrusted values.
 
+**Resolution (2026-10-04):** `browser-panel.js`'s `element()` helper now sets `textContent`, so the host, scheme and decoded path/query of the address bar are drawn as text in the same spans as before; the tab's fixed button markup is set separately. The other `innerHTML` sinks were reviewed for backend or page text (provider/model names and auth rows, usage and limit rows, stats card, model confirm, approval cards, chat errors and compaction notices, link chips, tab titles and load errors): each already escapes or uses `textContent`, so nothing else changed. Regression tests: `test/untrusted-text.test.js` (address bar, approval card and chat error with `<img onerror>`, `<script>` and attribute-breaking strings); the address-bar case fails on the previous revision.
+
 ### F11 — HIGH: arbitrary tool-card lifecycle is not implemented
 
 **Evidence:** `chat.js:828,839–841`, interface “tool.progress / tool.completed — ignored”.
