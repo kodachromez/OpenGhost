@@ -34,7 +34,8 @@ With neither, nothing is started: the UI works, and a message gets "No backend i
 The process starts in the user's home folder with the app's environment. **stdout carries protocol only**; logs go to
 stderr, which the host prints with a `[backend]` prefix. A line that isn't a JSON-RPC 2.0 object is dropped and logged.
 Lines over 64 MiB are dropped. There is no automatic restart. On quit the host sends `shutdown`, closes stdin, and kills
-the process after 2 s if it is still running. A page reload sends `initialize` again on the same process.
+the process after 2 s if it is still running. When the backend exits, however it exits, the host ends whatever it left
+behind in its session (on POSIX the backend leads a session of its own). A page reload sends `initialize` again on the same process.
 
 ## Envelope
 

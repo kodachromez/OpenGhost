@@ -132,6 +132,8 @@ Normal quit sends `{id:"shutdown",method:"shutdown"}`, ends stdin, then SIGKILLs
 
 **Recommendation:** idempotent stop, bounded completion on `error/close/exit`, tested reaping policy for the entire backend tree, and one lifecycle generation per process. Rust should close cleanly on both `shutdown` and stdin EOF, but frontend cleanup must not depend exclusively on backend cooperation.
 
+**Resolution (2026-10-04), descendants only:** on POSIX the backend now starts in a session of its own (`detached`), and whenever it exits (after `shutdown`, killed after the grace period, or crashed by itself), the host kills its process group and every process still in that session. On Linux, the session's members are read from `/proc`, so the separate process groups a backend runs its tools in are included. Only a descendant that calls `setsid` itself escapes. On Windows, the grace-period kill is now `taskkill /T /F`, but descendants of a backend that exits by itself are not tracked there, and macOS gets only the process-group kill. Regression tests: `test/backend-host.test.js` (graceful, stubborn and crashing backends, each with a same-group and a separate-group descendant). The other bullets above (stop hanging after a spawn error, concurrent `before-quit`, close-vs-exit ordering, parent death) are still open.
+
 ### F08 — HIGH: unbounded waits and handshake races can leave incorrect frontend state (**partly reproduced**)
 
 **Evidence:** `backend-client.js:70–115,129–153`; `chat.js:24–42,686–744,777–787`.

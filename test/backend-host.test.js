@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { BackendHost, configured, parseCommand } = require('../desktop/backend-host');
+const { BackendHost, configured, parseCommand, sessionMembers } = require('../desktop/backend-host');
 
 const FIXTURE = path.join(__dirname, 'fixtures', 'scripted-backend.js');
 const quiet = { error() {} };
@@ -95,3 +95,38 @@ test('a command that does not exist is an error, not a crash', async () => {
  await new Promise(resolve => setTimeout(resolve, 100));
  assert.equal(statuses.at(-1).state, 'error');
 });
+
+// Audit F07: whatever the backend started goes with it, however the backend goes.
+const TREE = path.join(__dirname, 'fixtures', 'tree-backend.js');
+const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
+const pgid = pid => Number(fs.readFileSync(`/proc/${pid}/stat`, 'utf8').split(') ')[1].split(' ')[2]);
+const gone = async pid => {
+ for (let i = 0; i < 100 && alive(pid) && !/\) Z /.test(fs.readFileSync(`/proc/${pid}/stat`, 'utf8')); i++) {
+  await new Promise(resolve => setTimeout(resolve, 20));
+ }
+ return !alive(pid) || /\) Z /.test(fs.readFileSync(`/proc/${pid}/stat`, 'utf8'));
+};
+
+for (const mode of ['graceful', 'stubborn', 'crash']) {
+ test(`a ${mode} backend leaves no descendants behind`, { skip: process.platform !== 'linux' && 'reads /proc' }, async () => {
+  const { backend, statuses, next } = host({ command: { file: process.execPath, args: [TREE, mode] } });
+  backend.start();
+  const { params: { pids } } = await next(message => message.method === 'tree');
+  try {
+   const { pid } = backend.status;
+   // One descendant shares the backend's process group and one has its own, like a backend's tools.
+   assert.equal(pgid(pids[0]), pgid(pid));
+   assert.notEqual(pgid(pids[1]), pgid(pid));
+   if (mode === 'crash') {
+    await new Promise(resolve => { const poll = () => statuses.at(-1).state === 'exited' ? resolve() : setTimeout(poll, 10); poll(); });
+   } else {
+    await backend.stop(mode === 'stubborn' ? 200 : 2000);
+   }
+   assert.equal(statuses.at(-1).state, 'exited');
+   for (const descendant of pids) assert.ok(await gone(descendant), `pid ${descendant} is still alive`);
+   assert.deepEqual(sessionMembers(pid), []);
+  } finally {
+   pids.forEach(descendant => { try { process.kill(descendant, 'SIGKILL'); } catch {} });
+  }
+ });
+}
