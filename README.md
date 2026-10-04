@@ -1,163 +1,134 @@
-# OpenGhost
+# OpenGhost-Frontend
 
-> **This branch (`frontend-only-rust-backend`) is the OpenGhost 1.3.0 interface without its backend.** The agent loop,
-> the model and provider clients, the prompts, the tools and the provider keys are gone; the UI talks to an external
-> backend through one interface, ready for a backend written in Rust. With no backend connected the app opens and
-> works as an interface and shows backend configuration/connection errors. There is no automatic backend restart:
-> fix configuration errors and relaunch OpenGhost after a failure or configuration change. See
-> [docs/frontend-only.md](docs/frontend-only.md) for what was removed and
-> [docs/backend-interface.md](docs/backend-interface.md) for the interface. The rest of this README describes
-> OpenGhost 1.3.0 as released, with its own agent; agent tasks, compaction and permission-mode behavior depend on
-> the external backend on this branch.
+OpenGhost Frontend is an Electron desktop interface for external AI agent backends, available for Windows, macOS and Linux. It combines streaming chat, rich visual responses, local conversation management and a shared browser in a plain JavaScript, HTML and CSS interface.
 
-**v1.3.0 beta**
+**This repository is frontend-only.** It does not include an agent runtime or model-provider clients. A separately installed, compatible backend supplies the agent loop, provider integrations, authentication, model-facing session history and non-browser agent tools. The app launches without a backend, but generating responses requires one.
 
-[Windows version 1.3.0](https://github.com/ANDRETRIPOL/OpenGhost/releases/download/v1.3.0/OpenGhost-1.3.0-Setup.exe)
+## Features
 
-[Linux version 1.3.0](https://github.com/ANDRETRIPOL/OpenGhost/releases/download/v1.3.0/OpenGhost-1.3.0-linux.tar.gz)
+- **Rich conversations:** streaming Markdown, syntax-highlighted code, math, image galleries and YouTube preview cards.
+- **Interactive visuals:** charts and diagrams with in-place editors. Edits affect the frontend's display copy, not backend history.
+- **Organized chats:** standalone conversations, project-folder chats and saved mini chats for side questions.
+- **Attachments:** images, videos, PDFs and other files, with previews and local text extraction where supported. Interpretation depends on the backend and model.
+- **Shared browser:** a tabbed browser panel with backend-driven navigation and interaction, plus controls to take over and hand control back.
+- **Backend-driven controls:** provider connection settings, model and effort selection, Ask/Auto/Full access modes and approval cards. The backend defines permission behavior and decides when approval is required.
+- **Usage visibility:** token, cache and context statistics from backend reports, account limits when available, and manual compaction when supported.
+- **Personalization:** shared instructions and reference files, light/dark/system themes, and password locks for local chat display caches. Locks do not protect backend history or other files.
 
-[macOS version 1.3.0](https://github.com/ANDRETRIPOL/OpenGhost/releases/download/v1.3.0/OpenGhost-1.3.0-mac.dmg)
+## Architecture
 
-What's new:
-- A rebuilt drawing engine. Charts and diagrams have a new, restrained look at the size of the chat's text, and the engine now knows 43 kinds of drawings: finance, sport, food and recipes, documents, languages, PC builds, device settings, trips, code and more. A reply carries several drawings, each made for its subject.
-- Photos and videos in replies. The agent finds pictures and YouTube videos itself and shows them as a stack to leaf through and as cards with previews.
-- Chats without a folder. Just start typing: the chat goes to Chats at the top of the list.
-- Send videos. A video attaches like a photo, and the agent watches it frame by frame.
-- Chat stats and Compact chat in the plus menu: what the chat has spent by reply and by model, how much of it came from the cache, and one click to free the context of a long chat.
-- Mini chat keeps its conversation: it is saved with the chat it was opened over.
-- PDFs are read: in attachments, in your files and by the agent.
-- More stable and cheaper: the providers' cache works in every chat, a long chat is compacted by the window of its own model, and the model lists come from the providers themselves.
-- A new splash, a new window backdrop and a calmer password screen for locked chats.
-
-Older versions are on the [Releases](https://github.com/ANDRETRIPOL/OpenGhost/releases) page.
-
-The code is under the MIT license. The name OpenGhost, the ghost logo, the animations, and the visual design are not: they stay with the author. A modified version may not be published or distributed with any of them, paid or free, and they may not be used for any commercial purpose. See LICENSE.
-
-OpenGhost is an open desktop agent for Windows, macOS and Linux. It runs commands, edits files, keeps git and works on the web in a browser of its own. And it shows what it explains: charts, schemes, photos and videos stand next to the text.
-
-## Written from scratch
-
-Nothing in OpenGhost is assembled from ready parts. There is no UI framework inside, no Markdown library, no Mermaid, no chart library and no agent framework. Every part is our own code:
-
-- **The agent.** The loop, the tools (commands, files, git, web search, pages, PDFs, video frames), the approval cards and the three permission modes.
-- **The drawing engine.** It reads what a model writes, lays it out and draws it: 43 kinds of drawings, from flowcharts and loss curves to a day of meals and the route of a trip. A drawing is live: it answers the pointer and can be edited where it stands.
-- **The browser.** The agent sees a page as text with numbered elements, moves its own cursor, clicks, types and reads, in a browser panel it shares with you.
-- **The text.** The Markdown renderer that draws a reply while it is still being written, the code highlighter and the math.
-- **The interface.** Every control, its motion and its glass, in plain JavaScript and CSS.
-
-In 1.3.0 the app stood on two things only: Electron, which gives it a window, and Anthropic's official SDK, which talks to Claude. On this branch it stands on Electron alone: the agent is an external backend.
-
-## It shows what it explains
-
-Ask how something works, and the answer comes with drawings: the whole as a scheme, the curves the topic is known for as charts, the key numbers as tiles. Here three training runs stand on one chart: a healthy one, one that blows up and one that barely moves.
-
-![A chart of three training runs and tiles with the key numbers](images/visual.jpg)
-
-## A scheme with the detail in it
-
-A block carries its name and a line about what happens in it. Stages stand in groups, and a process that repeats closes into a ring.
-
-![A scheme of how a model is trained, in three stages](images/scheme.jpg)
-
-## Drawings made for the subject
-
-Food, recipes, documents, matches, languages, PC builds, device settings and trips have drawings of their own. A day of meals is a ring of calories with protein, fat and carbs against the goal.
-
-![A day of meals: calories, protein, fat and carbs against the goal](images/food.jpg)
-
-A trip is a route with its legs, and words to learn come with their sound and an example.
-
-![A route through Portugal and a list of words for a café](images/trip.jpg)
-
-## Change the drawing where it stands
-
-A drawing is not a finished picture. Open it and change the layout, the blocks and the arrows in a table, or edit its source. The drawing follows as you type.
-
-![A flowchart with its editor open](images/editor.jpg)
-
-## Photos and videos in the reply
-
-When a thing is better seen than described, a dish, a place, a game, the agent looks for pictures and videos itself. Pictures stand in a stack to leaf through, each with the page it came from. A video is a card with its preview, name and length, and a click opens it in your browser.
-
-## A browser with its own cursor
-
-OpenGhost has a built-in browser and drives it itself. It opens a page, moves its own cursor, clicks, types, and sees what is on the screen. The panel sits on the right of the chat. Close it and the agent still works.
-
-![Chat beside the built-in browser](images/browser.jpg)
-
-## Start with a question, not with a folder
-
-A new chat needs no folder. Type, and it goes to Chats at the top of the list, with a folder of its own for the files the agent makes. A chat about a project still lives in that project's folder.
-
-![A new chat with the ghost above the composer](images/welcome.jpg)
-
-## Mini chat for a side question
-
-Select a passage and open Mini chat over the conversation. It is the same agent, with the current chat as context, and what you write there is kept with the chat.
-
-![Mini chat over a conversation](images/mini.jpg)
-
-## What a chat costs
-
-Chat stats, in the plus menu, show what a chat has spent: the tokens of every reply, the share of each model, how much of it came from the cache and how full the context is. Compact chat, next to it, frees the context of a long conversation, and the app does the same by itself before the model's window fills.
-
-![The chat stats card](images/stats.jpg)
-
-## Show it a photo, a video, a PDF
-
-Photos, videos and files attach from the plus menu or by a drop. A video comes in like a photo, and the agent watches it frame by frame. A PDF is read as text.
-
-## Tell it once, for every chat
-
-In Settings, under General, you write how to answer and what to know about you, and add the files OpenGhost should always have at hand: notes, a style guide, a CV. Every chat gets them, and a long chat keeps them after it is compacted.
-
-![The General page of the settings: instructions and files kept for every chat](images/general.jpg)
-
-## Three ways to let it act
-
-Ask waits for approval before commands, file changes, and the web. Auto works inside the project folder and asks before a risky step. Full access does not ask.
-
-![Ask, Auto, and Full access](images/modes.jpg)
-
-## The key stays on this computer
-
-OpenGhost works with ChatGPT, OpenAI, Claude, and DeepSeek: sign in with your ChatGPT account, or connect OpenAI, Claude and DeepSeek with an API key. Keys and sign-ins are stored only on your machine, encrypted by the operating system, and the list of models comes from each provider itself. Any chat can also be locked with a password: it is real encryption on your computer, not a lock screen.
-
-![The Providers page of the settings: ChatGPT, OpenAI, Anthropic and DeepSeek](images/settings.jpg)
-
-## It opens with the ghost
-
-The app starts on its own screen. The ghost flies in through the mist, then the name OpenGhost appears.
-
-![OpenGhost splash screen](images/splash.jpg)
-
-## Build it yourself
-
-The same code runs on Windows, macOS and Linux. You need Node.js 22 or newer.
-
+```text
+Renderer UI and backend-client.js
+        ↕ window.openghost.backend
+Preload bridge (desktop/preload.js)
+        ↕ Electron IPC
+Main process and desktop/backend-host.js
+        ↕ JSON Lines over stdin/stdout
+External agent backend
 ```
+
+| Layer | Responsibilities |
+| --- | --- |
+| Renderer | Chat and settings UI, rich response rendering, attachment preparation, local display state, and the JSON-RPC client. |
+| Preload | Exposes the `window.openghost` API across Electron's context-isolated boundary for backend messages, storage, folders, browser operations and other desktop services. |
+| Main process | Creates the application window, handles native services and local storage, manages browser guests, and starts, relays messages to and stops the configured backend process. |
+| External backend | Owns agent execution, provider API traffic, credentials, durable sessions, compaction and approval policy. It can request the frontend's browser host tools. |
+
+### Backend protocol
+
+The connection uses **JSON-RPC 2.0 over JSON Lines**: one UTF-8 JSON object per line on the backend process's stdin/stdout. The Agent Backend Protocol (ABP v0, protocol version `0.1`) begins with an `initialize` handshake that exchanges capabilities, browser-tool schemas and the renderer's format guide. Backend logs belong on stderr, not stdout.
+
+The frontend sends turn, session, model and authentication requests. The backend streams response and usage events and can make reverse requests for approvals (`approval.request`) or browser operations (`host.tool`). Chat execution requires the backend's `sessions.recovery` contract; local display caches are not sent back as model history.
+
+Approval requests appear as cards. Ordinary tool calls show a working indicator, not tool cards, and reasoning events are not rendered. See the [backend interface](docs/backend-interface.md) for the complete contract.
+
+### Data and networking
+
+The frontend stores its chat index, display caches and preferences locally; the backend owns its session history and credential storage. Local chat locks encrypt only the frontend display cache.
+
+Frontend-only does not mean network-isolated. The renderer can load remote images, thumbnails and favicons; the main process fetches YouTube preview metadata; and the built-in browser loads web pages. AI/provider API requests belong to the external backend.
+
+## Development
+
+### Install and run
+
+Use Node.js **22.12 or newer** and npm. From the repository root:
+
+```sh
 npm ci
 npm start
 ```
 
-`npm start` runs the app straight from the code. On this branch it needs a **trusted local backend** to answer:
-set `OPENGHOST_BACKEND` to an executable path or JSON array (POSIX-shell example:
-`OPENGHOST_BACKEND='["/path/to/backend", "--abp"]' npm start`), not a shell command line. The backend is not sandboxed;
-it inherits the app's environment and starts in your home folder. See the
-[configuration and trust contract](docs/backend-interface.md#connecting-a-backend) for file configuration and platform details.
-`npm test` runs the unit and boundary tests, and
-`npm run test:e2e` runs the app headless against a scripted test backend. To make an installer, run the command for your system on that system:
+`npm start` launches Electron directly from source; there is no separate renderer build step. Configure a backend as described below to use the chat. Without one, the interface opens and reports that no backend is configured.
 
-- Windows: `npm run dist` makes `dist/OpenGhost-<version>-Setup.exe`
-- macOS: `npm run dist:mac` makes `dist/OpenGhost-<version>-mac.dmg`
-- Linux: `npm run dist:linux` makes `dist/OpenGhost-<version>-linux.tar.gz`
+### Build packages
 
-No Mac or Linux machine at hand? A fork can build both on GitHub: turn on Actions, open Build and press Run workflow. The files appear on the page of that run.
+Run the command on the corresponding operating system. Packages are written to `dist/` and do not include an agent backend.
 
-## Support the project
+| Platform | Command | Output |
+| --- | --- | --- |
+| Windows | `npm run dist` | `dist/OpenGhost-<version>-Setup.exe` |
+| macOS | `npm run dist:mac` | `dist/OpenGhost-<version>-mac.dmg` |
+| Linux | `npm run dist:linux` | `dist/OpenGhost-<version>-linux.tar.gz` |
 
-OpenGhost is free. Testing it on real models costs money for every release, and sponsorship pays for exactly that: API time and the work on new versions. If the app is useful to you, you can [sponsor it on GitHub](https://github.com/sponsors/ANDRETRIPOL).
+### Tests
 
-## Thanks
+- `npm test` — unit and frontend/backend boundary tests.
+- `npm run test:e2e` — headless Electron smoke test using the scripted backend fixture, without a model provider.
 
-[@kodachromez](https://github.com/kodachromez) found eight real bugs in a single report, and [@Bruno8R](https://github.com/Bruno8R) noticed that API keys were kept in plain text. All of it is fixed in v1.2.0. Thank you both.
+The fixture in `test/fixtures/` is for testing only and is not a usable AI backend or part of packaged builds.
+
+## Backend configuration
+
+Install a backend that implements the [backend interface](docs/backend-interface.md), then configure its executable using either:
+
+1. **`OPENGHOST_BACKEND`** — an executable path or a JSON array containing the executable and its arguments. A nonblank value takes precedence over file configuration.
+2. **`backend.json`** — a file in Electron's application user-data directory with a `command` field in the same form.
+
+For example, in a POSIX shell:
+
+```sh
+OPENGHOST_BACKEND='["/absolute/path/to/backend"]' npm start
+```
+
+Or in `backend.json`:
+
+```json
+{
+  "command": ["/absolute/path/to/backend"]
+}
+```
+
+Replace the placeholder with your backend executable and append any arguments it requires as separate array elements. These settings select a local process, not an HTTP endpoint or a shell command line. Prefer absolute paths; the host does not perform shell expansion.
+
+Typical user-data locations are `~/.config/OpenGhost/` on Linux, `~/Library/Application Support/OpenGhost/` on macOS and `%APPDATA%\OpenGhost\` on Windows. See the [configuration reference](docs/backend-interface.md#connecting-a-backend) for syntax, precedence and platform details.
+
+**Only configure a trusted backend.** It runs with your user privileges, inherits the app's environment and starts in your home directory; it is not sandboxed. Provider credentials and sign-in behavior are managed by that backend. Settings displays the connection methods and models it advertises.
+
+After changing configuration or resolving a backend failure, relaunch the app. There is no automatic backend restart; Retry does not start a backend process.
+
+## Project structure
+
+| Path | Purpose |
+| --- | --- |
+| `index.html`, `styles.css`, `script.js` | Application shell, styling and UI wiring. |
+| `chat.js`, `mini-chat.js`, `library.js`, `chat-store.js`, `chat-lock.js` | Conversations, display persistence and local chat locks. |
+| `markdown.js`, `highlight.js`, `tex.js`, `diagram.js`, `media-embed.js`, `stream-view.js` | Rich response rendering. |
+| `settings*.js`, `attachments.js`, `attachment-reader.js`, `user-context.js` | Settings, attachment preparation and shared user context. |
+| `backend-client.js`, `backend-protocol.js`, `render-guide.js` | Backend RPC client, envelope validation and supported rendering formats. |
+| `browser-panel.js`, `host-tools.js` | Browser UI and backend-facing browser-tool integration. |
+| `desktop/` | Electron main process, preload bridges, backend process host, browser and PDF services. |
+| `test/` | Unit tests, backend fixtures and Electron smoke tests. |
+| `docs/` | Protocol documentation, browser lifecycle details and architecture records. |
+| `.github/workflows/`, `package.json` | Build automation, scripts and packaging configuration. |
+
+## Documentation
+
+- [Backend interface](docs/backend-interface.md) — configuration, RPC methods, events, capabilities and session recovery.
+- [Browser host-tool lifecycle](docs/browser-host-tools.md) — browser targeting, user control, cancellation and result metadata.
+- [Frontend boundary notes](docs/frontend-only.md) — component ownership, persistence and networking details.
+- [Backend separation audit](docs/backend-removal-audit.md) and [boundary review](docs/reviews/2026-10-04-frontend-only-backend-boundary-audit.md) — historical design and review context, not the current protocol specification.
+
+## License
+
+The source code is MIT-licensed. The OpenGhost name, logo, animations and visual design are excluded and subject to separate restrictions. See [LICENSE](LICENSE) before distributing builds or using those materials.
