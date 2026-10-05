@@ -36,6 +36,7 @@ const QSet<QString> supported = {"browser_snapshot", "browser_tabs", "browser_na
 struct BrowserTools::Job {
     RequestId id;
     HostToolRequest request;
+    QString operation = uuid(); // owns downloads started while it acts
     QString tab, page, document;
     Sequence receiptRevision = 0;
     quint64 lease = 0, call = 0, generation = 0;
@@ -180,6 +181,13 @@ void BrowserTools::abandon(const Work &job)
         m_reads.remove(job->tab);
     }
 }
+std::pair<QString, QString> BrowserTools::running(const QString &tab) const
+{
+    if (!m_active || m_active->done || m_active->held || !m_active->started ||
+        m_active->tab != tab || !m_active->incarnation)
+        return {};
+    return {m_active->operation, m_active->request.sessionId};
+}
 void BrowserTools::cancel(RequestId id)
 {
     abandon(m_jobs.value(id));
@@ -192,6 +200,7 @@ void BrowserTools::turnEnded(const QString &session)
         if (job->request.sessionId == session)
             abandon(job);
     m_turns.remove(session);
+    m_browser.releaseDownloads(session);
     for (auto it = m_seen.begin(); it != m_seen.end();) {
         if (QJsonDocument::fromJson(it->toUtf8()).array().first().toString() == session)
             it = m_seen.erase(it);
@@ -479,6 +488,10 @@ void BrowserTools::observe(const Work &job, const QString &note)
                   head << "The page is still loading.";
               const QString viewport =
                   QStringLiteral("Viewport %1×%2").arg(scroll["vw"].toInt()).arg(vh);
+              QJsonArray downloads;
+              for (const auto &item : m_browser.downloadsOf(job->tab, job->operation))
+                  downloads.append(QJsonObject{
+                      {"file", item.file}, {"at", item.at}, {"operationId", item.operation}});
               head << (screens > 1.05
                            ? viewport + QString(", scrolled %1% of a page %2 screens tall.")
                                             .arg(height - vh > 4
@@ -487,6 +500,8 @@ void BrowserTools::observe(const Work &job, const QString &note)
                                                      : 0)
                                             .arg(screens, 0, 'f', 1)
                            : viewport + ", the whole page fits on screen.");
+              for (const auto &item : downloads)
+                  head << "Downloaded: " + item.toObject()["file"].toString();
               QStringList lines;
               for (const auto &line : snap["lines"].toArray())
                   lines << line.toString();
@@ -507,7 +522,7 @@ void BrowserTools::observe(const Work &job, const QString &note)
                            {"truncated", snap["truncated"]},
                            {"coverage", full ? "full-dom-heuristic" : "viewport-dom-heuristic"},
                            {"scroll", scroll},
-                           {"downloads", QJsonArray{}}});
+                           {"downloads", downloads}});
           });
 }
 QJsonArray BrowserTools::tabData() const

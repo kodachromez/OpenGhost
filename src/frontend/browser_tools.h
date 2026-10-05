@@ -26,6 +26,9 @@ class BrowserTools final : public QObject
     };
     void setLimits(Limits limits) { m_limits = limits; }
     static HostToolResult format(const QJsonValue &answer);
+    // The step acting on `tab`'s guest now (desktop/browser.js found.running):
+    // its operation identity and session, or empty while none is.
+    std::pair<QString, QString> running(const QString &tab) const;
 
   private:
     struct Job;

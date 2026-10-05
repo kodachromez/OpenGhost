@@ -1,5 +1,6 @@
 #include "browser.h"
 #include "browser_tools.h"
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -89,9 +90,10 @@ QHash<int, QByteArray> BrowserTabs::roleNames() const
             {Source, "source"}, {State, "state"}};
 }
 
-Browser::Browser(QString statePath, QString storagePath, QObject *parent)
+Browser::Browser(QString statePath, QString storagePath, QObject *parent, QString downloadsPath)
     : HostServices(parent), m_statePath(std::move(statePath)),
-      m_storagePath(std::move(storagePath)), m_model(this)
+      m_storagePath(std::move(storagePath)), m_downloadsPath(std::move(downloadsPath)),
+      m_model(this)
 {
     load();
 }
@@ -104,6 +106,11 @@ void Browser::setAutomation(std::unique_ptr<BrowserAutomation> automation)
         qFatal("Browser automation must be composed exactly once");
     m_automation = std::move(automation);
     m_tools = std::make_unique<BrowserTools>(*this, *m_automation);
+    m_automation->observeDownloads(
+        [this](quint64 id, const QString &handle, int incarnation, const QString &name) {
+            return downloadStarting(id, handle, incarnation, name);
+        },
+        [this](quint64 id, bool completed) { downloadEnded(id, completed); });
     report();
 }
 
@@ -403,7 +410,12 @@ void Browser::setOpen(bool open)
 
 QString Browser::newTab(const QString &url, bool background, bool focus)
 {
-    const QString handle = addTab(url, {});
+    return openTab(url, -1, background, focus);
+}
+
+QString Browser::openTab(const QString &url, int after, bool background, bool focus)
+{
+    const QString handle = addTab(url, {}, after);
     if (!isBlank(url) && (m_open || background))
         createView(*find(handle), url);
     if (!background)
@@ -643,6 +655,151 @@ void Browser::crashed(const QString &handle, int incarnation)
     update(handle);
 }
 
+void Browser::openFrom(const QString &handle, int incarnation, const QString &url, bool background)
+{
+    if (url.isEmpty())
+        return;
+    // newTab(url, {after: from, background}): next to the page that asked.
+    openTab(url, find(handle, incarnation) ? indexOf(handle) : -1, background, true);
+}
+
+void Browser::signedIn(const QString &handle, int incarnation, const QString &host)
+{
+    // browser-panel.js signedIn(): the host without www., most recent first.
+    static const QRegularExpression name(QStringLiteral("^[A-Za-z0-9.:\\[\\]-]{1,253}$"));
+    if (!find(handle, incarnation) || !name.match(host).hasMatch())
+        return;
+    QString site = host.toLower();
+    if (site.startsWith(QStringLiteral("www.")))
+        site.remove(0, 4);
+    if (site.isEmpty())
+        return;
+    m_accounts.removeIf([&](const auto &seen) { return seen.host == site; });
+    m_accounts.prepend({site, double(QDateTime::currentMSecsSinceEpoch())});
+    if (m_accounts.size() > AccountsMax)
+        m_accounts.resize(AccountsMax);
+    save();
+    report();
+}
+
+QVariantList Browser::menu(const QVariantMap &context)
+{
+    QVariantList items;
+    const auto add = [&](const QString &action, const QString &label, bool enabled = true) {
+        items.append(QVariantMap{{"action", action}, {"label", label}, {"enabled", enabled}});
+    };
+    const auto line = [&] {
+        if (!items.isEmpty() && !items.last().toMap().value("separator").toBool())
+            items.append(QVariantMap{{"separator", true}});
+    };
+    if (!context.value("link").toString().isEmpty()) {
+        add("openLink", "Open link in new tab");
+        add("copyLink", "Copy link address");
+        line();
+    }
+    if (!context.value("image").toString().isEmpty()) {
+        add("openImage", "Open image in new tab");
+        add("copyImage", "Copy image");
+        line();
+    }
+    if (context.value("editable").toBool()) {
+        add("cut", "Cut", context.value("canCut").toBool());
+        add("copy", "Copy", context.value("canCopy").toBool());
+        add("paste", "Paste", context.value("canPaste").toBool());
+        add("selectAll", "Select all");
+        line();
+    } else if (!context.value("selection").toString().isEmpty()) {
+        add("copy", "Copy");
+        line();
+    }
+    add("back", "Back", context.value("back").toBool());
+    add("forward", "Forward", context.value("forward").toBool());
+    add("reload", "Reload");
+    line();
+    add("inspect", "Inspect");
+    return items;
+}
+
+QString Browser::downloadStarting(quint64 id, const QString &handle, int incarnation,
+                                  const QString &suggested)
+{
+    if (m_downloadsPath.isEmpty() || m_downloads.contains(id))
+        return {};
+    // desktop/browser.js uniqueFile(): NAME, else "STEM (K)EXT", never replacing a file.
+    QString name = QFileInfo(suggested).fileName();
+    if (name == "." || name == "..")
+        name.clear();
+    const int dot = name.lastIndexOf(QLatin1Char('.'));
+    const QString ext = dot > 0 ? name.mid(dot) : QString();
+    QString stem = dot > 0 ? name.left(dot) : name;
+    if (stem.isEmpty())
+        stem = QStringLiteral("download");
+    QDir dir(m_downloadsPath);
+    if (!dir.mkpath(QStringLiteral(".")))
+        return {};
+    QString file = dir.absoluteFilePath(name.isEmpty() ? QStringLiteral("download") : name);
+    for (int k = 1; QFileInfo::exists(file) || m_reserved.contains(file); ++k)
+        file = dir.absoluteFilePath(stem + QStringLiteral(" (%1)").arg(k) + ext);
+    PendingDownload pending;
+    pending.file = file;
+    // Only a panel guest owns a download; the step running on it at the
+    // start is the one it belongs to (owner.running).
+    if (find(handle, incarnation)) {
+        pending.tab = handle;
+        pending.incarnation = incarnation;
+        if (m_tools) {
+            const auto [operation, session] = m_tools->running(handle);
+            pending.operation = operation;
+            pending.session = session;
+        }
+    }
+    m_reserved.insert(file);
+    m_downloads.insert(id, pending);
+    return file;
+}
+
+void Browser::downloadEnded(quint64 id, bool completed)
+{
+    const auto found = m_downloads.find(id);
+    if (found == m_downloads.end())
+        return; // exactly once: a repeated or unknown report changes nothing
+    const PendingDownload pending = found.value();
+    m_downloads.erase(found);
+    m_reserved.remove(pending.file);
+    // Cancelled and failed downloads are neither recorded nor announced.
+    if (!completed || pending.tab.isEmpty())
+        return;
+    if (Tab *t = find(pending.tab, pending.incarnation)) {
+        t->downloads.append({pending.file, double(QDateTime::currentMSecsSinceEpoch()),
+                             pending.operation, pending.session, pending.incarnation});
+        if (t->downloads.size() > DownloadsMax)
+            t->downloads.remove(0, t->downloads.size() - DownloadsMax);
+    }
+    emit downloaded(QFileInfo(pending.file).fileName());
+}
+
+QVector<Browser::Download> Browser::downloadsOf(const QString &handle,
+                                                const QString &operation) const
+{
+    QVector<Download> out;
+    if (const Tab *t = tab(handle); t && !operation.isEmpty())
+        for (const auto &item : t->downloads)
+            if (item.operation == operation && item.incarnation == t->incarnation)
+                out.append(item);
+    return out;
+}
+
+void Browser::releaseDownloads(const QString &session)
+{
+    for (auto &pending : m_downloads)
+        if (pending.session == session)
+            pending.operation.clear(), pending.session.clear();
+    for (auto &t : m_tabs)
+        for (auto &item : t.downloads)
+            if (item.session == session)
+                item.operation.clear(), item.session.clear();
+}
+
 void Browser::take()
 {
     if (m_user)
@@ -747,19 +904,22 @@ BrowserState Browser::snapshot() const
         state.tabs.append({k + 1, tab.handle, tab.state, tab.loading, tab.revision, tab.title,
                            isBlank(tab.url) ? QString() : tab.url, tab.handle == m_active});
     }
+    state.signedIn = m_accounts;
     return state;
 }
 
 void Browser::report()
 {
     const BrowserState state = snapshot();
-    QJsonArray tabs;
+    QJsonArray tabs, accounts;
     for (const auto &tab : state.tabs)
         tabs.append(QJsonArray{tab.n, tab.tabId, tab.state, tab.loading, double(tab.revision),
                                tab.title, tab.url, tab.active});
+    for (const auto &seen : state.signedIn)
+        accounts.append(QJsonArray{seen.host, seen.at});
     const QString key =
         QString::fromUtf8(QJsonDocument(QJsonArray{state.available, int(state.status),
-                                                   int(state.control), state.open, tabs})
+                                                   int(state.control), state.open, tabs, accounts})
                               .toJson(QJsonDocument::Compact));
     if (key == m_reported)
         return;
@@ -780,8 +940,15 @@ void Browser::save() const
             active = int(tabs.size());
         tabs.append(QJsonObject{{"url", tab.url}, {"title", tab.title}});
     }
-    const QJsonObject saved{
-        {"open", m_open}, {"width", m_width}, {"tabs", tabs}, {"active", std::max(0, active)}};
+    QJsonArray accounts;
+    for (const auto &seen : m_accounts)
+        accounts.append(QJsonObject{{"host", seen.host}, {"at", seen.at}});
+    // openghost.browser and openghost.browser.accounts, in one local record.
+    const QJsonObject saved{{"open", m_open},
+                            {"width", m_width},
+                            {"tabs", tabs},
+                            {"active", std::max(0, active)},
+                            {"accounts", accounts}};
     QDir().mkpath(QFileInfo(m_statePath).absolutePath());
     QSaveFile file(m_statePath);
     if (file.open(QIODevice::WriteOnly)) {
@@ -803,6 +970,14 @@ void Browser::load()
     for (int i = 0; i < std::min<qsizetype>(tabs.size(), TabsMax); ++i) {
         const QJsonObject item = tabs.at(i).toObject();
         addTab(item.value("url").toString(), item.value("title").toString());
+    }
+    for (const auto &value : saved.value("accounts").toArray()) {
+        const QJsonObject item = value.toObject();
+        const QString host = item.value("host").toString();
+        if (!host.isEmpty() && m_accounts.size() < AccountsMax &&
+            std::none_of(m_accounts.begin(), m_accounts.end(),
+                         [&](const auto &seen) { return seen.host == host; }))
+            m_accounts.append({host, item.value("at").toDouble()});
     }
     const int active = saved.value("active").toInt();
     selectAt(active >= 0 && active < m_tabs.size() ? active : m_tabs.isEmpty() ? -1 : 0, true);

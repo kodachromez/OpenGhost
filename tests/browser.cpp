@@ -47,6 +47,99 @@ class BrowserTest final : public QObject
                  QStringList({"data://", "", "text/html,<b> x"}));
     }
 
+    void pageMenuMatchesTheReference()
+    {
+        const auto rows = [](const QVariantMap &context) {
+            QStringList out;
+            for (const auto &value : Browser::menu(context)) {
+                const auto row = value.toMap();
+                out << (row.value("separator").toBool()
+                            ? QStringLiteral("-")
+                            : row.value("action").toString() +
+                                  (row.value("enabled").toBool() ? "" : "(off)"));
+            }
+            return out;
+        };
+        // desktop/browser.js context-menu: link, image, editing, history, Inspect.
+        QCOMPARE(rows({{"link", "https://example.com/"},
+                       {"image", "https://example.com/a.png"},
+                       {"editable", true},
+                       {"canCopy", true},
+                       {"back", true}}),
+                 QStringList({"openLink", "copyLink", "-", "openImage", "copyImage", "-",
+                              "cut(off)", "copy", "paste(off)", "selectAll", "-", "back",
+                              "forward(off)", "reload", "-", "inspect"}));
+        QCOMPARE(rows({{"selection", "words"}, {"forward", true}}),
+                 QStringList({"copy", "-", "back(off)", "forward", "reload", "-", "inspect"}));
+        QCOMPARE(rows({}), QStringList({"back(off)", "forward(off)", "reload", "-", "inspect"}));
+        const auto first = Browser::menu({{"link", "x"}}).first().toMap();
+        QCOMPARE(first.value("label").toString(), QString("Open link in new tab"));
+        QCOMPARE(Browser::menu({}).last().toMap().value("label").toString(), QString("Inspect"));
+    }
+
+    void guestOpenedTabsFollowTheirOpener()
+    {
+        Browser browser;
+        browser.setOpen(true);
+        const auto first = browser.newTab("https://one.example/");
+        const auto last = browser.newTab("https://three.example/");
+        browser.select(first);
+        const int inc = browser.tab(first)->incarnation;
+        browser.openFrom(first, inc, "https://two.example/", false);
+        QCOMPARE(browser.tabList().size(), 3);
+        QCOMPARE(browser.tabList().at(1).url, QString("https://two.example/"));
+        QCOMPARE(browser.activeHandle(), browser.tabList().at(1).handle);
+        // Background: created next to its opener, guest made, selection kept.
+        const auto opener = browser.activeHandle();
+        browser.openFrom(opener, browser.tab(opener)->incarnation, "https://bg.example/", true);
+        QCOMPARE(browser.tabList().at(2).url, QString("https://bg.example/"));
+        QVERIFY(browser.tabList().at(2).view);
+        QCOMPARE(browser.activeHandle(), opener);
+        // A replaced guest's request is not placed by a stale opener.
+        browser.openFrom(first, inc + 7, "https://stale.example/", true);
+        QCOMPARE(browser.tabList().last().url, QString("https://stale.example/"));
+        QCOMPARE(browser.tabList().at(browser.tabList().size() - 2).handle, last);
+        browser.openFrom(first, inc, "", false);
+        QCOMPARE(browser.tabList().size(), 5);
+    }
+
+    void signInHintsAreHostOnlyBoundedAndSaved()
+    {
+        QTemporaryDir dir;
+        const QString path = dir.filePath("browser.json");
+        {
+            Browser browser(path);
+            browser.setOpen(true);
+            const auto tab = browser.newTab("https://www.example.com/login");
+            const int inc = browser.tab(tab)->incarnation;
+            QSignalSpy changed(&browser, &HostServices::browserChanged);
+            browser.signedIn(tab, inc, "www.Example.com");
+            QCOMPARE(changed.size(), 1);
+            QCOMPARE(browser.snapshot().signedIn.size(), 1);
+            QCOMPARE(browser.snapshot().signedIn.first().host, QString("example.com"));
+            QVERIFY(browser.snapshot().signedIn.first().at > 0);
+            QVERIFY(!BrowserState::signedInVerified);
+            // Not a host name, an old guest or an unknown tab: nothing recorded.
+            browser.signedIn(tab, inc, "evil.example/path");
+            browser.signedIn(tab, inc, "");
+            browser.signedIn(tab, inc + 1, "other.example");
+            browser.signedIn("missing", 1, "other.example");
+            QCOMPARE(browser.accounts().size(), 1);
+            for (int k = 0; k < 35; ++k)
+                browser.signedIn(tab, inc, QString("site%1.example").arg(k));
+            QCOMPARE(browser.accounts().size(), Browser::AccountsMax);
+            QCOMPARE(browser.accounts().first().host, QString("site34.example"));
+            browser.signedIn(tab, inc, "site20.example"); // most recent first, once
+            QCOMPARE(browser.accounts().first().host, QString("site20.example"));
+            QCOMPARE(std::count_if(browser.accounts().begin(), browser.accounts().end(),
+                                   [](const auto &a) { return a.host == "site20.example"; }),
+                     1);
+        }
+        Browser restored(path);
+        QCOMPARE(restored.accounts().size(), Browser::AccountsMax);
+        QCOMPARE(restored.snapshot().signedIn.first().host, QString("site20.example"));
+    }
+
     void panelOpenCloseAndWidth()
     {
         Browser browser;

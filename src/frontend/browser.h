@@ -4,6 +4,7 @@
 #include <QAbstractListModel>
 #include <QHash>
 #include <QSet>
+#include <QVariantList>
 #include <functional>
 #include <memory>
 
@@ -74,6 +75,17 @@ class Browser final : public HostServices
   public:
     static constexpr int TabsMax = 12;
     static constexpr int ReadyMs = 15000;
+    static constexpr int AccountsMax = 30;   // openghost.browser.accounts
+    static constexpr int DownloadsMax = 100; // per guest, desktop/browser.js
+    // A completed download of a tab's guest (desktop/browser.js owner.downloads):
+    // `operation` is the browser step that was running on that guest when the
+    // download started, cleared when that step's turn ends.
+    struct Download {
+        QString file;
+        double at = 0;
+        QString operation, session;
+        int incarnation = 0;
+    };
     struct Tab {
         QString handle, url, title, icon, error;
         bool loading = false;
@@ -86,10 +98,14 @@ class Browser final : public HostServices
         Sequence revision = 0;
         QString pageId, document;
         bool back = false, forward = false;
+        QVector<Download> downloads;
     };
     // `statePath`: the saved layout (openghost.browser), empty for none.
     // `storagePath`: the guests' persistent site storage (persist:browser).
-    explicit Browser(QString statePath = {}, QString storagePath = {}, QObject *parent = nullptr);
+    // `downloadsPath`: where guests' downloads are saved (the OS downloads
+    // folder); empty refuses every download rather than guessing a folder.
+    explicit Browser(QString statePath = {}, QString storagePath = {}, QObject *parent = nullptr,
+                     QString downloadsPath = {});
     ~Browser() override;
 
     // Set once, before publishing the host or constructing the guest QML.
@@ -127,7 +143,9 @@ class Browser final : public HostServices
     bool user() const { return agent() && m_user; }
     bool userHas() const { return user(); }
     QString storagePath() const { return m_storagePath; }
+    QString downloadsPath() const { return m_downloadsPath; }
     QString lent() const { return m_lent; }
+    const QVector<BrowserState::SignInObservation> &accounts() const { return m_accounts; }
 
     // The panel (browser-panel.js build/setOpen/fit/newTab/select/close/go).
     Q_INVOKABLE void setOpen(bool open);
@@ -168,6 +186,26 @@ class Browser final : public HostServices
     Q_INVOKABLE void iconChanged(const QString &handle, int incarnation, const QString &icon);
     Q_INVOKABLE void history(const QString &handle, int incarnation, bool back, bool forward);
     Q_INVOKABLE void crashed(const QString &handle, int incarnation);
+    // A page asked for a tab (window.open/target=_blank/middle click, or the
+    // page menu's Open link/image in new tab): browser-panel.js onEvent 'open'.
+    Q_INVOKABLE void openFrom(const QString &handle, int incarnation, const QString &url,
+                              bool background);
+    // A guest's isolated observer saw a filled password field being sent
+    // (desktop/browser-preload.js): the site's host name only, never verified.
+    Q_INVOKABLE void signedIn(const QString &handle, int incarnation, const QString &host);
+    // The page menu (desktop/browser.js context-menu) for what was clicked:
+    // {link, image, editable, canCut, canCopy, canPaste, selection, back,
+    // forward}. Rows are {action, label, enabled} or {separator: true}.
+    Q_INVOKABLE static QVariantList menu(const QVariantMap &context);
+
+    // Downloads, as the engine reports them (BrowserAutomation::observeDownloads).
+    QString downloadStarting(quint64 id, const QString &handle, int incarnation,
+                             const QString &name);
+    void downloadEnded(quint64 id, bool completed);
+    // Completed downloads attributed to one browser step of a tab's guest.
+    QVector<Download> downloadsOf(const QString &handle, const QString &operation) const;
+    // The turn ended: its steps no longer own their downloads.
+    void releaseDownloads(const QString &session);
 
     // The agent's use of the browser (chat.js onHostTool/end): `key` is the
     // chat driving it. While any chat drives, the overlays show; the last one
@@ -186,6 +224,8 @@ class Browser final : public HostServices
     void focusAddress();
     // Keyboard focus leaves the guests for the app (view.blur()).
     void yieldFocus();
+    // A panel guest's download finished (browser-panel.js notify).
+    void downloaded(const QString &name);
 
   protected:
     void timerEvent(QTimerEvent *event) override;
@@ -199,6 +239,7 @@ class Browser final : public HostServices
     int indexOf(const QString &handle) const;
     Tab *find(const QString &handle, int incarnation = -1);
     QString addTab(const QString &url, const QString &title, int after = -1);
+    QString openTab(const QString &url, int after, bool background, bool focus);
     void createView(Tab &tab, const QString &url);
     void failReady(Tab &tab);
     void selectAt(int index, bool lazy);
@@ -210,7 +251,15 @@ class Browser final : public HostServices
     void stopTimer(const QString &handle);
     void load();
 
-    QString m_statePath, m_storagePath;
+    struct PendingDownload {
+        QString tab;
+        int incarnation = 0;
+        QString file, operation, session;
+    };
+    QString m_statePath, m_storagePath, m_downloadsPath;
+    QHash<quint64, PendingDownload> m_downloads;
+    QSet<QString> m_reserved; // files chosen for downloads still running
+    QVector<BrowserState::SignInObservation> m_accounts;
     QVector<Tab> m_tabs;
     BrowserTabs m_model;
     QString m_active;

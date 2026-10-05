@@ -38,6 +38,8 @@ Item {
             const chrome = /Chrome\/([\d.]+)/.exec(made.httpUserAgent)
             made.httpUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                 + "(KHTML, like Gecko) Chrome/" + (chrome ? chrome[1] : "0") + " Safari/537.36"
+            // will-download: the host picks the file and attributes the download.
+            made.downloadRequested.connect(download => root.browser.automation.download(download))
             profile = made
         }
         return profile
@@ -726,6 +728,51 @@ Item {
                     anchors.horizontalCenter: parent.horizontalCenter
                     text: "Try again"
                     onClicked: root.browser.retry()
+                }
+            }
+        }
+        // .browser-toast: "Downloaded NAME" when a page's download finishes
+        // (browser-panel.js notify), at the stage's bottom for 4.2 s.
+        Rectangle {
+            id: toast
+            objectName: "browserToast"
+            property string text
+            property bool shown: false
+            z: 5
+            anchors.horizontalCenter: parent.horizontalCenter
+            y: stage.height - 14 - height + (shown ? 0 : 8)
+            width: Math.min(toastText.implicitWidth + 28, stage.width - 32)
+            height: toastText.implicitHeight + 16
+            radius: 14
+            color: Theme.light ? Qt.rgba(1, 1, 1, 0.9) : Qt.rgba(22 / 255, 22 / 255, 22 / 255, 0.88)
+            border.width: 1
+            border.color: Theme.alpha(Theme.fg, 0.1)
+            opacity: shown ? 1 : 0
+            visible: opacity > 0
+            Behavior on opacity { enabled: !Theme.reducedMotion; NumberAnimation { duration: 300 } }
+            Behavior on y { enabled: !Theme.reducedMotion; NumberAnimation { duration: 450; easing.type: Easing.Bezier; easing.bezierCurve: Theme.motion } }
+            Text {
+                id: toastText
+                objectName: "browserToastText"
+                x: 14
+                width: toast.width - 28
+                anchors.verticalCenter: parent.verticalCenter
+                text: toast.text
+                elide: Text.ElideRight
+                font.pointSize: Theme.points(12.5)
+                color: Theme.text
+            }
+            Timer {
+                id: toastTimer
+                interval: 4200
+                onTriggered: toast.shown = false
+            }
+            Connections {
+                target: root.browser
+                function onDownloaded(name) {
+                    toast.text = "Downloaded " + name
+                    toast.shown = true
+                    toastTimer.restart()
                 }
             }
         }

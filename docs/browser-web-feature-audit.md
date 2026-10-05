@@ -33,6 +33,12 @@ unpublished. No CDP/debug endpoint was enabled. See
 [browser-tools-port.md](browser-tools-port.md) for limitations and focused tests.
 Unrelated file/media findings remain unchanged.
 
+**Update — non-input browser gaps, based exactly on `4b9218c`.** Full-page and
+covered-guest screenshots, guest popups and tab requests, the page menu,
+sign-in hints, and downloads with per-step attribution and a completion toast.
+Input tools, their cursor overlay and CDP are untouched. See
+[non-input slice](#non-input-browser-slice).
+
 ### Summary counts
 
 Each matrix row is one audited behavior. Cross-cutting lifecycle and individual
@@ -41,10 +47,10 @@ Reference absences listed later are not counted as missing features.
 
 | Status | Features |
 | --- | ---: |
-| MATCH | 25 |
+| MATCH | 29 |
 | PARTIAL | 17 |
 | MOCK ONLY | 2 |
-| MISSING | 30 |
+| MISSING | 26 |
 | INTENTIONAL DIFFERENCE | 1 |
 | **Total** | **75** |
 
@@ -52,8 +58,10 @@ The original audit counted 6 / 10 / 4 / 54 / 1; the browser foundation slice
 moved B01–B04, B06 and B15 to MATCH, B05, B07, B09–B13 and H07 from MISSING to
 PARTIAL, and H02 from MOCK ONLY to PARTIAL. Native automation then moved
 B05/B10/B11/H02/H04/H05/H07/H08 and T01/T02/T09/T10/T11 to MATCH;
-H01/H06/T07/T08 to PARTIAL. MATCH scopes the row, not the whole browser or a
-connected agent; input, download and sign-in gaps have separate rows.
+H01/H06/T07/T08 to PARTIAL. The non-input slice moved B08, B14, B17 and H09
+from MISSING to MATCH; T08 stays PARTIAL with only a page-observable side
+effect left. MATCH scopes the row, not the whole browser or a connected agent;
+input gaps have separate rows.
 
 - **MATCH:** the scoped frontend behavior exists, including deliberately inert
   presentation. Does not imply a connected agent or identical pixels.
@@ -174,16 +182,16 @@ Generic JSON capacity is explicitly not credited as an implemented feature.
 | B05 — Lazy guests, readiness, failure and crash recreation | MATCH | `browser-panel.js::constructor/createView/ensure/close`; `desktop/browser.js::adopt/entry` | Browser retains lazy tabs, 15 s readiness, guarded guest creation and incarnation checks. BrowserTools::ensure recreates failed/gone guests before a later step. BrowserGuest observes an isolated document-creation marker and DOM readyState separately from native resource loading; replaced guests cannot acquire an old operation. Failures/crashes settle owned work. | BS unchanged. Foundation tests; real slow-resource DOM-readiness and renderer-crash/recreation tests. |
 | B06 — Visible loading/error/retry states | MATCH | `browser-panel.js::createView/render/syncBar/build`; `styles.css` browser progress, spinner and error styles | `qml/BrowserPanel.qml`: sweeping 2 px progress band and tab spinner while loading, empty state, failure card (`host · error`, Chromium's `ERR_*` text with Qt's `net::` prefix removed, Try again) and the crash message. | Local presentation; no boundary type. Tested: `errorsCrashesAndRetry`; UI smoke refused port, retry and crash. |
 | B07 — Browser keyboard shortcuts and focus lending | PARTIAL | `desktop/browser.js::adopt` `before-input-event`; `browser-panel.js::constructor/run/giveBack/take/handBack` | Focus lending is ported: `BrowserFocus` (`src/browserfocus.*`) takes the keyboard back from a page on any press outside the panel (yieldKeys); driving blurs the page; Take control focuses it; Hand back blurs it and records the lent page (`Browser::lent`). Missing: the guest shortcuts (F5/Ctrl+R, F12/Ctrl+Shift+I DevTools, Alt+arrows, Ctrl+L/T/W) and `giveBack` after a tool step. | Local focus interface, no boundary type. Tested: `takeControlAndHandBack`; UI smoke click-in/click-out, drive, take, hand back. |
-| B08 — Guest popup/new-tab routing and context menu | MISSING | `desktop/browser.js::adopt` window-open and context-menu handlers; `browser-panel.js::onEvent` | No equivalent in `src/platform/` or QML. Missing foreground/background tabs from guest links, separate `new-window` popup, open/copy link/image, editable cut/copy/paste/select-all, selection copy, history/reload and Inspect. The WebEngine guests suppress the engine's own page menu and ignore new-window requests rather than substitute non-reference behavior. | Local guest event/menu APIs needed; existing external-link helper is not enough. No boundary type. **Mixed** UI/host. |
-| B09 — Agent ownership overlays and pointer visualization | PARTIAL | `browser-panel.js::drive/sync/point`; `browser-toggle.js` live badge; `desktop/browser.js::pointer` | `qml/BrowserPanel.qml` driving ring/badge (input-blocking), hover-revealed Take control, user banner with Hand back; the toggle's pulsing live dot; all from `Browser::drive` state. BrowserTools now drives this state for admitted host calls. Missing: the animated cursor and click ripple (they need the tools' pointer events). | BS control; local driver state, no boundary type. Tested: `takeControlAndHandBack`, UI smoke overlays. |
+| B08 — Guest popup/new-tab routing and context menu | MATCH | `desktop/browser.js::adopt` window-open and context-menu handlers; `browser-panel.js::onEvent` | `qml/BrowserGuest.qml::onNewWindowRequested`: popups (`InNewWindow`/`InNewDialog`, Electron's `new-window`) open `qml/BrowserPopup.qml`, a separate white 520×700 window in the same site profile via `openIn` (opener kept; no tool target, page menu, sign-in hint or download attribution; its own popups open further windows; `window.close()` closes it). Foreground/background tab requests for http(s)/file open through `Browser::openFrom` next to the opener; other schemes are refused. The page menu is `Browser::menu` (reference items, order, separators and enabled flags) shown with the app's Qt Quick Controls `Menu`, not a native OS menu: Open/Copy link, Open/Copy image, Cut/Copy/Paste/Select all, selection Copy, Back/Forward/Reload and Inspect (the engine's in-process DevTools in their own window, no remote-debugging endpoint, never used by automation). Copy link uses the engine's link copy, not a text-only write. Guest keyboard shortcuts are B07. | Local guest event/menu APIs; no boundary type. Tested: `pageMenuMatchesTheReference`, `guestOpenedTabsFollowTheirOpener`, real-guest `pageMenuPopupsAndGuestOpenedTabs` (right click on a link, Open link in new tab, `_blank`, refused `javascript:`, popup window size/URL/title/close). |
+| B09 — Agent ownership overlays and pointer visualization | PARTIAL | `browser-panel.js::drive/sync/point`; `browser-toggle.js` live badge; `desktop/browser.js::pointer` | `qml/BrowserPanel.qml` driving ring/badge (input-blocking), hover-revealed Take control, user banner with Hand back; the toggle's pulsing live dot; all from `Browser::drive` state. BrowserTools now drives this state for admitted host calls. Missing: the animated cursor and click ripple. The reference emits `pointer` only from click/type targeting (`desktop/browser.js::pointer`), so they belong with the unpublished input tools and were deliberately left to that work. | BS control; local driver state, no boundary type. Tested: `takeControlAndHandBack`, UI smoke overlays. |
 | B10 — Take Control / Hand Back without replaying the interrupted action | MATCH | `browser-panel.js::take/handBack/waitForAgent/release`; `chat.js::onHostTool/awaitHandBack/end` | BrowserTools::controlChanged cancels continuations and holds active/queued calls without a user-wait deadline. Hand-back substitutes fresh current-tab snapshots with empty args and handed-back status, even on error, never the original action. inputQueued returns empty cancelled/message results only to that session; turn end drops work and releases driving. | HT/BS unchanged; local HS inputQueued hook. Real hand-back and adversarial held-call tests. Early turn admission remains H03. |
-| B11 — Guest/app trust boundary | MATCH | `desktop/browser.js::guard/adopt/entry/install/world`; `desktop/main.js::fromApp` and browser handlers; `desktop/preload.js` | Separate WebEngine guests/profile; no app objects, WebChannel, Node or debug endpoint. QtBrowserAutomation sends host-owned scripts through ApplicationWorld; the main world cannot replace observation/ref/document state. Incarnation, page/document token, expiry and call-token checks guard completion. The QML adapter is not exposed to page scripts. Sign-in observation remains B14. | Existing envelopes, local browser-owned abstraction. Real hostile main-world globals, frame/shadow and isolation tests. |
+| B11 — Guest/app trust boundary | MATCH | `desktop/browser.js::guard/adopt/entry/install/world`; `desktop/main.js::fromApp` and browser handlers; `desktop/preload.js` | Separate WebEngine guests/profile; no app objects, WebChannel, Node or debug endpoint. QtBrowserAutomation sends host-owned scripts through ApplicationWorld; the main world cannot replace observation/ref/document state. Incarnation, page/document token, expiry and call-token checks guard completion. The QML adapter is not exposed to page scripts. The only channel (sign-in hints, B14) exists in ApplicationWorld alone. | Existing envelopes, local browser-owned abstraction. Real hostile main-world globals, frame/shadow and isolation tests. |
 | B12 — Browser site permission handling | PARTIAL | `desktop/browser.js::setup`, `ALLOWED` | `qml/BrowserGuest.qml` grants pointer lock (`MouseLock`) and fullscreen requests and denies every other permission request. Differences: Qt has no separate sanitized-clipboard-write permission or synchronous permission-check handler; not yet covered by a test. | Internal host policy, not AP and not new backend types. |
 | B13 — Persistent cookies/site state and browser session configuration | PARTIAL | `browser-panel.js` and `desktop/browser.js` `persist:browser`; `desktop/browser.js::setup` user agent | `qml/BrowserPanel.qml` builds one persistent WebEngine profile (`storageName: browser`) under `AppDataLocation/browser` (smoke runs: a temporary directory) with the reference's plain Chrome user agent on the engine's Chromium version. Not yet verified across an application restart. | Local browser profile; no boundary type. |
-| B14 — Site sign-in submission observations, never verified auth | MISSING | `desktop/browser-preload.js::check`; `browser-panel.js::signedIn/snapshot`; `openghost.browser.accounts` | BS declares the fields and constant false verification, but no observation producer or saved account hints exists. Reference records hostname/time only, at most 30; it does not export password values or confirm login success. The panel's snapshot always carries an empty `signedIn` list and `signedInVerified=false`. | BS already fully carries these hints; local observation event and storage required, no boundary type. **Mixed** host/persistence. |
+| B14 — Site sign-in submission observations, never verified auth | MATCH | `desktop/browser-preload.js::check`; `browser-panel.js::signedIn/snapshot`; `openghost.browser.accounts` | `qml/BrowserGuest.qml` installs the preload's check (filled password field on submit, Enter or a button click; once per document; main frame) as an ApplicationWorld document-creation script. Its only outlet is a `WebChannel` whose `webChannelWorld` is ApplicationWorld: the page's own world has neither `qt` nor the channel library and cannot report a host. `Browser::signedIn` accepts host-name characters only, for the current guest, removes `www.`, keeps most recent first, at most 30, with time; saved in `browser.json` (`accounts`), reported in `host.browser.signedIn`; `signedInVerified` stays false. No password, URL path or login result is observed. | BS unchanged; local observation event and storage. Tested: `signInHintsAreHostOnlyBoundedAndSaved`, real-guest `signInHintsComeOnlyFromTheIsolatedObserver`. |
 | B15 — Restore panel layout and tab URLs/titles after reload | MATCH | `browser-panel.js::constructor/save/select`; `openghost.browser` | `Browser::save/load` → `browser.json` beside the preferences (atomic `QSaveFile`): open, width, non-blank tabs' URL/title and active index. Restore is lazy (only the shown active tab gets a guest), with fresh handles; unreadable data falls back to an empty closed panel; navigation stacks and pending actions are not saved. | Local persistence record; no boundary type. Tested: `tabLimitAndLazyRestore`. |
 | B16 — Appearance follows the selected light/dark/system theme in sites | MISSING | `desktop/main.js` `nativeTheme.themeSource` and `theme:set`; `browser-panel.js`; `styles.css` browser theme variables | `src/appearance.cpp` and `qml/AppearancePage.qml` theme the native app, but no theme choice is passed to the browser guests. | Existing native appearance state can be reused; local host theme setter needed, no boundary type. **Mixed** UI/host. |
-| B17 — Browser downloads to the OS downloads directory and completion toast | MISSING | `desktop/browser.js::setup/uniqueFile` `will-download`; `browser-panel.js::onEvent/notify` | No download service or toast. Reference picks a nonexisting filename by suffix, saves via the browser and notifies on completed downloads only. It has no download manager, progress/cancel list, or persistent download UI. The guests accept no download, so WebEngine cancels it; nothing is saved. | HT `data` can return metadata, but HS lacks unsolicited download events. Local host completion event needed, no boundary type. **Mixed** host/UI. |
+| B17 — Browser downloads to the OS downloads directory and completion toast | MATCH | `desktop/browser.js::setup/uniqueFile` `will-download`; `browser-panel.js::onEvent/notify` | The site profile's `downloadRequested` → `QtBrowserAutomation::download` → `Browser::downloadStarting`: saved under `QStandardPaths::DownloadLocation` (smoke runs: a temporary folder; tests and an unconfigured host refuse every download rather than guess a folder), named like `uniqueFile` (`NAME`, else `STEM (K)EXT`, also never a file another running download holds; path components stripped). Completed panel-guest downloads show `qml/BrowserPanel.qml`'s `Downloaded NAME` toast for 4.2 s; cancelled/failed ones and popup downloads are not announced. No download manager, progress or cancel UI, as in the reference. The toast has no backdrop blur. | HS unchanged; local engine report (`BrowserAutomation::observeDownloads`) and host event. Tested: `downloadsBelongToTheStepRunningAtTheirStart`, real-guest `downloadsSavedUniquelyAndAttributedToTheirStep`. |
 
 ## B. Browser request/response, ownership and recovery plumbing
 
@@ -197,7 +205,7 @@ Generic JSON capacity is explicitly not credited as an implemented feature.
 | H06 — Fresh page/ref/target validation before further input | PARTIAL | `desktop/browser.js::revise/check/install/point/world/act`; `browser-panel.js::run` revision checks | Page/document/incarnation/active-target checks run before dispatch and after awaits. Ref reveal requires pageId and a connected same-page ref map; partial/cancelled reveal invalidates observations. Frozen reads expire on page change. Covered/moved point rechecks and multi-input/final-navigation sequencing remain with click/type/press/select. | HT/BS unchanged. Real stale-page/ref/read/history tests, document-version tests and partial-reveal cancellation tests. |
 | H07 — Readiness/operation/dispatch deadlines and truthful errors | MATCH | `browser-panel.js::interruptible/ensure/run`; `desktop/browser.js::timed/check/settle/navigate/run` | BrowserTools enforces 90 s receipt/queue/readiness, 75 s page operation after readiness, 12 s JS/capture, 30 s navigation and 15 s loading settle; isolated JS checks dispatch expiry. Wait uses reference bounds/codes and 300 ms mutation quiet (2 s cap). Failures never fabricate successful loads. Already-issued work is not rolled back. | HT unchanged. Injected short deadlines/late callbacks, loopback failure, slow-resource readiness and real wait_timeout tests. |
 | H08 — Browser response formatter: text/images, metadata and errors | MATCH | `host-tools.js::result/read/readable/flatten`; `chat.js::onHostTool` status assignment | BrowserTools builds the prepared SS/TAB/IMG/READ families, allowlisted metadata, error text/status, screenshot text-then-image/label, UTF-16 pagination and hand-back status. The reference HTML converter runs on a capped frozen string in an isolated inert DOM. No chat cards or invented download/artifact fields. | HT unchanged. Prepared result comparisons, real parser/pixels, frozen reads and surrogate-boundary tests. |
-| H09 — Attribute downloaded files to the initiating guest/operation | MISSING | `desktop/browser.js::setup/state`; `host-tools.js::result`; `test/browser-lifecycle.test.js` download test | No producer of `{file, at, operationId}` metadata. Reference snapshots report only downloads completed for that operation; later/other calls cannot consume them. Late completion may still toast (B17). | HT `data.downloads` already fits. Local download ownership/tracking needed, no boundary type. **Host-service-only**. |
+| H09 — Attribute downloaded files to the initiating guest/operation | MATCH | `desktop/browser.js::setup/state`; `host-tools.js::result`; `test/browser-lifecycle.test.js` download test | A download belongs to the step acting on its panel guest when it starts (`BrowserTools::running`, the reference's `found.running`), as a per-step `operationId`. Each engine report is handled exactly once (start, then one end: completed, cancelled, failed or dropped request). Only that step's snapshot lists it (`Downloaded: FILE`, `data.downloads` `{file, at, operationId}`); later steps, other chats and other guests never claim it. Turn end releases its steps' ownership, including downloads still running. Records stay per guest incarnation, at most 100. | HT `data.downloads` unchanged. Fake-engine owner tests and real `a[download]` during `browser_wait`. A navigation that becomes a download revises the page identity, as `did-start-navigation` does. |
 | H10 — Restoring chat display does not replay browser actions | MATCH | `chat.js::reconcile/recoverTurn/applyEvent`; `library.js::displayMessages` | `src/frontend/chat_service.cpp` recovery replays display events, not `HostToolRequest`s; `src/frontend/library.cpp::displayMessages` discards tool histories. Restored browser-looking text is not executable. This narrow safety match does not establish recoverable browser operation state. | Existing recovery/display contracts suffice. **No missing work** for this behavior. |
 | H11 — Advertise supported picture/video/file presentation syntax | MISSING | `render-guide.js`; `backend-client.js::hello` | `Initialize::renderGuide` exists but `ChatService::initialize` leaves it empty. No advertised native guide for media or file diagrams, even for file diagram rendering that exists. Do not simply copy claims for media that native cannot render. | Existing `QString renderGuide`; no new types. **UI-only** capability-description work, enabled only alongside actual render support. |
 
@@ -218,7 +226,7 @@ contract fixtures remain plumbing tests; real-guest tests are separate.
 | T05 — `browser_select` | MISSING | `host-tools.js::SCHEMAS`; `desktop/browser.js::install.choose/act` | Native select option matching by text/value, input/change dispatch, error on no matching option/non-select, returned selection note/snapshot. | HT sufficient; local DOM operation host. **Host-service-only**. |
 | T06 — `browser_press` | MISSING | `host-tools.js::SCHEMAS`; `desktop/browser.js::keyOf/press/act` | Key combinations and modifiers, bounded repeat count (1–20), key release and page-change barrier between repetitions. | HT sufficient; real keyboard host. **Host-service-only**. |
 | T07 — `browser_scroll` | PARTIAL | `host-tools.js::SCHEMAS`; `desktop/browser.js::install.reveal/act` | Working isolated ref scrollIntoView with required pageId, connected-ref checks, settle/SS and dirty invalidation. Direction/amount returns unavailable: targeted exact-delta trusted wheel delivery is not qualified. No scrollBy or synthetic wheel substitute. | Exact prepared schema. Real reveal/stale-ref/partial-cancel tests and native-wheel prototype; see automation limitations. |
-| T08 — `browser_screenshot` | PARTIAL | `host-tools.js::SCHEMAS/result`; `desktop/browser.js::screenshot/act` | Native QQuickItem guest-only grab, JPEG 82, width ≤1280, dimensions/scale/coordinate guidance and post-grab document revalidation. Viewport works; full_page works only when the page fits at the top. Tall/scrolled full-page requests refuse unavailable: no resizing, scrolling or stitched pixels mislabelled as reference capture. | HT unchanged. Real JPEG pixel/dimension/scale and refusal tests. No automatic chat screenshot card. |
+| T08 — `browser_screenshot` | PARTIAL | `host-tools.js::SCHEMAS/result`; `desktop/browser.js::screenshot/act` | Viewport: native guest-only grab. `full_page`: reference dimensions and semantics: CSS viewport width × min(content height, 4 viewports), from the page origin, `pageHeight` = capture height, `truncated` when content is taller; JPEG 82, width ≤1280, scale guidance. A tall or scrolled page is captured by briefly giving the guest the capture height under a frozen copy of its pixels (the visible panel never changes), scrolling it to the origin, grabbing a frame drawn at that size, then restoring size and scroll before the result. Cancellation, deadline, page replacement and renderer/tab loss restore view state and deliver nothing late; the original scroll is restored only in the same document. Bounds: 16384 px per edge and 64 Mi CSS pixels, else `unavailable`. Remaining difference: pages can observe the temporary resize and the scroll to the origin and back (resize/scroll events, viewport units) — CDP's beyond-viewport capture also resizes but is not claimed to scroll. | HT unchanged. Real `fullPageFromTheTopWithoutDisturbingThePanel`, `fullPageCancellationPageChangeAndRendererLossRestore`, `coveredGuestCapturesOnlyItsOwnPixels`, plus earlier JPEG/scale tests. |
 | T09 — `browser_read` | MATCH | `desktop/browser.js::act` read case; `host-tools.js::read/readable/flatten/code` | Isolated capture caps source HTML at 4 Mi UTF-16 units and uses the reference inert DOM converter. BrowserTools freezes derived text/URL under readId/pageId and returns 40,000-unit slices with exact metadata. Refresh/navigation/dirty reveal/loss invalidate continuation; hidden text may remain, form controls/frame/shadow contents are excluded. | HT unchanged. Real parser/exclusions/cap/frozen refresh tests; UTF-16 split-surrogate/beyond-end tests. Ephemeral only, never action recovery. |
 | T10 — `browser_wait` | MATCH | `host-tools.js::SCHEMAS`; `desktop/browser.js::install.has/act` | Timed/text waits use isolated body/open-shadow search, 400 ms text polls, ≤250 ms sleep chunks, 0.5–60 s bounds, loading/mutation settle and SS. Missing text returns wait_timeout. Navigation, cancellation, tab/renderer loss or timeout blocks further stages. | HT unchanged. Real shadow/timed/expiry tests, cross-session cancellation and late-result deadline tests. |
 | T11 — `browser_tabs` | MATCH | `host-tools.js::SCHEMAS`; `browser-panel.js::tabsTool/tabsText` | BrowserTools serializes list/new/switch/close through Browser's native tab owner. Stable tabId required for switch/close; capacity 12 refuses without eviction. Exact TAB families, switch SS without tabs, new+URL SS with tabs, ignored optional pageId. No replay after hand-back/cancel. | BS/HT unchanged. Real empty/list/new/history/switch/close/unknown-ID/positional-ID/capacity tests plus queued cancellation. |
@@ -321,10 +329,10 @@ These negative findings prevent an audit from manufacturing port requirements:
 
 ## Highest-priority gaps
 
-1. **Remaining browser input/capture**: T03–T08 remainders, covered/moved-target
-   checks and navigation-safe input sequences; also B07–B09/B14/B16/B17. The
-   public-Qt automation slice is real but must not advertise four absent tools
-   or disguise viewport/ref-only operations as full screenshot/wheel parity.
+1. **Remaining browser input**: T03–T07 remainders, covered/moved-target
+   checks and navigation-safe input sequences, the B09 cursor/ripple they drive;
+   also B07 shortcuts and B16 theme. The public-Qt automation slice must not
+   advertise four absent tools or disguise ref reveal as wheel parity.
 2. **Remaining admission and safety qualification**: H03 early accepted-turn
    waiting and H06 multi-input barriers. Queues, versions, late-callback guards
    and hand-back now exist; cancellation still cannot undo already-issued work.
@@ -340,9 +348,9 @@ These negative findings prevent an audit from manufacturing port requirements:
    S01–S02, W01–W03). These are largely frontend/desktop tasks. The settings shell,
    picker labels and folder buttons currently promise substantially more than
    the connected native services provide.
-6. **Browser download ownership and truthful reporting** (B17/H09), followed by
-   browser state/settings persistence. Do not turn a late download into another
-   call's result or claim browser state is protected by a chat display lock.
+6. **Browser state/settings persistence.** Download ownership (B17/H09) now
+   exists; do not turn a late download into another call's result or claim
+   browser state is protected by a chat display lock.
 
 ## Original recommended port order
 
@@ -392,6 +400,32 @@ This does not authorize unrelated future work.
   browser action journal. Display-cache restoration must never revive tool input,
   refs, downloads or authorization. Neither side currently promises exactly-once
   browser effects across a crash.
+
+## Non-input browser slice
+
+Implemented in the separate worktree/branch `feat/browser-noninput-gaps`, based
+exactly on `4b9218c8ff04e4f8415f579823330ab0fc03850a`. No input tool, schema,
+reference file, CDP/remote-debugging endpoint, Rust, RPC or FFI was added or
+changed; the browser-input worktree was not touched. No push.
+
+- **Screenshot (T08):** tall and scrolled `full_page` captures now return the
+  reference's region and metadata, from public Qt APIs only: `QQuickItem`
+  grabs, a non-live `ShaderEffectSource` cover and isolated-world scrolling.
+  Covered guests (app chrome over a closed panel) capture their own pixels.
+- **Popups, tab requests, page menu (B08):** see the matrix row. DevTools is
+  the user's Inspect item only.
+- **Sign-in hints (B14):** isolated-world observer, host names only, never
+  verified.
+- **Downloads (B17/H09):** OS downloads folder, unique names, per-step
+  attribution with exactly-once start/end handling and turn-end release, toast.
+- **Not done here:** B09's agent cursor and ripple (driven by input-tool
+  pointer events), B07 shortcuts, B16 theme, all input tools.
+
+The UI smokes fail five browser checks (`the page loads and is ready` and the
+four that depend on it) **identically on the untouched base `4b9218c`**: Qt
+WebEngine does not run the document-creation marker script on `data:` pages,
+and `location.href` encodes spaces unlike `view.url`, so DOM readiness never
+opens for the smoke's typed `data:` URL. Not changed in this slice.
 
 ## Native automation slice
 

@@ -28,5 +28,21 @@ class BrowserAutomation : public QObject
                          Done) = 0;
     virtual void wheel(quint64 call, const Target &, double amount, Done) = 0;
     virtual void cancel(quint64 call) = 0;
+
+    // desktop/browser.js will-download/done: an engine reports every download
+    // exactly once as it starts (with its panel guest, or none for a popup)
+    // and exactly once as it ends. The host picks the file; empty refuses it.
+    using DownloadStarting = std::function<QString(quint64 id, const QString &tab, int incarnation,
+                                                   const QString &name)>;
+    using DownloadEnded = std::function<void(quint64 id, bool completed)>;
+    void observeDownloads(DownloadStarting starting, DownloadEnded ended)
+    {
+        m_downloadStarting = std::move(starting);
+        m_downloadEnded = std::move(ended);
+    }
+
+  protected:
+    DownloadStarting m_downloadStarting;
+    DownloadEnded m_downloadEnded;
 };
 } // namespace openghost
