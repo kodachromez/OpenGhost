@@ -425,6 +425,75 @@ class ContractTest : public QObject
         QTRY_VERIFY(!chat.pending());
         QVERIFY(chat.current().rows.last().text.endsWith(QStringLiteral("two")));
     }
+    void fakeEffortCapabilitiesAndSessionSelection()
+    {
+        InspectBackend backend;
+        PreferencesStore prefs({});
+        ChatService chat(&backend, &prefs);
+        chat.initialize();
+        QTRY_VERIFY(chat.ready());
+        const QStringList levels{"none", "low", "medium", "high", "xhigh", "max", "ultra"};
+        QCOMPARE(chat.models().first().thinkingLevels, levels);
+        QCOMPARE(chat.models().first().defaultThinking, std::optional<QString>("medium"));
+        QCOMPARE(chat.models().last().thinkingLevels, (QStringList{"low", "high"}));
+        QCOMPARE(chat.current().selection.model, QStringLiteral("echo"));
+        QCOMPARE(chat.current().selection.thinking, std::optional<QString>("medium"));
+        QVERIFY(!prefs.value().preferredThinking); // advertised default isn't a user choice
+
+        chat.choose({"fake", "echo", QStringLiteral("ultra")}, true);
+        QCOMPARE(countOf<ConfigureSession>(backend.commands), 0); // draft only
+        QVERIFY(chat.send("Effort fixture"));
+        QTRY_VERIFY(!chat.pending());
+        const auto sent = std::get<StartTurn>(backend.commands.last());
+        QCOMPARE(sent.params.selection.thinking, std::optional<QString>("ultra"));
+        const int commands = backend.commands.size();
+        chat.choose({"fake", "echo", QStringLiteral("none")}, true);
+        QCOMPARE(backend.commands.size(), commands); // locked while running
+        QCOMPARE(chat.current().selection.thinking, std::optional<QString>("ultra"));
+        settle(backend.fake);
+
+        // Configure replies, not optimistic UI state, establish the fake session's choice.
+        ConfigureSession inspect;
+        inspect.sessionId = chat.current().id;
+        inspect.sessionVersion = *chat.current().version;
+        const auto canonical = [&] {
+            return reply<SessionConfigured>(ask(backend.fake, inspect)).thinking.value();
+        };
+        for (const auto &level : levels) {
+            chat.choose({"fake", "echo", level}, true);
+            QVERIFY(chat.pending());
+            const auto config = std::get<ConfigureSession>(backend.commands.last());
+            QCOMPARE(config.sessionId, inspect.sessionId);
+            QCOMPARE(config.sessionVersion, inspect.sessionVersion);
+            QCOMPARE(config.thinking, std::optional<QString>(level));
+            QTRY_VERIFY(!chat.pending());
+            QCOMPARE(chat.current().selection.thinking, std::optional<QString>(level));
+            QCOMPARE(canonical(), std::optional<QString>(level));
+            QCOMPARE(prefs.value().preferredThinking, std::optional<QString>(level));
+        }
+        auto invalid = inspect;
+        invalid.thinking = "off"; // reference Instant is `none`, not `off`
+        QCOMPARE(std::get<Error>(ask(backend.fake, invalid)).code,
+                 QStringLiteral("model_unavailable"));
+        QCOMPARE(canonical(), std::optional<QString>("ultra"));
+        backend.refuseConfigure = true;
+        chat.choose({"fake", "echo", QStringLiteral("low")}, true);
+        QTRY_VERIFY(!chat.pending());
+        QCOMPARE(chat.current().selection.thinking, std::optional<QString>("ultra"));
+        QCOMPARE(prefs.value().preferredThinking, std::optional<QString>("ultra"));
+        backend.refuseConfigure = false;
+        chat.choose({"fake", "brief", QStringLiteral("low")}, false);
+        QTRY_VERIFY(!chat.pending());
+        QCOMPARE(canonical(), std::optional<QString>("low"));
+        QCOMPARE(prefs.value().preferredThinking, std::optional<QString>("ultra"));
+        invalid.thinking = "ultra"; // full set belongs to Echo, not every model
+        QCOMPARE(std::get<Error>(ask(backend.fake, invalid)).code,
+                 QStringLiteral("model_unavailable"));
+        QCOMPARE(canonical(), std::optional<QString>("low"));
+        chat.newChat();
+        QCOMPARE(chat.current().selection.model, QStringLiteral("brief"));
+        QCOMPARE(chat.current().selection.thinking, std::optional<QString>("low"));
+    }
     void modelMetadataAndCanonicalThinking()
     {
         Settings settings;

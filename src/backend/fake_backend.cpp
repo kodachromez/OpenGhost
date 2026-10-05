@@ -18,8 +18,11 @@ QVector<Model> catalog()
              QStringLiteral("Fake Echo"),
              {},
              false,
-             {},
-             {}},
+             // All named reference efforts (i18n.js), through the normal model contract.
+             {QStringLiteral("none"), QStringLiteral("low"), QStringLiteral("medium"),
+              QStringLiteral("high"), QStringLiteral("xhigh"), QStringLiteral("max"),
+              QStringLiteral("ultra")},
+             QStringLiteral("medium")},
             {QStringLiteral("brief"),
              QStringLiteral("fake"),
              QStringLiteral("Fake Brief"),

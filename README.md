@@ -72,8 +72,10 @@ to **OFF** and enables all three checks:
   and host routing. No GUI or real backend.
 - `native_ui_smoke`: disconnected QML launch, splash handoff, themes/settings,
   refusal paths and Markdown/TeX/diagram rendering.
-- `native_fake_ui_smoke`: the same UI plus actual composer submission, streaming,
-  Escape, steering, Retry, attachment/approval cards, deletion and fixture auth.
+- `native_fake_ui_smoke`: the same UI plus production effort-slider visibility,
+  seven levels, keyboard/pointer selection, busy locking and model changes;
+  actual composer submission, streaming, Escape, steering, Retry,
+  attachment/approval cards, deletion and fixture auth.
 
 CTest uses offscreen/software rendering. Smokes isolate appearance, preferences
 and the library in temporary directories (even the fake smoke uses a temporary
@@ -142,6 +144,17 @@ an agent backend or risking provider charges. It uses Qt timers (deterministic
 and process-local sessions. It uses no model, real tools, network requests,
 credentials or subprocesses. Text attachment preparation is a separate, real
 local file read by the frontend.
+
+**Fake Echo** advertises the reference's full effort set: **Instant, Low, Medium,
+High, Extra high, Max, Ultra**, defaulting to Medium. On a fresh profile Echo is
+selected, so the existing segmented effort button appears between the model and
+Send buttons. Click it to open the production slider above it. A saved model
+preference is still respected; select Fake Echo in the model picker to try all
+seven levels. **Fake Brief** retains only Low/High (default Low), exercising
+model-dependent notches and preference fallback. Effort stays visible but dimmed
+and locked during a reply. Choices update the draft or configure the existing
+fake session through the same frontend contract used by a future backend;
+no real thinking/generation occurs.
 
 Send a normal message, press **Escape** to stop, or Send again while the reply
 runs to steer. Submit these exact whole-message fixture selectors:

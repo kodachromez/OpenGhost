@@ -282,6 +282,38 @@ settings page assignment bypassing its navigation highlight, stale usage counts,
 undersized offscreen backing buffers, and an unclicked reference image-consent
 control. These were fixture defects, not reasons to change the frozen reference.
 
+## Fake-launch effort follow-up
+
+A normal `--fake-backend` launch exposed a coverage gap in the earlier audit:
+its effort captures injected a catalog instead of exercising the fake's catalog.
+The initially selected Fake Echo advertised **no thinking levels**, so the
+production `EffortControl` correctly hid itself; Fake Brief only exposed Low/High.
+Model selection, capability projection and the production slider already existed.
+There was no missing slider to replace with a fake-only view.
+
+Fake Echo now advertises `none`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra`
+with default `medium`, using the reference's full named set in `i18n.js`.
+The existing picker/settings/session contract controls the existing slider.
+The follow-up also fixes previously undocumented production parity gaps:
+
+- Bind the reference's busy lock (`script.js` / `EffortSlider.lock`): keep the
+  control visible at 0.3 icon opacity, close the popup, refuse interaction and
+  show “You can change effort when OpenGhost finishes”. Unlock after the turn.
+- Supply Ultra's reference hint, “Thinks with everything the model has”.
+- Rest absent/unlisted canonical effort at the first notch without inventing a
+  selection, matching `setEfforts`; derive the accessible label from the actual
+  level rather than a stale index during a model switch.
+
+Focused contract and fake UI tests cover all seven supported levels, canonical
+session configuration and refusal, draft/start propagation, supported-preference
+fallback across Echo/Brief, catalog removal/restoration, keyboard/pointer choices,
+labels/hints, seven segments/five inner notches, 4 px toolbar gaps, 264 × 48 px
+popup placement/padding, and busy lock/unlock. The unchanged production geometry
+is asserted against `styles.css` and `effort-button.js`; no test-only UI is added.
+Release build and both offscreen/software UI smokes are checked with the contract
+suite. This follow-up does **not** rerun or supersede the pixel measurements below,
+or qualify the glass/oil effects on a real GPU. The reference remains untouched.
+
 ## Explicit manual/visible follow-up — NOT RUN
 
 These names are included in the manifest with `manual: true`. The default command

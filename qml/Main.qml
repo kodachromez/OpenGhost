@@ -1647,6 +1647,7 @@ ApplicationWindow {
                     EffortControl {
                         id: thinkingChoice
                         objectName: "thinkingChoice"
+                        locked: window.frontend.busy
                         settings: window.settings
                         backdrop: window.contentItem
                     }

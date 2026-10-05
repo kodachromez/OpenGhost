@@ -395,8 +395,8 @@ CMake selects `src/platform/linux.cpp` on Linux and `portable.cpp` elsewhere;
 
 ## Validation coverage and follow-up boundaries
 
-The existing focused suite contains 28 contract test functions (QtTest reports
-32 passes including data rows and init/cleanup) and two UI smokes. It exercises refusal, uncertain
+The existing focused suite contains 29 contract test functions (QtTest reports
+33 passes including data rows and init/cleanup) and two UI smokes. It exercises refusal, uncertain
 acceptance, ordered/interleaved projection, terminal/Stop sealing, exact Retry,
 steering receipts, attachment ownership, auth invalidation, approvals/host
 lifetimes, library/restart/checkpoint failure, mini/folder/lock state, ledger

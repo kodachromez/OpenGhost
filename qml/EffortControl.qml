@@ -26,20 +26,26 @@ Control {
     property Item backdrop: null
     readonly property var levels: settings.levels
     readonly property int count: levels.length
-    readonly property int value: levels.indexOf(settings.thinking)
+    // An absent/unlisted canonical value rests at the first notch without choosing it.
+    readonly property int value: Math.max(0, levels.indexOf(settings.thinking))
+    property bool locked: false
+    readonly property string lockHint: locked ? "You can change effort when OpenGhost finishes" : ""
     readonly property int last: Math.max(0, count - 1)
     // effort-slider.js::setEfforts hides the control when no levels exist.
     // A disabled, empty control still occupied a slot in the composer's Row.
     visible: count > 0
-    enabled: count > 0
+    enabled: count > 0 && !locked
     onCountChanged: if (count === 0) panel.close()
+    onLockedChanged: if (locked) panel.close()
     focusPolicy: Qt.TabFocus
     padding: 0
     background: null
     implicitWidth: button.width
     implicitHeight: 34
     Accessible.role: Accessible.Slider
-    Accessible.name: value >= 0 ? "Effort: " + stage.nameOf(levels[value]) : "Effort"
+    Accessible.name: levels.includes(settings.thinking) ? "Effort: " + stage.nameOf(settings.thinking) : "Effort"
+    Accessible.description: lockHint
+    ButtonTip { text: effort.lockHint }
     // Opened or moved from the keyboard: the lens shows the focus ring (focus-visible);
     // closed from it, the button does, until focus leaves or a click.
     property bool keyboardOpened: false
@@ -47,10 +53,12 @@ Control {
     readonly property bool ringed: visualFocus || activeFocus && keyboardClosed
 
     function choose(index) {
-        if (index >= 0 && index < count && levels[index] !== settings.thinking)
+        if (enabled && index >= 0 && index < count && levels[index] !== settings.thinking)
             settings.chooseThinking(levels[index])
     }
     function toggle(keyboard) {
+        if (!enabled)
+            return
         if (panel.opened) {
             panel.close()
         } else if (!panel.visible) {
@@ -59,7 +67,7 @@ Control {
         }
     }
     Keys.onPressed: function(event) {
-        if (!count)
+        if (!enabled)
             return
         const steps = {}
         steps[Qt.Key_Left] = steps[Qt.Key_Down] = steps[Qt.Key_PageDown] = -1
@@ -150,6 +158,7 @@ Control {
                 visible: !panel.visible
                 Repeater {
                     id: segmentRepeater
+                    objectName: "effortSegments"
                     model: effort.count
                     delegate: Rectangle {
                         required property int index
@@ -610,9 +619,11 @@ Control {
                         }
                     }
                     Repeater { // Inner notches, lit once the lens passes them.
+                        objectName: "effortNotches"
                         model: Math.max(0, effort.count - 2)
                         delegate: Rectangle {
                             required property int index
+                            objectName: "effortNotch"
                             readonly property real under: Math.max(0, Math.min(1, (clock.pos - index - 1) * 6 + 0.5))
                             x: slider.at(index + 1) - 2
                             y: slider.height / 2 - 2
@@ -639,6 +650,7 @@ Control {
             // .effort-slider: 36 px, padding 6 14; track inset 22 px.
             Item {
                 id: slider
+                objectName: "effortSlider"
                 x: 14
                 y: 6
                 width: panel.width - 28
@@ -773,6 +785,7 @@ Control {
                 }
                 MouseArea {
                     anchors.fill: parent
+                    enabled: effort.enabled
                     preventStealing: true
                     // A drag follows its goal.
                     cursorShape: panel.dragging ? Qt.ClosedHandCursor : Qt.PointingHandCursor
