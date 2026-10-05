@@ -12,6 +12,7 @@ class PluginBackend final : public openghost::Backend
     QVector<openghost::Command> commands;
     QVector<openghost::RequestId> ids, cancelled; // parallel to commands; cancelRequest calls
     QVector<QPair<openghost::RequestId, openghost::Command>> waiting;
+    QString connection; // The last Initialize's connectionId; publish() stamps it.
     PluginBackend()
     {
         connect(&fake, &Backend::replied, this,
@@ -28,6 +29,8 @@ class PluginBackend final : public openghost::Backend
     {
         commands.append(command);
         ids.append(id);
+        if (const auto *hello = std::get_if<openghost::Initialize>(&command))
+            connection = hello->connectionId;
         if (std::holds_alternative<openghost::PluginsList>(command) ||
             std::holds_alternative<openghost::EnablePlugin>(command) ||
             std::holds_alternative<openghost::DisablePlugin>(command))
@@ -59,7 +62,12 @@ class PluginBackend final : public openghost::Backend
         waiting.removeIf([id](const auto &call) { return call.first == id; });
         emit replied(id, result);
     }
-    void publish(const openghost::Plugin &p) { emit globalEvent(openghost::PluginChanged{p}); }
+    void publish(const openghost::Plugin &p) { publishFrom(connection, p); }
+    // A delivery attributed to another (e.g. an earlier, replaced) connection.
+    void publishFrom(const QString &from, const openghost::Plugin &p)
+    {
+        emit globalEvent(openghost::PluginChanged{p, from});
+    }
     void disconnectBackend()
     {
         emit closed(

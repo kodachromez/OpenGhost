@@ -7,6 +7,8 @@ namespace openghost
 // Semantic async port. Implementations and consumers live on the same owner
 // thread. request() never emits a reply inline; each admitted call settles once.
 // Events may precede its reply. Destroying the port abandons pending callbacks.
+// Per connection, events and replies arrive in backend order; PluginChanged
+// carries the connectionId of the Initialize it belongs to.
 // No UI, QML, process, wire framing or persistence policy belongs in this class.
 class Backend : public QObject
 {

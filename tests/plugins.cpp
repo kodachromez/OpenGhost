@@ -96,7 +96,7 @@ class PluginsTest final : public QObject
         chat.initialize();
         QTRY_VERIFY(chat.ready());
         auto *plugins = chat.plugins();
-        QSignalSpy changes(plugins, &Plugins::changed);
+        QSignalSpy changes(plugins, &Plugins::entriesChanged);
         backend.finish(backend.next<PluginsList>(), listed({plugin("vendor.future", "enabled")}));
         plugins->setEnabled("vendor.future", false);
         backend.publish(plugin("vendor.future", "disabling"));
@@ -427,10 +427,27 @@ class PluginsTest final : public QObject
         backend.finish(backend.next<PluginsList>(),
                        listed({plugin("vendor.future", "enabled"), plugin("brand.new")}));
         QCOMPARE(plugins->entries().size(), 2);
-        // An identical repeated event is harmless.
+        // An identical repeated event or list is harmless and changes nothing shown.
+        QSignalSpy rows(plugins, &Plugins::entriesChanged);
+        const auto revision = plugins->entries().last().revision;
         backend.publish(plugin("brand.new"));
         backend.publish(plugin("brand.new"));
+        plugins->refresh();
+        backend.finish(backend.next<PluginsList>(),
+                       listed({plugin("vendor.future", "enabled"), plugin("brand.new")}));
         QCOMPARE(plugins->entries().size(), 2);
+        QCOMPARE(plugins->entries().last().revision, revision);
+        QCOMPARE(rows.size(), 0);
+        // A reordering list is a row change even with identical snapshots.
+        plugins->refresh();
+        backend.finish(backend.next<PluginsList>(),
+                       listed({plugin("brand.new"), plugin("vendor.future", "enabled")}));
+        QCOMPARE(rows.size(), 1);
+        QCOMPARE(plugins->entries().first().snapshot.id, "brand.new");
+        QCOMPARE(plugins->entries().first().revision, revision);
+        plugins->setEnabled("vendor.future", false); // the index follows the move
+        QCOMPARE(backend.command<DisablePlugin>().pluginId, "vendor.future");
+        QVERIFY(plugins->entries().last().pending);
     }
     void persistenceOutcomeIsKept()
     {
@@ -455,39 +472,107 @@ class PluginsTest final : public QObject
         backend.finish(backend.next<DisablePlugin>(), updated(plugin(), {}, "ambiguous"));
         QCOMPARE(plugins->entries().first().persisted, "ambiguous");
     }
-    void reconnectDropsStaleWorkAndRefreshes()
+    // F3: after a reconnect, events from the replaced connection can neither
+    // add rows nor regress the new connection's state, even while its first
+    // list is in flight (when a live event would otherwise beat the list).
+    void reconnectIgnoresOldConnectionEvents()
     {
         PluginBackend backend;
         PreferencesStore prefs({});
         ChatService chat(&backend, &prefs);
         chat.initialize();
         QTRY_VERIFY(chat.ready());
-        backend.finish(backend.next<PluginsList>(), listed({plugin()}));
-        chat.plugins()->setEnabled("vendor.future", true);
-        const auto oldToggle = backend.next<EnablePlugin>();
-        chat.plugins()->refresh();
-        const auto oldList = backend.next<PluginsList>();
+        auto *plugins = chat.plugins();
+        const auto old = backend.connection;
+        QVERIFY(!old.isEmpty());
+        backend.finish(backend.next<PluginsList>(), listed({plugin("vendor.future", "enabled")}));
+        backend.publish(plugin("vendor.future", "disabling"));
+        QCOMPARE(plugins->entries().first().snapshot.state, "disabling");
         backend.disconnectBackend();
-        QVERIFY(!chat.plugins()->supported());
-        QVERIFY(chat.plugins()->entries().isEmpty());
-        backend.publish(plugin("late-event"));
-        QVERIFY(chat.plugins()->entries().isEmpty());
+        QVERIFY(!plugins->supported());
+        QVERIFY(plugins->entries().isEmpty());
+        backend.publishFrom(old, plugin("late-event"));
+        QVERIFY(plugins->entries().isEmpty());
+
         chat.initialize();
         QTRY_VERIFY(chat.ready());
-        backend.finish(oldToggle, updated(plugin("vendor.future", "enabled")));
-        backend.finish(oldList, listed({plugin("stale")}));
-        QVERIFY(chat.plugins()->entries().isEmpty());
-        QVERIFY(chat.plugins()->loading());
-        backend.finish(backend.next<PluginsList>(), listed({plugin("fresh")}));
-        QCOMPARE(chat.plugins()->entries().first().snapshot.id, "fresh");
-        QCOMPARE(backend.count<PluginsList>(), 3);
+        QVERIFY(backend.connection != old);
+        QVERIFY(plugins->loading());
+        backend.publishFrom(old, plugin("vendor.future", "disabling"));
+        backend.publishFrom(old, plugin("old-only"));
+        backend.finish(backend.next<PluginsList>(),
+                       listed({plugin("vendor.future"), plugin("fresh", "enabled")}));
+        QCOMPARE(plugins->entries().size(), 2);
+        QCOMPARE(plugins->entries().first().snapshot.state, "disabled");
+        QVERIFY(plugins->entries().first().canToggle());
+
+        QSignalSpy rows(plugins, &Plugins::entriesChanged);
+        backend.publishFrom(old, plugin("old-only"));
+        backend.publishFrom(old, plugin("fresh", "disabling"));
+        backend.publishFrom({}, plugin("fresh")); // unattributed: fail closed
+        QCOMPARE(rows.size(), 0);
+        QCOMPARE(plugins->entries().size(), 2);
+        QCOMPARE(plugins->entries().last().snapshot.state, "enabled");
+        // The current connection's events still apply.
+        backend.publish(plugin("fresh", "disabling"));
+        QCOMPARE(rows.size(), 1);
+        QCOMPARE(plugins->entries().last().snapshot.state, "disabling");
+
         backend.disconnectBackend();
         backend.runtimePlugins = false;
         chat.initialize();
         QTRY_VERIFY(chat.ready());
-        QVERIFY(!chat.plugins()->supported());
-        QVERIFY(chat.plugins()->entries().isEmpty());
-        QCOMPARE(backend.count<PluginsList>(), 3);
+        QVERIFY(!plugins->supported());
+        backend.publish(plugin("current-but-unsupported"));
+        QVERIFY(plugins->entries().isEmpty());
+        QCOMPARE(backend.count<PluginsList>(), 2);
+    }
+    // N7: completions dispatched under an earlier connection are invoked after
+    // the new connection has loaded the same plugin IDs. Each would change the
+    // rows if accepted; none may.
+    void staleCompletionsAreRejected()
+    {
+        QVector<Plugins::Completion> calls;
+        Plugins plugins(
+            [&calls](const Command &, Plugins::Completion done) { calls.append(std::move(done)); });
+        plugins.initialize(true, "first");
+        QCOMPARE(calls.size(), 1);
+        calls.takeFirst()(listed({plugin("a"), plugin("b", "enabled")}));
+        plugins.setEnabled("a", true);
+        plugins.setEnabled("b", false);
+        plugins.refresh();
+        QCOMPARE(calls.size(), 3);
+        const auto oldEnable = calls.takeFirst(), oldDisable = calls.takeFirst(),
+                   oldList = calls.takeFirst();
+
+        plugins.initialize(true, "second");
+        QCOMPARE(calls.size(), 1);
+        calls.takeFirst()(listed({plugin("a"), plugin("b", "enabled")}));
+        QSignalSpy rows(&plugins, &Plugins::entriesChanged);
+        QSignalSpy state(&plugins, &Plugins::stateChanged);
+        // Accepted, these would: flip "a" on; block "b" and send a reconciling
+        // list; replace both rows with "stale".
+        oldEnable(updated(plugin("a", "enabled")));
+        oldDisable(Error{"timeout", "Outcome not confirmed", {}, {}, {}, {}});
+        oldList(listed({plugin("stale")}));
+        QCOMPARE(rows.size(), 0);
+        QCOMPARE(state.size(), 0);
+        QVERIFY(calls.isEmpty());
+        QCOMPARE(plugins.entries().size(), 2);
+        QVERIFY(!plugins.entries().first().snapshot.enabled);
+        QVERIFY(plugins.entries().first().canToggle());
+        QVERIFY(plugins.entries().last().snapshot.enabled);
+        QVERIFY(plugins.entries().last().canToggle());
+        QVERIFY(plugins.entries().last().error.isEmpty());
+
+        // Control: the same completions from the current generation apply.
+        plugins.setEnabled("a", true);
+        calls.takeFirst()(updated(plugin("a", "enabled")));
+        QVERIFY(plugins.entries().first().snapshot.enabled);
+        plugins.setEnabled("b", false);
+        calls.takeFirst()(Error{"timeout", "Outcome not confirmed", {}, {}, {}, {}});
+        QVERIFY(!plugins.entries().last().canToggle());
+        QCOMPARE(calls.size(), 1); // its reconciliation list
     }
 };
 QTEST_GUILESS_MAIN(PluginsTest)

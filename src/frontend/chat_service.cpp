@@ -353,7 +353,7 @@ void ChatService::initialize()
     hello.connectionId = uuid();
     hello.client = {QStringLiteral("OpenGhost"), QStringLiteral("1.3.0"), {}, {}};
     hello.tools = m_host->tools(); // none without a native browser host
-    call(hello, [this](const Result &result) {
+    call(hello, [this, connection = hello.connectionId](const Result &result) {
         const auto *hello = value<Initialized>(result);
         if (!hello || hello->protocolVersion != QStringLiteral("0.1") ||
             !hello->capabilities.sessionRecovery) {
@@ -367,7 +367,7 @@ void ChatService::initialize()
                           : errorOf(result));
             return;
         }
-        m_plugins.initialize(hello->capabilities.runtimePlugins);
+        m_plugins.initialize(hello->capabilities.runtimePlugins, connection);
         const QString name = hello->backend ? hello->backend->name : QStringLiteral("Backend");
         call(ModelsList{}, [this, name](const Result &models) {
             const auto *list = value<QVector<Model>>(models);
