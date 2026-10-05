@@ -4,6 +4,7 @@
 #include <QQuickItem>
 #include <QQuickWindow>
 #include <QTcpServer>
+#include <QTemporaryDir>
 #include <QtTest>
 #include <csignal>
 
@@ -31,7 +32,8 @@ bool near(QColor a, QColor b)
 } // namespace
 
 // The production browser panel in the real window, on real Qt WebEngine
-// guests showing local pages only (data: URLs and a refused loopback port).
+// guests showing local pages only (file: pages in a private temporary
+// directory and a refused loopback port).
 // Without the browser build: no panel, no toggle, no browser context.
 int browserSmoke(QQmlApplicationEngine &engine, WindowController &controller)
 {
@@ -92,11 +94,27 @@ int browserSmoke(QQmlApplicationEngine &engine, WindowController &controller)
           "an empty panel focuses its address");
     check(find(panel, QStringLiteral("browserEmpty"))->isVisible(), "the empty state shows");
 
+    // Local pages with plain file: URLs, so the guest's location.href is
+    // exactly the view's URL and document readiness is observed (an encoded
+    // data: URL never matches it).
+    QTemporaryDir pages;
+    const auto writePage = [&](const char *name, const char *html) {
+        QFile file(pages.filePath(QString::fromLatin1(name)));
+        const bool written = file.open(QIODevice::WriteOnly) && file.write(html) > 0;
+        file.close();
+        return written ? QUrl::fromLocalFile(file.fileName()).toString() : QString();
+    };
+    const QString green =
+        writePage("green.html", "<!doctype html><title>Green</title>"
+                                "<body style='margin:0;background:rgb(10,200,30)'></body>");
+    const QString blue =
+        writePage("blue.html", "<!doctype html><title>Blue</title>"
+                               "<body style='margin:0;background:rgb(20,40,220)'></body>");
+    check(pages.isValid() && !green.isEmpty() && !blue.isEmpty(), "the local pages are written");
+
     // Navigate from the address bar to a local page and present its frame.
-    for (const char c : QByteArrayLiteral("data:text/html,<title>Green</title>"
-                                          "<body style='margin:0;background:rgb(10,200,30)'>"))
-        if (c)
-            QTest::keyClick(window, c);
+    for (const QChar c : green)
+        QTest::keyClick(window, c.toLatin1());
     QTest::keyClick(window, Qt::Key_Return);
     check(wait([&] { return browser->ready() && !browser->loading(); }),
           "the page loads and is ready");
@@ -111,7 +129,7 @@ int browserSmoke(QQmlApplicationEngine &engine, WindowController &controller)
           "the stage presents the page's frame");
 
     // A second page; Back returns to the first through the guest's history.
-    browser->go(QStringLiteral("data:text/html,<body style='margin:0;background:rgb(20,40,220)'>"));
+    browser->go(blue);
     check(wait([&] {
               return browser->canGoBack() && !browser->loading() &&
                      near(window->grabWindow().pixelColor(inStage), QColor(20, 40, 220));
@@ -138,7 +156,7 @@ int browserSmoke(QQmlApplicationEngine &engine, WindowController &controller)
                       centre(find(panel, QStringLiteral("browserRetry"))).toPoint());
     check(wait([&] { return error->isVisible() && !browser->loading(); }),
           "Try again retries the page");
-    browser->go(QStringLiteral("data:text/html,<body style='margin:0;background:rgb(10,200,30)'>"));
+    browser->go(green);
     check(wait([&] { return !error->isVisible() && !browser->loading(); }),
           "a new page clears the failure");
 
