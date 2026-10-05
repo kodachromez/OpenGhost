@@ -29,6 +29,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--binary', type=Path, default=ROOT/'build-release/openghost-native')
 parser.add_argument('--output', type=Path, default=ROOT/'build-release/visual-parity')
 parser.add_argument('--manifest', type=Path, help='Optional custom manifest (default: all shared fixtures)')
+parser.add_argument('--media', action='store_true', help='All reply-media fixtures plus sent-image boundary; not the unrelated suite')
 parser.add_argument('--strict', action='store_true', help='Fail unless every comparable pixel is exact')
 args = parser.parse_args()
 out = args.output.resolve()
@@ -36,7 +37,10 @@ out.mkdir(parents=True, exist_ok=True)
 if args.manifest is None:
     from fixtures import fixtures as make_fixtures
     args.manifest = out/'input.json'
-    args.manifest.write_text(json.dumps(dict(fixtures=make_fixtures()),indent=2)+'\n')
+    selected=make_fixtures()
+    if args.media:
+        selected=[f for f in selected if f.get('replyMedia') or f['id']=='attachment-image']
+    args.manifest.write_text(json.dumps(dict(fixtures=selected),indent=2)+'\n')
 fixtures = json.loads(args.manifest.read_text())['fixtures']
 # Pin what was actually audited; no historical image baseline is consumed.
 subprocess.run(['git','diff','--exit-code','HEAD','--','reference/openghost'],cwd=ROOT,check=True,stdout=subprocess.DEVNULL)
@@ -150,8 +154,27 @@ for f in fixtures:
     scale=f.get('dpr',1); width=f.get('width',1280); height=f.get('height',840)
     left=round(max(240,width*.173)*scale)
     reading=measure(a[48*scale:(height-180)*scale,left:-8*scale],b[48*scale:(height-180)*scale,left:-8*scale])
+    content={}
+    if f.get('replyMedia'):
+        # Same absolute rectangle on both images: union of both actual media
+        # component boxes. No translation, resizing, blur, exclusion mask or
+        # tolerance. Shell outside the component is reported separately above.
+        rects=[]
+        for side in ('reference','native'):
+            rects+=json.loads((out/side/(f['id']+'.json')).read_text()).get('media',[])
+        if rects:
+            x0=max(0,int(np.floor(min(r[0] for r in rects)*scale)))
+            y0=max(0,int(np.floor(min(r[1] for r in rects)*scale)))
+            x1=min(a.shape[1],int(np.ceil(max(r[0]+r[2] for r in rects)*scale)))
+            y1=min(a.shape[0],int(np.ceil(max(r[1]+r[3] for r in rects)*scale)))
+            crop=lambda image:image[y0:y1,x0:x1]
+            content=dict(media_rect=[x0,y0,x1,y1],media_content=measure(crop(a),crop(b)),
+                         media_repeat={s:measure(crop(images[s]),crop(images[s+'Repeat'])) for s in ('reference','native')})
+            for side in ('reference','native'):
+                Image.fromarray(crop(images[side])).save(out/side/(f['id']+'.media.png'))
+            Image.fromarray(crop(d)).save(out/'diff'/(f['id']+'.media.png'))
     results.append(dict(id=f['id'],status='headless',classification=category,
-                        limited=category==MANUAL,notes=notes,**metric,repeat=repeats,reading_area=reading))
+                        limited=category==MANUAL,notes=notes,**metric,repeat=repeats,reading_area=reading,**content))
 summary=dict(fixtures=len(fixtures),headless=sum(r['status']=='headless' for r in results),
              manual=sum(r['status']=='manual' for r in results),
              exact=sum(r.get('changed_pixels')==0 for r in results),
@@ -160,6 +183,13 @@ summary=dict(fixtures=len(fixtures),headless=sum(r['status']=='headless' for r i
              repeat_unstable=sum(any(m['changed_pixels'] for m in r.get('repeat',{}).values()) for r in results),
              repeat_over8=sum(any(m['over8_percent']>0 for m in r.get('repeat',{}).values()) for r in results),
              classifications=dict(Counter(r['classification'] for r in results)))
+media_results=[r['media_content'] for r in results if 'media_content' in r]
+if media_results:
+    summary['media_content']=dict(fixtures=len(media_results),exact=sum(m['changed_pixels']==0 for m in media_results),
+        changed_percent=100*sum(m['changed_pixels'] for m in media_results)/sum(m['total_pixels'] for m in media_results),
+        pixel_weighted_mae=sum(m['mae']*m['total_pixels'] for m in media_results)/sum(m['total_pixels'] for m in media_results),
+        median_mae=float(np.median([m['mae'] for m in media_results])),
+        repeat_over8=sum(any(m['over8_percent']>0 for m in r.get('media_repeat',{}).values()) for r in results))
 report=dict(summary=summary,measurements=results)
 (out/'results.json').write_text(json.dumps(report,indent=2)+'\n')
 shutil.copyfile(args.manifest,out/'fixtures.json')

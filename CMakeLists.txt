@@ -29,7 +29,8 @@ endfunction()
 set(diagram_sources src/diagram.cpp src/diagram_core.cpp src/diagram_paint.cpp
     src/diagram_flow.cpp src/diagram_charts.cpp src/diagram_page.cpp src/diagram_figures.cpp
     src/diagram_data.cpp src/diagram_subjects.cpp src/diagram_scene.cpp src/filekinds.cpp src/cssfont.cpp)
-add_library(native_rich STATIC src/markdown.cpp src/highlight.cpp src/tex.cpp ${diagram_sources})
+add_library(native_rich STATIC src/markdown.cpp src/media.cpp src/highlight.cpp src/tex.cpp
+    ${diagram_sources})
 target_include_directories(native_rich PUBLIC src)
 target_link_libraries(native_rich PUBLIC Qt6::Gui)
 native_warnings(native_rich)
@@ -71,7 +72,8 @@ qt_add_qml_module(native_window URI OpenGhost.Native VERSION 1.0 NO_PLUGIN RESOU
         src/shadow.h src/shadow.cpp src/reveal.h src/reveal.cpp
         src/exposure.h src/exposure.cpp src/wave.h src/wave.cpp
         src/selection.h src/selection.cpp
-        src/diagramview.h src/diagramview.cpp
+        src/diagramview.h src/diagramview.cpp src/medialoader.h src/medialoader.cpp
+        src/mediafetch.h src/mediafetch.cpp src/videoinfo.h src/videoinfo.cpp
         src/browserfocus.h src/browserfocus.cpp)
 target_link_libraries(native_window PUBLIC native_contract native_rich Qt6::Gui Qt6::Network
     Qt6::Quick Qt6::QuickControls2)
@@ -90,7 +92,7 @@ foreach(name Main ChatEntry LiveText Sidebar SettingsDialog Markdown Block Inlin
         IconButton Spring ModelGlyph ModelButton ModelStage EffortStage Feather UsagePage
         AppearancePage GeneralPage OverlayScrollBar JumpButton CopyButton Entrance SelectArea
         SelectDriver SelectableLabel SelectionMenu SelectionVeil VeilFilter TitleTip ButtonTip
-        Backdrop RowLift TextGlow ApprovalCard ModePicker ModeDock)
+        Backdrop RowLift TextGlow ApprovalCard ModePicker ModeDock MediaBlock MediaStack MediaGlass)
     set_source_files_properties(qml/${name}.qml PROPERTIES QT_RESOURCE_ALIAS ${name}.qml)
     list(APPEND qml_files qml/${name}.qml)
 endforeach()
@@ -124,6 +126,15 @@ if(OPENGHOST_BUILD_SMOKE_TEST)
     native_warnings(native_plugins_test)
     add_test(NAME native_plugins_test COMMAND native_plugins_test)
     set_tests_properties(native_plugins_test PROPERTIES TIMEOUT 15)
+
+    # Reply pictures and videos: parsing, address rules and the loader's
+    # policy, metadata/cache and bounded transport (loopback only).
+    add_executable(native_media_test tests/media.cpp)
+    target_link_libraries(native_media_test PRIVATE native_window Qt6::Test)
+    native_warnings(native_media_test)
+    add_test(NAME native_media_test COMMAND native_media_test)
+    set_tests_properties(native_media_test PROPERTIES TIMEOUT 30
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     add_test(NAME native_ui_smoke COMMAND openghost-native --smoke-test)
     add_test(NAME native_fake_ui_smoke COMMAND openghost-native --smoke-test --fake-backend)
     set_tests_properties(native_ui_smoke native_fake_ui_smoke PROPERTIES TIMEOUT 30

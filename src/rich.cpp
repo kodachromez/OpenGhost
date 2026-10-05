@@ -5,6 +5,7 @@
 #include "ghost.h"
 #include "highlight.h"
 #include "icon.h"
+#include "media.h"
 #include "theme.h"
 #include "presentation.h"
 
@@ -176,8 +177,8 @@ Work &work()
     return *instance;
 }
 
-const char *const kindNames[] = {"paragraph", "heading", "code", "diagram", "math",
-                                 "table",     "rule",    "flow", "list",    "quote"};
+const char *const kindNames[] = {"paragraph", "heading", "code", "diagram", "math", "table",
+                                 "rule",      "flow",    "list", "quote",   "media"};
 
 quint64 mix(quint64 h, quint64 v) { return (h ^ v) * 1099511628211ull + 0x9e3779b97f4a7c15ull; }
 
@@ -320,6 +321,8 @@ int BlockModel::gap(int row) const
             return b.flag ? std::pair<int, int>{6, 22} : std::pair<int, int>{0, 14};
         case markdown::Kind::Rule:
             return {26, 0};
+        case markdown::Kind::Media: // .md-media; one with nothing yet is not shown.
+            return b.media.isEmpty() ? std::pair<int, int>{0, 0} : std::pair<int, int>{4, 18};
         default:
             return {0, 14};
         }
@@ -446,6 +449,7 @@ void BlockModel::units(QVector<SelectionUnit> &out, const QString &prefix,
             break;
         }
         case markdown::Kind::Rule:
+        case markdown::Kind::Media: // Pictures and cards, not text (data-static).
             break;
         }
     }
@@ -516,6 +520,32 @@ QVariant BlockModel::data(const QModelIndex &index, int role) const
         return !item && b.clipped;
     case BornRole:
         return double(row.born);
+    case MediaRole: {
+        // Each picture or video with what its presentation needs: the
+        // link chip's label, a video's id and the words of its link.
+        QVariantList items;
+        if (item)
+            return items;
+        for (const markdown::MediaItem &m : b.media) {
+            const QString link = m.video ? m.src : m.href.isEmpty() ? m.src : m.href;
+            QVariantMap value{{QStringLiteral("video"), m.video},
+                              {QStringLiteral("src"), m.src},
+                              {QStringLiteral("caption"), m.caption},
+                              {QStringLiteral("href"), m.href},
+                              {QStringLiteral("link"), link},
+                              {QStringLiteral("label"), markdown::linkLabel(link)},
+                              {QStringLiteral("host"), media::hostOf(m.src)}};
+            if (m.video) {
+                const media::VideoWords words = media::videoWords(m.caption, m.src);
+                value.insert(QStringLiteral("id"), media::videoId(m.src));
+                value.insert(QStringLiteral("title"), words.title);
+                value.insert(QStringLiteral("by"), words.by);
+                value.insert(QStringLiteral("time"), words.time);
+            }
+            items << value;
+        }
+        return items;
+    }
     default:
         return {};
     }
@@ -605,6 +635,26 @@ qreal estimateBlock(const markdown::Block &b, qreal width)
         return 0;
     case Kind::Flow:
         return 30;
+    case Kind::Media: {
+        // A plate for the pictures, a card per video (two to a row when many).
+        qreal height = 0;
+        int videos = 0;
+        bool pictures = false;
+        for (const markdown::MediaItem &item : b.media) {
+            videos += item.video;
+            pictures = pictures || !item.video;
+        }
+        if (pictures)
+            height += std::min<qreal>(media::FrameWidth, width) * 3 / 4 + 30;
+        if (videos) {
+            const bool many = videos > 1;
+            const qreal card =
+                many ? std::max<qreal>(170, width / 2 - 7) : std::min<qreal>(380, width);
+            const int rows = many ? (videos + 1) / 2 : 1;
+            height += (pictures ? 18 : 0) + rows * (card * 9 / 16 + 56) + (rows - 1) * 20;
+        }
+        return height;
+    }
     case Kind::List: {
         const qreal indent = b.flag ? 32 : 22;
         qreal height = 0;
@@ -642,7 +692,8 @@ QHash<int, QByteArray> BlockModel::roleNames() const
             {ColumnsRole, "columns"}, {AlignRole, "align"},     {PaletteRole, "tones"},
             {ChildrenRole, "nested"}, {TaskRole, "task"},       {NumberRole, "number"},
             {DepthRole, "depth"},     {PathRole, "path"},       {GapRole, "gap"},
-            {OmittedRole, "omitted"}, {ClippedRole, "clipped"}, {BornRole, "born"}};
+            {OmittedRole, "omitted"}, {ClippedRole, "clipped"}, {BornRole, "born"},
+            {MediaRole, "media"}};
 }
 
 // ---- RichDocument --------------------------------------------------------

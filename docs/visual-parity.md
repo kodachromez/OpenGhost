@@ -36,6 +36,11 @@ The 13 larger repeat cases include startup/idle motion, effort-high, scroll-midd
 and several reference settings/auth transitions. Animation phase is not locked.
 These results do not certify animation timing, GPU equivalence or input behavior.
 
+A subsequent **reply/media-only completion audit** is recorded at
+[the end of this document](#replymedia-completion-after-dc0a9e04). Its 48 fresh
+fixtures and component-region measurements do not replace the historical full
+inventory/results above; the unrelated full suite was not rerun.
+
 ## Desktop-safe reproduction
 
 From the repository root:
@@ -90,11 +95,13 @@ Safety/ownership details:
    Renderer commands have deadlines and owned process groups; interruption/error
    terminates the group. The private display is reaped in `finally`.
 4. Temporary HOME/config/data/cache/runtime/browser profiles; no real credential,
-   library or provider state. The native network-denying factory stays in place.
-   Reference HTTP(S) requests are intercepted and refused, except one synthetic
-   image URL fulfilled directly from fixture PNG bytes. No real image/model request
-   is sent. No file chooser, external browser, clipboard write or approval answer
-   is invoked by the parity snapshots.
+   library or provider state. The native network-denying factory stays in place,
+   and the native media loader gets an injected fetch. Both sides refuse every
+   HTTP(S) request except a fixture's served picture addresses (`mediaUrls`,
+   default the one synthetic image URL), fulfilled from fixture PNG bytes. A
+   fixture-only `VideoInfoService` supplies identical metadata to the reference's
+   injected `videoInfo` host; no real oEmbed/image/model request is sent. No file
+   chooser, external browser, clipboard write or approval answer is invoked.
 5. Smoke-only native parity flags reject visible platforms and Qt platform
    overrides **before** constructing the application. No automatic visible retry.
    Neither browser tooling nor fixture adapters are part of a normal native build.
@@ -181,7 +188,7 @@ coverage, not every possible data combination, animation frame or interaction.
 | Settings/auth | All four pages in dark/light; small/wide sheet; disconnected/connected/waiting/error/key prompt provider states; empty/populated/multi-provider usage |
 | Markdown | Headings/emphasis, nested/task/number lists, quotes/callout, table alignment, links/rule, literal HTML, Unicode/RTL/emoji, dark/light/2× |
 | Code/math | C++, Python, JavaScript, JSON, diff, long code, column arithmetic; inline/display TeX and matrix |
-| Media/files | Held/loaded image, image stack, blocked video thumbnail, sent image metadata, single/multiple sent/composer cards, attachment-note and drop presentation |
+| Media/files | Held/loaded image, image stack, blocked video thumbnail, trusted/captioned/lost/mixed galleries, loaded video previews (one and several), writing-in-progress plate, sent image metadata, single/multiple sent/composer cards, attachment-note and drop presentation |
 | Approval | Command, file-diff and web cards, collapsed and expanded; identical display objects, no actual operation/answer |
 | Diagram | All 43 dispatch families, plus light, invalid fallback and editor |
 | Unported reference views | Add dock, attachment-note editor, drop art, stats card, compact notice, mini-chat, lock and password field; measured as gaps |
@@ -252,8 +259,7 @@ Remaining visible findings:
 - Selection/veil/menu differences, including absent mini-chat action; sent file
   preview refusals and vertical rows rather than reference cards/thumbnails.
 - Add dock, attachment notes, drop art, stats/compact/mini/lock/browser views are
-  absent, not secretly implemented by the fixture injection. Media network denial
-  remains intact. These require separate product-scope decisions, not pixel hacks.
+  absent, not secretly implemented by the fixture injection. These require separate product-scope decisions, not pixel hacks.
 
 ## Safe fixes made
 
@@ -358,3 +364,141 @@ Pillow **12.3.0**. The captured native/test source-tree hash is
 
 This audit is a measured starting point for parity work, **not clearance to begin
 backend integration under a claim of completed visual parity**.
+
+## Reply/media completion after dc0a9e04
+
+Worktree `/home/brian/og-wt-reply-media`, branch `reply-media-presentation`;
+base `dc0a9e04b898b1723db2e6d794285c7079f5239c`. Only this worktree was changed.
+The frozen reference, browser-host/browser-tools and Qt Shapes implementation
+were not touched. The original 11 media fixtures were insufficient qualification.
+
+Completed since that base:
+
+- Exact reference host-lookup audit; injectable `VideoInfoService`, production
+  fixed-endpoint Qt HTTPS oEmbed implementation, shared requests and a 300-entry
+  persistent success cache. No backend, RPC or FFI. Explicit words win; missing,
+  failed or pending metadata never invents titles. Metadata is plain text.
+- Native Qt frost for play, duration, dots/counter and arrows, plus existing
+  blurred image backdrops. Independent picture planes avoid recursive/shared
+  texture capture; resize/scale sampling and subpixel borders are tested.
+- Pixel-only trackpad input, fading/inertia/fresh-gesture rules, keyboard and
+  control accessibility; duplicate-video reconciliation without destroying
+  unchanged cards. Failed-link weight/line box and caption/source wrapping fixed.
+- Incremental bounded network capture (including absent Content-Length), checked
+  redirects, entire-exchange deadlines and preserved global QML network denial.
+
+Full behavior and intentional safety differences: [reply-media.md](reply-media.md).
+
+### Media-only reproduction and coverage
+
+```sh
+cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release -DOPENGHOST_BUILD_SMOKE_TEST=ON
+cmake --build build-release --parallel 4
+ctest --test-dir build-release --output-on-failure
+python3 -m unittest discover -s tests/parity -p test_harness.py
+python3 tests/parity/run.py --media --strict --output build-release/visual-parity-media-final
+```
+
+The last command correctly exits **2** for non-exact pixels; capture and all
+state assertions completed. It runs **48**, not the unrelated full fixture suite:
+
+- **47 reply-media fixtures**: original 11; fanned/leaf/last/hover stacks,
+  normal/reduced motion, light/2×, counter, portrait/wide/no-caption, wrapped
+  caption/source, loading and streaming plates, consent failure, both thumbnail
+  fallback causes, both missing-thumbnail forms, successful/pending/failed/long/
+  literal/partial/explicit metadata, duplicate cards and video during streaming.
+  Four negative fixtures verify prose/mixed/task/quoted content produces no media.
+- **1 sent-image boundary fixture**, still an intentional missing attachment
+  producer. It is not claimed as completed by this slice.
+- Each renderer captured every fixture twice: **192 fresh full-window PNGs**.
+  Image bytes and metadata come only from test-local injections. Actual loopback
+  HTTP tests separately exercise the production bounded transport; no live
+  YouTube/Internet request is substituted for a fixture.
+
+### Media-content parity versus the shell
+
+The runner records actual `.md-media` / `mediaBlock` rectangles. The component
+measurement uses their union at **the same absolute coordinates** in both images,
+without registration, resizing, blur, masks or tolerances. Four negative-parser
+fixtures and the sent-image boundary have no reply-media region; their fields
+are blank, not fabricated zero-error scores. Outside shadow halos remain in the
+full-window measurement. The unchanged disconnected notice/sidebar/browser
+button differences are outside these component boxes.
+
+| Scope | Pairs | Exact | Changed pixels, weighted | MAE, pixel-weighted / 255 |
+| --- | ---: | ---: | ---: | ---: |
+| Reply-media component boxes | 43 | **0** | **12.00779%** | **1.089820** |
+| Reply fixture whole windows, including four negative-parser states | 47 | **0** | **19.77369%** | **0.608771** |
+| All selected whole windows, including the separate sent-image gap | 48 | **0** | **19.91691%** | **0.779531** |
+
+Component median MAE: **0.821980**. Nineteen component pairs were exact across
+both repeat captures; all repeat differences were at most **7** channel levels.
+46/48 full-window fixture pairs had some nonzero repeat difference, but **0/48**
+exceeded 8. These are repeat diagnostics, not acceptance thresholds.
+
+The previously conspicuous **multiple-video media difference is not just the
+shell**. Inspecting the fixed rectangle `[416,56,1096,232]` independently gives:
+
+| `media-videos-many`, same absolute crop | Base 11-fixture artifacts MAE | Completed slice MAE |
+| --- | ---: | ---: |
+| Entire media component | 3.644964 | 3.385105 |
+| Thumbnail band, y=56..179 | 2.084951 | 1.541121 |
+| Title/author band, y=188..232 | 8.736263 | 9.217079 |
+
+The component's >8-channel changed-pixel fraction drops from **9.55465%** to
+**6.51320%**, but its exact changed fraction is still **14.62149%**. Frosting and
+rounded masks improve the thumbnail band; title/author font advances, baseline
+and antialiasing still differ, and the title band did **not** improve. This is a
+remaining media-specific typography/sampling discrepancy, not dismissed as a
+shell issue or called a pixel match. Long titles also wrap/elide differently
+between Qt and CSS, while both enforce two visible lines.
+
+Per-fixture numbers: [visual-parity-media-results.csv](visual-parity-media-results.csv).
+Hashes, capture summary and every nonzero repetition exit:
+[media-validation.json](media-validation.json). Local images, region crops,
+geometry, raw differences, HTML and logs are under
+`build-release/visual-parity-media-final/`; base comparison images remain in
+`build-release/visual-parity-media/`. No generated screenshot baseline is committed.
+
+### Tests and unrelated crash evidence
+
+- Release configure/build: passed with smoke tests **ON**, and a separate clean
+  production build at `build-media-production` with smoke tests **OFF**. The clean
+  build retains the two documented GCC variant/optional metatype warnings; no
+  new warning family. Full native CTest: **4/4 passed** on the final test binary,
+  including **19 QtTest media passes**.
+- Parity harness unit tests: **5/5 passed**. Media strict capture: all 48 states
+  and both repeats completed; exit 2 solely for recorded pixel/repeat differences.
+- Repeated offscreen/software fake smokes, isolated profiles and no retries:
+  **base dc0a9e04: 27/30 passed, 3 SIGSEGV**; **final binary: 29/30 passed,
+  1 SIGSEGV**. An intermediate candidate also gave 29/30 and one SIGSEGV.
+  No completed repetition had a media assertion failure. This bounded sample
+  shows **no observed increase**, not a statistical guarantee or a crash fix.
+- Final media unit repetitions: **30/30 passed**, no crashes (another 30/30
+  passed on the intermediate candidate). Python/Node syntax checks, local doc
+  links, reference-unchanged check and `git diff --check` passed.
+- Twelve additional baseline GDB launches did not reproduce the intermittent
+  fault. The prior baseline GDB evidence supplied in this worktree was retained
+  unchanged at `build-release/media-evidence/prior-shapes-backtrace.log`:
+
+  ```text
+  Thread "QSGSoftwareRend" received signal SIGSEGV
+  QQuickItem::window() const
+  ... libQt6QuickShapes.so.6
+  QSGSoftwareRenderableNode::renderNode(QPainter*, bool)
+  QSGAbstractSoftwareRenderer::renderNodes(QPainter*)
+  QSGSoftwareRenderer::render()
+  QQuickWindowPrivate::renderSceneGraph()
+  ```
+
+  Fresh baseline repetitions independently confirm SIGSEGV on the saved base
+  executable (SHA-256 `c15f353ea89dc08c3553b91ae074cdbc585ef0a3e449e19de472f4b091ae9c6a`).
+  Those uninstrumented exits were not individually stack-traced. No Shapes,
+  startup, render-loop or platform workaround was attempted in this branch.
+
+Remaining boundaries: Qt/CSS rendering differences above, local-globe rather
+than the cross-cutting DuckDuckGo favicon service (audit L03), RHI required for
+blur, and the separate sent-attachment pipeline. Lookup/consent/fallback states
+are implemented; no external backend service is deferred. The branch is ready
+to merge **as the scoped reply/media implementation**, not as an exact-pixel or
+crash-free release qualification.

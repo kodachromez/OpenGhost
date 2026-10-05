@@ -188,6 +188,17 @@ const QHash<QString, Glyph> &glyphs()
          {"M14.2 8A6.2 6.2 0 1 1 1.8 8A6.2 6.2 0 1 1 14.2 8Z"
           "M10.7 8A2.7 6.2 0 1 1 5.3 8A2.7 6.2 0 1 1 10.7 8ZM2 8h12",
           1.3, 16}},
+        // A reply's pictures and videos (media-embed.js PICTURE and PLAY,
+        // media-slider.js CHEVRON).
+        {"media-picture",
+         {"M4.5 3h7a2.5 2.5 0 0 1 2.5 2.5v5a2.5 2.5 0 0 1-2.5 2.5h-7a2.5 2.5 0 0 1-2.5-2.5v-5"
+          "a2.5 2.5 0 0 1 2.5-2.5zM7.1 6.8a1.1 1.1 0 1 1-2.2 0a1.1 1.1 0 1 1 2.2 0z"
+          "M2.6 11.4l3.2-2.9 2.4 2 2.2-2.2 3 3",
+          1.4, 16}},
+        {"media-play",
+         {"M9.2 6.6a1 1 0 0 1 1.5-.86l8.3 5.4a1 1 0 0 1 0 1.72l-8.3 5.4a1 1 0 0 1-1.5-.86z", 0,
+          24}},
+        {"media-chevron", {"M7.5 2.5 4 6l3.5 3.5", 1.7, 12}},
         // The selection menu's Ask (glyphs.js quote, view 24).
         {"quote",
          {"M10.2 6.3C6.6 7.6 4.4 10.4 4.4 14.1c0 2.4 1.5 4 3.5 4 1.8 0 3.2-1.3 3.2-3.1 0-1.7-1.2-2.9"

@@ -89,7 +89,7 @@ def fixtures():
     im=Image.new('RGB',(240,120),'#386594'); draw=ImageDraw.Draw(im); draw.rectangle((20,20,120,100),fill='#7ecba9'); draw.ellipse((140,30,220,110),fill='#e9b94f')
     buf=io.BytesIO(); im.save(buf,format='PNG'); png=base64.b64encode(buf.getvalue()).decode()
     for name,text in markdown.items():
-        extra = dict(imageData=png,reference="{const asks=document.querySelectorAll('.md-gallery-ask'); if(!asks.length) throw Error('Missing image consent controls'); asks.forEach(el=>el.click());}",classification='intentional difference',notes='Reference image consent clicked, request fulfilled from synthetic local bytes by CDP; native network denial is retained, not bypassed.') if name in ['image','image-stack'] else {}
+        extra = dict(imageData=png,reference="{const asks=document.querySelectorAll('.md-gallery-ask'); if(!asks.length) throw Error('Missing image consent controls'); asks.forEach(el=>el.click());}",nativeClick='mediaAsk',notes='Both adapters click the image consent control; the request is fulfilled from synthetic local bytes (CDP in the reference, an injected MediaLoader fetch natively). No network.') if name in ['image','image-stack'] else {}
         add('markdown-'+name,rows=[reply(text)],**extra)
     add('markdown-light',theme='light',rows=[reply(markdown['headings']+'\n\n'+markdown['code-cpp'])])
     for name in ['single','multiple']:
@@ -97,7 +97,107 @@ def fixtures():
         if name=='multiple': cards += [dict(name='report.pdf',size=2400000,mime='application/pdf'),dict(name='main.cpp',size=3456,mime='text/plain')]
         add('attachments-sent-'+name,rows=[dict(prompt,attachments=cards)])
         add('attachments-composer-'+name,cards=cards)
-    add('markdown-image-held',rows=[reply(markdown['image'])],classification='intentional difference',notes='Reference click-to-load consent versus the native unavailable media link; no request is permitted.')
+    add('markdown-image-held',rows=[reply(markdown['image'])],notes='Both show the click-to-load plate for a picture from an untrusted place; no request is made.')
+    # Reply pictures and videos (media-embed.js): trusted places load by themselves, from
+    # synthetic bytes on both sides; anything not served stays a link or a plain card.
+    trusted='https://upload.wikimedia.org/wikipedia/commons/parity.png'
+    thumb=lambda id: f'https://i.ytimg.com/vi/{id}/hq720.jpg'
+    media={
+        'gallery-trusted':(f'![A trusted picture]({trusted})',[trusted]),
+        'gallery-source':(f'[![A captioned picture]({trusted})](https://example.com/page)',[trusted]),
+        'gallery-lost':(f'![Not there]({trusted})',[]),
+        'gallery-mixed':(f'Pictures:\n![Trusted]({trusted})\n![Elsewhere](https://parity.invalid/image.png)',[trusted]),
+        'video-thumb':('[A talk · A channel · 4:40](https://www.youtube.com/watch?v=abcdefghijk)',[thumb('abcdefghijk')]),
+        'videos-many':('[First talk · One](https://youtu.be/aaaaaaaaaaa) [Second talk · Two](https://youtu.be/bbbbbbbbbbb) [Third talk · Three · 12:05](https://youtu.be/ccccccccccc)',[thumb(x*11) for x in 'abc']),
+    }
+    for name,(text,served) in media.items():
+        add('media-'+name,rows=[reply(text)],imageData=png,mediaUrls=served,
+            notes='Served addresses fulfilled from synthetic bytes in both adapters; any other request fails. No network.')
+    add('media-streaming',rows=[reply(f'![First]({trusted})\n![Second](https://upload.wiki',state='live',copyable=False)],
+        notes='Pictures still being written wait as one plate in both renderers; nothing is requested.')
+    # Additional reply-media states; images and real-service *fixtures* are data,
+    # never synthetic production titles. Both hosts receive identical values.
+    def image_bytes(w,h):
+        out=io.BytesIO(); im.resize((w,h)).save(out,format='PNG')
+        return base64.b64encode(out.getvalue()).decode()
+    other=trusted.replace('parity.png','portrait.png')
+    gallery=f'![First]({trusted})\n[![Portrait]({other})](https://example.com/portrait)\n![Third]({trusted})'
+    for name,extra in [
+        ('gallery-fan',{}), ('gallery-leaf',dict(mediaIndex=1)),
+        ('gallery-last',dict(mediaIndex=2)), ('gallery-hover',dict(mediaHover='mediaStack')),
+        ('gallery-light',dict(theme='light',mediaIndex=1)),
+        ('gallery-fan-motion',dict(motion=True,mediaHover='mediaStack',afterWait=1000)),
+        ('gallery-hidpi',dict(width=900,height=640,dpr=2,mediaIndex=1)),
+    ]:
+        add('media-'+name,rows=[reply(gallery)],imageData=png,mediaUrls=[trusted],
+            mediaImages={other:image_bytes(120,240)},nativeCounts=dict(mediaCard=3-extra.get('mediaIndex',0),mediaDot=3),
+            referenceCheck="document.querySelectorAll('.media-card').length===3 && document.querySelectorAll('.media-dot').length===3",**extra)
+    add('media-gallery-caption-wrap',width=760,height=640,
+        rows=[reply(f'[![A long caption with enough words to wrap under this picture and place its source on the next line]({trusted})](https://example.com/page)')],
+        imageData=png,mediaUrls=[trusted],nativeCounts=dict(mediaSource=1),
+        referenceCheck="!!document.querySelector('.md-gallery-source .link-chip')")
+    add('media-gallery-counter',rows=[reply('\n'.join(f'![Picture {n}]({trusted})' for n in range(11)))],
+        imageData=png,mediaUrls=[trusted],mediaIndex=10,nativeCounts=dict(mediaCounter=1,mediaDot=0),
+        referenceCheck="document.querySelector('.media-counter')?.textContent==='11 / 11'")
+    for name,w,h in [('portrait',120,480),('wide',480,120),('no-caption',240,120)]:
+        add('media-gallery-'+name,rows=[reply(f'![{ "" if name=="no-caption" else name }]({trusted})')],
+            mediaImages={trusted:image_bytes(w,h)},nativeCounts=dict(mediaStack=1),
+            referenceCheck="document.querySelectorAll('.media-card').length===1")
+    add('media-gallery-loading',rows=[reply(f'![Loading]({trusted})')],mediaPending=[trusted],
+        nativeCounts=dict(mediaWait=1,mediaStack=0),referenceCheck="!!document.querySelector('.md-gallery-wait')")
+    add('media-gallery-consent-failed',rows=[reply('![Gone](https://parity.invalid/image.png)')],
+        mediaUrls=[],nativeClick='mediaAsk',reference="document.querySelector('.md-gallery-ask').click();",
+        nativeCounts=dict(mediaLost=1,mediaAsk=0),referenceCheck="!!document.querySelector('.md-gallery-lost')")
+    vid='abcdefghijk'; url='https://youtu.be/'+vid
+    narrow=f'https://i.ytimg.com/vi/{vid}/mqdefault.jpg'
+    for name,images in [('narrow-error',{narrow:png}),('narrow-placeholder',{thumb(vid):image_bytes(120,90),narrow:png}),
+                        ('missing-placeholder',{thumb(vid):image_bytes(120,90),narrow:image_bytes(120,90)})]:
+        missing=name.startswith('missing')
+        add('media-video-'+name,rows=[reply(url)],mediaImages=images,
+            videoInfo={vid:dict(title='Title supplied by fixture host',by='Fixture author')},
+            nativeCounts=dict(mediaVideoThumb=0 if missing else 1,mediaVideoTitle=1),
+            referenceCheck=f"document.querySelector('.md-video').classList.contains('is-missing')==={str(missing).lower()}")
+    for name,words,info,extra in [
+        ('title',url,dict(title='A genuine host-provided title',by='Host channel'),{}),
+        ('title-long',url,dict(title='A long title from the host, with enough words to wrap over two lines and then be visibly truncated rather than move the entire card layout down',by='Channel with a rather long name'),{}),
+        ('title-plain',url,dict(title='<b>Literal title</b>',by='<i>Literal author</i>'),{}),
+        ('title-preserved',f'[Written title · Written channel · 4:40]({url})',dict(title='Ignored title',by='Ignored channel'),{}),
+        ('title-author',f'[Written title]({url})',dict(title='Ignored title',by='Host channel'),{}),
+        ('title-failed',url,{},{}),
+        ('title-pending',url,{},dict(videoInfoPending=True)),
+        ('title-no-author',url,dict(title='Host title'),{}),
+        ('hover',f'[Written title · Channel · 4:40]({url})',{},dict(mediaHover='mediaVideo')),
+        ('light',f'[Written title · Channel · 4:40]({url})',{},dict(theme='light')),
+        ('hover-motion',f'[Written title · Channel · 4:40]({url})',{},dict(motion=True,mediaHover='mediaVideo',afterWait=1000)),
+    ]:
+        label=words[1:].split(']')[0].split(' · ') if words.startswith('[') else []
+        if name=='title-long':
+            extra['nativeValues']=[dict(object='mediaVideoTitle',property='lineCount',value=2)]
+        title=label[0] if label else info.get('title','')
+        author=label[1] if len(label)>1 else info.get('by','YouTube')
+        add('media-video-'+name,rows=[reply(words)],imageData=png,mediaUrls=[thumb(vid)],
+            videoInfo={vid:info},nativeText=dict(mediaVideoTitle=title,mediaVideoBy=author),
+            referenceCheck=f"document.querySelector('.md-video-title').textContent==={json.dumps(title)} && document.querySelector('.md-video-by').textContent==={json.dumps(author)}",**extra)
+    add('media-video-missing-title',rows=[reply(url)],videoInfo={vid:dict(title='Still a named link',by='Author')},
+        nativeCounts=dict(mediaVideoThumb=0,mediaVideoTitle=1),referenceCheck="!!document.querySelector('.md-video.is-missing .md-video-title')?.textContent")
+    add('media-gallery-list',rows=[reply(f'- ![First]({trusted})\n- ![Second]({trusted})')],imageData=png,mediaUrls=[trusted],
+        nativeCounts=dict(mediaStack=1),referenceCheck="document.querySelectorAll('.md-gallery .media').length===1")
+    for name,text in [('prose',f'Look at ![Picture]({trusted}) and these words.'),
+                      ('mixed-list',f'- ![Picture]({trusted})\n- Ordinary words'),
+                      ('task-list',f'- [ ] ![Picture]({trusted})'),('quoted',f'> ![Picture]({trusted})')]:
+        add('media-detection-'+name,rows=[reply(text)],nativeCounts=dict(mediaBlock=0),
+            referenceCheck="document.querySelectorAll('.md-media').length===0")
+    add('media-video-duplicate',rows=[reply(url+' '+url)],imageData=png,mediaUrls=[thumb(vid)],
+        nativeCounts=dict(mediaVideo=1),referenceCheck="document.querySelectorAll('.md-video').length===1")
+    add('media-streaming-video',rows=[reply(f'{url}\n![First]({trusted})\n![Second](https://upload.wiki',state='live',copyable=False)],
+        imageData=png,mediaUrls=[thumb(vid)],videoInfo={vid:dict(title='Title while writing',by='Channel')},
+        nativeCounts=dict(mediaWait=1,mediaStack=0,mediaVideo=1),referenceCheck="!!document.querySelector('.md-gallery-wait') && document.querySelector('.md-video-title')?.textContent==='Title while writing'")
+    # Mark the entire reply-media inventory, including the original eleven.
+    for f in result:
+        if f['id'].startswith('media-') or f['id'] in ['markdown-image','markdown-image-stack','markdown-image-held','markdown-video-card']:
+            f['replyMedia']=True
+            f['classification']='measured media content'
+            f.setdefault('notes','Reply media, deterministic local image/metadata fixtures; no external requests. Compare the media-region metrics separately from the unchanged shell.')
     add('attachment-image',rows=[dict(prompt,attachments=[dict(name='sample.png',mime='image/png',size=len(buf.getvalue()),image=True,url='data:image/png;base64,'+png,width=240,height=120)])],classification='intentional difference',notes='Reference image bytes are display data; native sent-card projection only retains metadata, so no thumbnail is fabricated.')
     for kind,effect in [('command','run'),('file','change'),('web','online')]:
         info=dict(kind=kind,effect=effect,badge=True,title='Review this operation',places=[dict(kind='file' if kind=='file' else 'folder',label='project',title='/fixture/project')],reveal='changes' if kind=='file' else 'command')

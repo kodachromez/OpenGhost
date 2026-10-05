@@ -75,6 +75,7 @@ for the excluded name, artwork, animations or design.
 | Composer | Existing composer in `Main.qml`, model/effort controls/stages, mode picker/dock, file cards and tooltips |
 | Settings | `SettingsDialog.qml`, General, Providers, capability-gated Plugins, Usage, Appearance; `settings.*`, `appearance.*`, `offline_services.h`, `window.*` projections |
 | Markdown/code | `markdown.*`, `highlight.*`, `rich.*`, `cssfont.*`, Markdown/Block/InlineText/CodeBlock/TableBlock QML |
+| Reply media | `media.*`, `medialoader.*`, `mediafetch.*`, `videoinfo.*`; `MediaBlock/MediaStack/MediaGlass.qml`. Native galleries/cards and injectable frontend-only oEmbed host/cache; see [reply media](reply-media.md). No backend/browser dependency. |
 | TeX/diagrams | `tex.*`, `diagram*.cpp/.h`, `diagramview.*`; native painting/selection, the inherited 1.3 43-kind diagram engine |
 | Artwork/motion | Procedural `ghost.*`, 1.3 `Splash.qml`/`mist.frag`, welcome/working ghost, `motion.*`, `wave.*`, `reveal.*`, effects/springs and shaders |
 | Other helpers/assets | Icons/file kinds, shadows, exposure, approval cards, metrics/copy machinery, original OpenGhost icon |
@@ -366,9 +367,9 @@ and turn end cancels/releases with a cancelled result and tells the host
 [`Browser`](../src/frontend/browser.h) reports the panel's snapshot and changes but
 publishes no tools (`available: false`); an OFF build's `NoHost` reports a null
 browser. Either way the service refuses host calls as unsupported. Tests inject a
-scripted host; browser operations, page/ref identities, the agent-side hand-back
-wait, downloads and media handling do not exist yet. Observed browser sign-in is
-never verified auth. The fake accepts a browser snapshot as ignored context.
+scripted host. Reply pictures/YouTube metadata use the independent frontend
+resource services described in [reply media](reply-media.md), not `HostServices`
+or a backend command. Observed browser sign-in is never verified auth. The fake accepts a browser snapshot as ignored context.
 
 ## Fake-backend limits
 

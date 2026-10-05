@@ -66,8 +66,34 @@ enum class Kind : quint8 {
     Rule,
     Flow,
     List,
-    Quote
+    Quote,
+    Media
 };
+
+// A picture or a video a media block shows (markdown.js mediaItems): a
+// picture is ![caption](src), or the same inside a link to the page it is
+// from (href); a video is a link to it, with words (caption) or bare (src).
+struct MediaItem {
+    bool video = false;
+    QString src;     // Picture: its address; video: the link.
+    QString caption; // Picture: its caption; video: the link's words.
+    QString href;    // Picture: the page it is from (safe hrefs only), or empty.
+    bool operator==(const MediaItem &other) const
+    {
+        return video == other.video && src == other.src && caption == other.caption &&
+               href == other.href;
+    }
+};
+
+// What a paragraph shows when it is nothing but pictures and links to
+// videos, or nothing when it is a paragraph like any other. While `live`,
+// its last picture may be half written: what came before it is shown and
+// `open` says one more is on its way.
+struct MediaList {
+    QVector<MediaItem> items;
+    bool open = false;
+};
+bool mediaItems(const QString &text, bool live, MediaList &out);
 
 struct Block;
 using BlockPtr = std::shared_ptr<const Block>;
@@ -86,7 +112,8 @@ struct Block {
     int level = 0;         // Heading 1–6; ordered list start.
     bool flag = false;     // Heading: pseudo; code: art; list: ordered; quote: pull quote;
                            // table/diagram: wide.
-    bool open = false;     // Code, diagram, math: the fence is still streaming.
+    bool open = false;     // Code, diagram, math: the fence is still streaming; media: the
+                           // pictures are still being written.
     bool clipped = false;  // Code, diagram, math: the fence is unclosed where the text was cut
                            // off (Options::clipped), so its source may be incomplete.
     QString source;        // Code, diagram and math source, exact.
@@ -102,6 +129,8 @@ struct Block {
     int omitted = 0;       // List items or table rows past the bounds below.
     int pieces = 1;        // Displayed pieces, nested ones included (see MaxPieces).
     quint64 hash = 0;      // Content, children included.
+    // Media: its pictures and videos.
+    QVector<MediaItem> media;
 };
 
 // Quotes and lists nest at most this deep; deeper ones are one plain
@@ -155,6 +184,9 @@ bool renderable(const QString &text);
 
 // Inline text alone (table cells, citations): exposed for tests.
 Inline inlineText(const QString &source, bool live = false);
+
+// link-chip.js label(): the short host name a link chip shows.
+QString linkLabel(const QString &url);
 
 // Replaces formula `ref` (a U+FFFC) with its source shown as code.
 void expandMath(Inline &text, int ref);

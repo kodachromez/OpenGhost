@@ -1,0 +1,90 @@
+{
+  "base_commit": "dc0a9e04b898b1723db2e6d794285c7079f5239c",
+  "reference_sha256": "5fa789f929814738e7de7d9bea3473350ac66ce54f03b021df4e717fad5b1e6f",
+  "native_source_sha256": "44a91aa259f3a707b98df5cf9de971f0bd6d3dccae625923ad8e33175c95ca03",
+  "binary_sha256": "8eb010c059886b0b30f3b4266de6ffb629213d06e8040ddda14755b6fc3a3d9f",
+  "parity": {
+    "fixtures": 48,
+    "headless": 48,
+    "manual": 0,
+    "exact": 0,
+    "differing": 48,
+    "headless_limited": 0,
+    "repeat_unstable": 46,
+    "repeat_over8": 0,
+    "classifications": {
+      "measured media content": 47,
+      "intentional difference": 1
+    },
+    "media_content": {
+      "fixtures": 43,
+      "exact": 0,
+      "changed_percent": 12.007786626069862,
+      "pixel_weighted_mae": 1.0898197463463404,
+      "median_mae": 0.82198,
+      "repeat_over8": 0
+    }
+  },
+  "repeat_runs": {
+    "baseline-repeat": {
+      "binary_sha256": "c15f353ea89dc08c3553b91ae074cdbc585ef0a3e449e19de472f4b091ae9c6a",
+      "attempts": 30,
+      "passed": 27,
+      "crashes": 3,
+      "nonzero_exits": [
+        {
+          "run": 11,
+          "exit": -11
+        },
+        {
+          "run": 12,
+          "exit": -11
+        },
+        {
+          "run": 13,
+          "exit": -11
+        }
+      ]
+    },
+    "candidate-repeat": {
+      "binary_sha256": "0248c6cf2288e22c2439fac355cd22dfe37d3b7e48d6c56e8b5ea56d77d4bc7b",
+      "attempts": 30,
+      "passed": 29,
+      "crashes": 1,
+      "nonzero_exits": [
+        {
+          "run": 0,
+          "exit": -11
+        }
+      ]
+    },
+    "media-repeat": {
+      "binary_sha256": "4e62213ec0db5b38c1eaa559f998b1d88ac8136fde2e1c5b4c0699e50c932650",
+      "attempts": 30,
+      "passed": 30,
+      "crashes": 0,
+      "nonzero_exits": []
+    },
+    "final-repeat": {
+      "binary_sha256": "8eb010c059886b0b30f3b4266de6ffb629213d06e8040ddda14755b6fc3a3d9f",
+      "attempts": 30,
+      "passed": 29,
+      "crashes": 1,
+      "nonzero_exits": [
+        {
+          "run": 15,
+          "exit": -11
+        }
+      ]
+    },
+    "final-media-repeat": {
+      "binary_sha256": "435a2e1ea6e50fc1c5890392d7b2a7ccddf563223462ebf5d17339806574bc44",
+      "attempts": 30,
+      "passed": 30,
+      "crashes": 0,
+      "nonzero_exits": []
+    }
+  },
+  "production_release_sha256": "63c0af216a15c60e5b2740ae15610483da144afae3e097d8b52eff6ce076c883",
+  "production_release_smoke_tests": false
+}
