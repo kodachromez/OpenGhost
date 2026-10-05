@@ -43,6 +43,13 @@ class WindowController final : public QObject
     Q_PROPERTY(QVariantMap uploads READ emptyMap CONSTANT)
     Q_PROPERTY(QVariantMap modes READ modes NOTIFY changed)
     Q_PROPERTY(QVariantList approvals READ approvals NOTIFY approvalsChanged)
+    // Its own NOTIFY: the Settings pages (and tab delegates) change only with support.
+    Q_PROPERTY(bool runtimePlugins READ runtimePlugins NOTIFY runtimePluginsChanged)
+    Q_PROPERTY(bool pluginsLoading READ pluginsLoading NOTIFY pluginsChanged)
+    Q_PROPERTY(bool pluginsLoaded READ pluginsLoaded NOTIFY pluginsChanged)
+    Q_PROPERTY(QString pluginsError READ pluginsError NOTIFY pluginsChanged)
+    Q_PROPERTY(int pluginCount READ pluginCount NOTIFY pluginsChanged)
+    Q_PROPERTY(QObject *plugins READ plugins CONSTANT)
   public:
     explicit WindowController(QObject *parent = nullptr);
     // `dataPath`: the frontend's local chat/usage store; empty keeps it in memory.
@@ -81,6 +88,17 @@ class WindowController final : public QObject
     QVariantMap emptyMap() const { return {}; }
     QVariantMap modes() const;
     QVariantList approvals() const;
+    bool runtimePlugins() const { return m_chat.plugins()->supported(); }
+    bool pluginsLoading() const { return m_chat.plugins()->loading(); }
+    bool pluginsLoaded() const { return m_chat.plugins()->loaded(); }
+    QString pluginsError() const { return m_chat.plugins()->error(); }
+    int pluginCount() const { return m_plugins.rowCount(); }
+    PluginModel *plugins() { return &m_plugins; }
+    Q_INVOKABLE void refreshPlugins() { m_chat.plugins()->refresh(); }
+    Q_INVOKABLE void setPluginEnabled(const QString &id, bool enabled)
+    {
+        m_chat.plugins()->setEnabled(id, enabled);
+    }
 
     // The folder New Chat's draft (or the open chat) belongs to; "" for none.
     Q_INVOKABLE bool isWorkspace(const QString &folder) const
@@ -148,6 +166,8 @@ class WindowController final : public QObject
   signals:
     void changed();
     void approvalsChanged();
+    void pluginsChanged();
+    void runtimePluginsChanged();
     void accepted(quint64 submission); // Validated acceptance, never completion.
     void filesPicked(QVariantList files, QString error);
     void conversationReplaced(QString left);
@@ -165,6 +185,7 @@ class WindowController final : public QObject
         emit changed();
     }
     void sync();
+    void syncPlugins();
     void catalog();
     QObject *m_browser = nullptr;
     openghost::PreferencesStore m_preferences;
@@ -177,6 +198,7 @@ class WindowController final : public QObject
     QHash<QString, Entry> m_rendered;
     TranscriptModel m_transcript;
     SessionModel m_sessions;
+    PluginModel m_plugins;
     Settings m_settings;
     GeneralPreview m_general;
     UsagePreview m_usage;

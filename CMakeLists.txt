@@ -38,7 +38,7 @@ native_warnings(native_rich)
 # adapter will implement Backend over ByteTransport, never inside the window.
 add_library(native_contract STATIC src/backend/types.h src/backend/backend.h
     src/backend/transport.h src/backend/fake_backend.cpp
-    src/frontend/preferences.cpp src/frontend/chat_service.cpp
+    src/frontend/preferences.cpp src/frontend/chat_service.cpp src/frontend/plugins.cpp
     src/frontend/attachments.cpp src/frontend/usage.cpp src/frontend/store.cpp
     src/frontend/library.cpp src/frontend/host.h)
 target_include_directories(native_contract PUBLIC src)
@@ -100,7 +100,7 @@ option(OPENGHOST_BUILD_SMOKE_TEST "Build the standalone UI smoke check" OFF)
 if(OPENGHOST_BUILD_SMOKE_TEST)
     enable_testing()
     find_package(Qt6 6.11 REQUIRED COMPONENTS Test)
-    target_sources(openghost-native PRIVATE tests/smoke.cpp tests/parity/native.cpp)
+    target_sources(openghost-native PRIVATE tests/smoke.cpp tests/plugin_smoke.cpp tests/parity/native.cpp)
     target_link_libraries(openghost-native PRIVATE Qt6::Test)
     target_compile_definitions(openghost-native PRIVATE OPENGHOST_SMOKE_TEST)
     add_executable(native_contract_test tests/contract.cpp src/settings.cpp)
@@ -108,6 +108,11 @@ if(OPENGHOST_BUILD_SMOKE_TEST)
     native_warnings(native_contract_test)
     add_test(NAME native_contract_test COMMAND native_contract_test)
     set_tests_properties(native_contract_test PROPERTIES TIMEOUT 15)
+    add_executable(native_plugins_test tests/plugins.cpp)
+    target_link_libraries(native_plugins_test PRIVATE native_contract Qt6::Test)
+    native_warnings(native_plugins_test)
+    add_test(NAME native_plugins_test COMMAND native_plugins_test)
+    set_tests_properties(native_plugins_test PROPERTIES TIMEOUT 15)
     add_test(NAME native_ui_smoke COMMAND openghost-native --smoke-test)
     add_test(NAME native_fake_ui_smoke COMMAND openghost-native --smoke-test --fake-backend)
     set_tests_properties(native_ui_smoke native_fake_ui_smoke PROPERTIES TIMEOUT 30

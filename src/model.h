@@ -244,3 +244,38 @@ class SessionModel final : public KeyedModel
     QHash<QString, QStringList> m_emptyBefore;
     QString m_query;
 };
+
+// Settings' runtime plugin rows, formatted from the backend's snapshots. A
+// keyed diff by plugin ID: an update changes roles in place, so a row's
+// delegate (and its keyboard focus) survives pending flips and events.
+class PluginModel final : public KeyedModel
+{
+    Q_OBJECT
+  public:
+    enum Role {
+        IdRole = Qt::UserRole + 1,
+        NameRole,
+        DescriptionRole,
+        StatusRole,
+        EnabledRole,
+        AvailableRole,
+        PendingRole,
+        CanToggleRole,
+        NoteRole,
+        NoteErrorRole,
+    };
+    struct Row {
+        QString id, name, description, status, note;
+        bool enabled = false, available = false, pending = false, canToggle = false;
+        bool noteError = false;
+    };
+
+    using KeyedModel::KeyedModel;
+    int rowCount(const QModelIndex &parent = {}) const override;
+    QVariant data(const QModelIndex &index, int role) const override;
+    QHash<int, QByteArray> roleNames() const override;
+    void apply(const QVector<Row> &rows);
+
+  private:
+    QVector<Row> m_rows;
+};

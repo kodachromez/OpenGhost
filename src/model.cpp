@@ -322,3 +322,72 @@ void SessionModel::place()
         emit groupsChanged();
     }
 }
+
+int PluginModel::rowCount(const QModelIndex &parent) const
+{
+    return parent.isValid() ? 0 : int(m_rows.size());
+}
+
+QVariant PluginModel::data(const QModelIndex &index, int role) const
+{
+    if (!index.isValid() || index.row() >= m_rows.size())
+        return {};
+    const Row &row = m_rows.at(index.row());
+    switch (role) {
+    case IdRole:
+        return row.id;
+    case NameRole:
+        return row.name;
+    case DescriptionRole:
+        return row.description;
+    case StatusRole:
+        return row.status;
+    case EnabledRole:
+        return row.enabled;
+    case AvailableRole:
+        return row.available;
+    case PendingRole:
+        return row.pending;
+    case CanToggleRole:
+        return row.canToggle;
+    case NoteRole:
+        return row.note;
+    case NoteErrorRole:
+        return row.noteError;
+    }
+    return {};
+}
+
+QHash<int, QByteArray> PluginModel::roleNames() const
+{
+    return {
+        {IdRole, "pluginId"},        {NameRole, "name"},           {DescriptionRole, "description"},
+        {StatusRole, "status"},      {EnabledRole, "enabled"},     {AvailableRole, "available"},
+        {PendingRole, "pending"},    {CanToggleRole, "canToggle"}, {NoteRole, "note"},
+        {NoteErrorRole, "noteError"}};
+}
+
+void PluginModel::apply(const QVector<Row> &rows)
+{
+    diff(
+        m_rows, rows, [](const Row &row) -> const QString & { return row.id; },
+        [this](int i, Row &old, const Row &now) {
+            QList<int> roles;
+            const auto changed = [&](auto field, int role) {
+                if (old.*field != now.*field)
+                    roles << role;
+            };
+            changed(&Row::name, NameRole);
+            changed(&Row::description, DescriptionRole);
+            changed(&Row::status, StatusRole);
+            changed(&Row::enabled, EnabledRole);
+            changed(&Row::available, AvailableRole);
+            changed(&Row::pending, PendingRole);
+            changed(&Row::canToggle, CanToggleRole);
+            changed(&Row::note, NoteRole);
+            changed(&Row::noteError, NoteErrorRole);
+            old = now;
+            if (!roles.isEmpty())
+                emit dataChanged(index(i), index(i), roles);
+        });
+}

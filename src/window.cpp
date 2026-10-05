@@ -79,6 +79,9 @@ WindowController::WindowController(openghost::Backend *backend, QString preferen
       m_general(&m_preferences), m_usage(m_store.get())
 {
     registerNativeTypes();
+    connect(m_chat.plugins(), &openghost::Plugins::changed, this, &WindowController::syncPlugins);
+    connect(m_chat.plugins(), &openghost::Plugins::supportChanged, this,
+            &WindowController::runtimePluginsChanged);
     connect(&m_chat, &openghost::ChatService::changed, this, &WindowController::sync);
     connect(&m_chat, &openghost::ChatService::catalogChanged, this, &WindowController::catalog);
     connect(&m_chat, &openghost::ChatService::accepted, this, &WindowController::accepted);
@@ -126,6 +129,45 @@ WindowController::WindowController(openghost::Backend *backend, QString preferen
     catalog();
     sync();
     m_chat.initialize();
+}
+
+void WindowController::syncPlugins()
+{
+    QVector<PluginModel::Row> rows;
+    for (const auto &entry : m_chat.plugins()->entries()) {
+        const auto &p = entry.snapshot;
+        QString state = p.state == "enabled"     ? QStringLiteral("Enabled")
+                        : p.state == "disabled"  ? QStringLiteral("Disabled")
+                        : p.state != "disabling" ? p.state // Future states render as reported.
+                        : p.activeCalls == 1
+                            ? QStringLiteral("Disabling — waiting for 1 running call to finish")
+                        : p.activeCalls > 1
+                            ? QStringLiteral("Disabling — waiting for %1 running calls to finish")
+                                  .arg(p.activeCalls)
+                            : QStringLiteral("Disabling — shutting down…");
+        if (!p.available)
+            state = QStringLiteral("Unavailable / not configured") +
+                    (state.isEmpty() ? QString() : QStringLiteral(" · ") + state);
+        if (!entry.confirmed())
+            state += QStringLiteral(" · State not confirmed");
+        if (entry.pending)
+            state += QStringLiteral(" · Request pending…");
+        // Only the last answer's own persistence outcome; "saved" needs no note.
+        QStringList notes;
+        if (entry.warning.size())
+            notes << entry.warning;
+        if (entry.persisted == "memory")
+            notes << QStringLiteral("Applies until the backend restarts: it has no saved plugin "
+                                    "state.");
+        else if (entry.persisted == "ambiguous")
+            notes << QStringLiteral("Applied, but saving was not confirmed: it may not survive a "
+                                    "restart.");
+        rows.append({p.id, p.name.isEmpty() ? p.id : p.name, p.description, state,
+                     entry.error.isEmpty() ? notes.join(QLatin1Char('\n')) : entry.error, p.enabled,
+                     p.available, entry.pending, entry.canToggle(), !entry.error.isEmpty()});
+    }
+    m_plugins.apply(rows);
+    emit pluginsChanged();
 }
 
 void WindowController::catalog()

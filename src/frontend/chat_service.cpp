@@ -229,8 +229,11 @@ QVector<DisplayRow> ChatService::rowsOf(const QJsonArray &saved)
 }
 ChatService::ChatService(Backend *backend, PreferencesStore *preferences, Library *library,
                          HostServices *host, QObject *parent)
-    : QObject(parent), m_backend(backend), m_preferences(preferences), m_library(library),
-      m_host(host ? host : &m_noHost)
+    : QObject(parent), m_backend(backend),
+      m_plugins([this](const Command &command, Plugins::Completion done) {
+          call(command, std::move(done));
+      }),
+      m_preferences(preferences), m_library(library), m_host(host ? host : &m_noHost)
 {
     if (!m_library) {
         m_ownStore = std::make_unique<MemoryKeyStore>();
@@ -250,6 +253,7 @@ ChatService::ChatService(Backend *backend, PreferencesStore *preferences, Librar
         connect(m_backend, &Backend::sessionEvent, this, &ChatService::event);
         connect(m_backend, &Backend::closed, this, [this](const Error &error) {
             m_ready = false;
+            m_plugins.initialize(false);
             for (auto &chat : m_chats) {
                 chat.reconciled = false;
                 chat.turn.terminal = true;
@@ -293,7 +297,10 @@ ChatService::ChatService(Backend *backend, PreferencesStore *preferences, Librar
             emit changed();
         });
         connect(m_backend, &Backend::globalEvent, this, [this](const GlobalEvent &event) {
-            if (!std::holds_alternative<Log>(event))
+            if (const auto *plugin = std::get_if<PluginChanged>(&event))
+                m_plugins.observe(*plugin);
+            else if (std::holds_alternative<AuthChanged>(event) ||
+                     std::holds_alternative<ModelsChanged>(event))
                 refresh();
         });
     }
@@ -337,6 +344,7 @@ void ChatService::initialize()
 {
     if (!m_backend || m_ready || pending())
         return;
+    m_plugins.initialize(false);
     m_pending = true;
     Initialize hello;
     hello.connectionId = uuid();
@@ -356,6 +364,7 @@ void ChatService::initialize()
                           : errorOf(result));
             return;
         }
+        m_plugins.initialize(hello->capabilities.runtimePlugins);
         const QString name = hello->backend ? hello->backend->name : QStringLiteral("Backend");
         call(ModelsList{}, [this, name](const Result &models) {
             const auto *list = value<QVector<Model>>(models);
@@ -888,7 +897,7 @@ bool ChatService::dispatchStart(const StartTurn &start, quint64 submission, cons
     }
     owner.turn.dispatched = true; // From here, failure is uncertain until reconciled.
     m_pending = true;
-    call(start, [this, start, submission, userKey](const Result &result) {
+    const auto request = call(start, [this, start, submission, userKey](const Result &result) {
         auto &chat = m_chats[start.sessionId];
         const auto *ack = value<StartAccepted>(result);
         m_pending = false;
@@ -933,6 +942,7 @@ bool ChatService::dispatchStart(const StartTurn &start, quint64 submission, cons
         emit accepted(submission);
         emit changed();
     });
+    m_chats[start.sessionId].turn.request = request;
     return true;
 }
 void ChatService::finishRows(ChatRecord &chat, const QString &state)
@@ -1210,9 +1220,10 @@ void ChatService::stop()
     } else {
         chat.turn.retryable = true;
         chat.reconciled = false; // unknown acceptance; never permit automatic resend
-        const auto pending = m_calls.keys();
-        for (const auto request : pending)
-            m_backend->cancelRequest(request);
+        // Only this turn's own start/retry: other calls (plugin list/enable/
+        // disable, catalog) are not part of the chat and may already be applied.
+        if (chat.turn.request != 0 && m_calls.contains(chat.turn.request))
+            m_backend->cancelRequest(chat.turn.request);
     }
     emit changed();
 }
@@ -1640,29 +1651,31 @@ void ChatService::retry()
     }
     chat.turn.dispatched = true;
     m_pending = true;
-    call(RetryTurn{id, *chat.version, chat.turn.clientId, failed, params(chat)},
-         [this, id](const Result &result) {
-             m_pending = false;
-             auto &chat = m_chats[id];
-             const auto *ack = value<RetryAccepted>(result);
-             if (!ack || ack->turnId.isEmpty() ||
-                 (!chat.turn.remoteId.isEmpty() && chat.turn.remoteId != ack->turnId)) {
-                 chat.turn.terminal = true;
-                 chat.turn.retryable = false; // No safe retry-of-retry inference.
-                 chat.reconciled = false;
-                 problem(errorOf(result));
-                 return;
-             }
-             chat.turn.remoteId = ack->turnId;
-             chat.turn.acknowledged = true;
-             if (chat.turn.started < 0)
-                 chat.turn.started = QDateTime::currentMSecsSinceEpoch();
-             drainEarly(chat);
-             if (chat.turn.terminal && !chat.turn.stopped)
-                 settlePending(chat, chat.turn.clientId);
-             save(chat);
-             emit changed();
-         });
+    const auto request =
+        call(RetryTurn{id, *chat.version, chat.turn.clientId, failed, params(chat)},
+             [this, id](const Result &result) {
+                 m_pending = false;
+                 auto &chat = m_chats[id];
+                 const auto *ack = value<RetryAccepted>(result);
+                 if (!ack || ack->turnId.isEmpty() ||
+                     (!chat.turn.remoteId.isEmpty() && chat.turn.remoteId != ack->turnId)) {
+                     chat.turn.terminal = true;
+                     chat.turn.retryable = false; // No safe retry-of-retry inference.
+                     chat.reconciled = false;
+                     problem(errorOf(result));
+                     return;
+                 }
+                 chat.turn.remoteId = ack->turnId;
+                 chat.turn.acknowledged = true;
+                 if (chat.turn.started < 0)
+                     chat.turn.started = QDateTime::currentMSecsSinceEpoch();
+                 drainEarly(chat);
+                 if (chat.turn.terminal && !chat.turn.stopped)
+                     settlePending(chat, chat.turn.clientId);
+                 save(chat);
+                 emit changed();
+             });
+    m_chats[id].turn.request = request;
     emit changed();
 }
 void ChatService::remove(const QString &id)

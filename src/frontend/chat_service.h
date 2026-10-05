@@ -2,6 +2,7 @@
 #include "backend/backend.h"
 #include "host.h"
 #include "library.h"
+#include "plugins.h"
 #include "preferences.h"
 #include <QHash>
 #include <QSet>
@@ -61,6 +62,7 @@ struct ChatRecord {
         qint64 started = -1, completed = -1;
         double input = 0, output = 0, cached = 0, written = 0, requests = 0;
         bool dispatched = false, acknowledged = false, invalidStart = false;
+        RequestId request = 0;               // The start/retry call; Stop cancels only this one.
         QHash<QString, RequestId> hostCalls; // toolCallId -> reverse request
         std::optional<Usage::Context> context;
         QString activity, finishReason;
@@ -104,6 +106,8 @@ class ChatService final : public QObject
     {
     }
     void initialize();
+    Plugins *plugins() { return &m_plugins; }
+    const Plugins *plugins() const { return &m_plugins; }
     const QVector<Model> &models() const { return m_models; }
     const QVector<Provider> &providers() const { return m_providers; }
     QVector<ChatRecord> chats() const;
@@ -205,6 +209,7 @@ class ChatService final : public QObject
     ModelSelection preferredModel() const;
     void problem(const Error &error);
     Backend *m_backend;
+    Plugins m_plugins;
     PreferencesStore *m_preferences;
     std::unique_ptr<MemoryKeyStore> m_ownStore;
     std::unique_ptr<Library> m_ownLibrary;

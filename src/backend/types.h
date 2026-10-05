@@ -176,6 +176,7 @@ struct SessionParams {
 struct Capabilities {
     bool authProviders = false, manualCompaction = false, sessionDelete = false;
     bool sessionRecovery = false, usageLimits = false;
+    bool runtimePlugins = false; // initialize.capabilities.plugins.runtime
     QJsonObject extensions;
 };
 struct BackendInfo {
@@ -195,6 +196,38 @@ struct Initialized {
     QString protocolVersion = QStringLiteral("0.1");
     std::optional<BackendInfo> backend;
     Capabilities capabilities;
+};
+// Runtime plugins are backend-owned, global state, not host tools or a session's
+// advertised tool list. IDs and state names stay extensible. No local policy.
+struct Plugin {
+    QString id, name, description;
+    bool builtIn = false, enabled = false;
+    QString state;
+    bool available = false;
+    qint64 activeCalls = 0;
+    QString interruption;
+    bool hooks = false;
+    QStringList tools;
+};
+struct PluginsList {}; // plugin.list({})
+struct EnablePlugin { // plugin.enable({pluginId})
+    QString pluginId;
+};
+struct DisablePlugin { // plugin.disable({pluginId})
+    QString pluginId;
+};
+struct PluginsListed {
+    QVector<Plugin> plugins;
+    std::optional<QString> error;
+};
+struct PluginUpdated {
+    Plugin plugin;
+    bool changed = false;
+    QString persisted;
+    std::optional<QString> warning;
+};
+struct PluginChanged { // plugin.changed {plugin}, not session-scoped
+    Plugin plugin;
 };
 struct ModelsList {};
 struct ProvidersList {};
@@ -269,7 +302,8 @@ struct DeleteSession {
 struct Shutdown {};
 using Command = std::variant<Initialize, ModelsList, ProvidersList, SetKey, Login, CancelLogin,
                              Logout, GetAccountLimits, StartTurn, RetryTurn, SteerTurn, CancelTurn,
-                             GetSession, ConfigureSession, CompactSession, DeleteSession, Shutdown>;
+                             GetSession, ConfigureSession, CompactSession, DeleteSession, Shutdown,
+                             PluginsList, EnablePlugin, DisablePlugin>;
 
 // Identity is separate from payload. Optional turn/message/client IDs are NOT
 // permission to apply an event to whichever turn happens to be on screen.
@@ -367,11 +401,12 @@ struct ModelsChanged {
 struct Log {
     QString level, message;
 };
-using GlobalEvent = std::variant<AuthChanged, ModelsChanged, Log>;
+using GlobalEvent = std::variant<AuthChanged, ModelsChanged, Log, PluginChanged>;
 struct Null {};
 using Reply = std::variant<Null, Initialized, QVector<Model>, QVector<Provider>, ProviderStatus,
                            std::optional<AccountLimits>, StartAccepted, RetryAccepted,
-                           SteerAccepted, SessionRecovery, SessionConfigured, Compacted>;
+                           SteerAccepted, SessionRecovery, SessionConfigured, Compacted,
+                           PluginsListed, PluginUpdated>;
 using Result = std::variant<Reply, Error>;
 
 struct ApprovalPresentation {

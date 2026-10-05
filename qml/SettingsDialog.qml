@@ -4,23 +4,30 @@ import QtQuick.Effects
 import QtQuick.Shapes
 import OpenGhost.Native
 
-// OpenGhost's settings sheet: General, Providers, Usage and Appearance.
-// The copied Qt layout and motion are retained; backend pages are disconnected.
+// OpenGhost's settings sheet. Runtime Plugins is capability-gated; all pages
+// share the existing row/control styling, navigation and motion.
 Popup {
     id: dialog
     objectName: "settingsDialog"
     required property var frontend
     readonly property var settings: frontend.settings
     readonly property var login: settings.login
-    // The four pages in the dissected OpenGhost 1.3 frontend.
     property string page: "general"
     readonly property var pages: [
         { id: "general", title: "General" },
         { id: "providers", title: "Providers" },
+        ...(frontend.runtimePlugins ? [{ id: "plugins", title: "Plugins" }] : []),
         { id: "usage", title: "Usage" },
         { id: "appearance", title: "Appearance" }
     ]
-    readonly property string title: pages.find(p => p.id === page).title
+    readonly property string title: pages.find(p => p.id === page)?.title ?? "General"
+    // Capability loss/reconnect can remove the currently open page.
+    onPagesChanged: Qt.callLater(function() {
+        if (!dialog.pages.some(p => p.id === dialog.page))
+            dialog.show("general", true)
+        else if (dialog.visible)
+            glide.place(true)
+    })
     // Opening: opacity over 0.2 s (shown), rise 8 px and scale .98 over
     // 0.35 s (lift), the backdrop over 0.25 s (backdropShown). Closing retraces them.
     property real shown: 0
@@ -321,6 +328,7 @@ Popup {
                         width: parent.width
                         height: dialog.page === "general" ? generalPage.height
                               : dialog.page === "providers" ? providersPage.height
+                              : dialog.page === "plugins" ? pluginsPage.height
                               : dialog.page === "usage" ? usagePage.height
                               : appearancePage.height
                         GeneralPage {
@@ -347,6 +355,82 @@ Popup {
                             Repeater {
                                 model: dialog.settings.providersLoaded ? dialog.settings.providers : []
                                 delegate: ProviderRow {}
+                            }
+                        }
+                        Column {
+                            id: pluginsPage
+                            objectName: "pluginsPage"
+                            width: parent.width
+                            visible: dialog.frontend.runtimePlugins && dialog.page === "plugins"
+                            SettingsRow {
+                                first: true
+                                visible: dialog.frontend.pluginsLoading || !dialog.frontend.pluginsLoaded
+                                         || !!dialog.frontend.pluginsError || !dialog.frontend.pluginCount
+                                label: "Plugins"
+                                hint: dialog.frontend.pluginsLoading ? "Loading plugins…"
+                                    : !dialog.frontend.pluginsLoaded ? "Plugin state unavailable"
+                                    : !dialog.frontend.pluginCount ? "No plugins reported by the backend" : ""
+                                PillButton {
+                                    objectName: "pluginsRefresh"
+                                    visible: !!dialog.frontend.pluginsError
+                                    enabled: !dialog.frontend.pluginsLoading
+                                    text: "Refresh"
+                                    onClicked: dialog.frontend.refreshPlugins()
+                                }
+                            }
+                            Status {
+                                objectName: "pluginsError"
+                                width: parent.width
+                                visible: !!text
+                                text: dialog.frontend.pluginsError
+                                error: true
+                            }
+                            // A keyed model updated in place: a pending flip or an
+                            // event changes roles, not delegates, so focus stays.
+                            Repeater {
+                                model: dialog.frontend.runtimePlugins ? dialog.frontend.plugins : null
+                                delegate: Column {
+                                    id: plugin
+                                    required property int index
+                                    required property string pluginId
+                                    required property string name
+                                    required property string description
+                                    required property string status
+                                    required property bool enabled
+                                    required property bool available
+                                    required property bool canToggle
+                                    required property string note
+                                    required property bool noteError
+                                    objectName: "plugin-" + pluginId
+                                    width: pluginsPage.width
+                                    SettingsRow {
+                                        first: plugin.index === 0
+                                        label: plugin.name
+                                        hint: [plugin.pluginId !== plugin.name ? plugin.pluginId : "",
+                                               plugin.description, plugin.status].filter(Boolean).join("\n")
+                                        PillButton {
+                                            objectName: "pluginToggle-" + plugin.pluginId
+                                            // Stays focusable while pending/unconfirmed (a disabled
+                                            // item drops keyboard focus); only an available row
+                                            // in a toggleable state acts. Not checkable: a press
+                                            // cannot overwrite the backend's state.
+                                            enabled: plugin.available
+                                            actionable: plugin.canToggle
+                                            text: plugin.enabled ? "On" : "Off"
+                                            Accessible.name: plugin.name + (plugin.enabled ? ": turn off" : ": turn on")
+                                            Accessible.description: plugin.status
+                                            onClicked: if (plugin.canToggle)
+                                                dialog.frontend.setPluginEnabled(plugin.pluginId, !plugin.enabled)
+                                        }
+                                    }
+                                    Status {
+                                        objectName: "pluginNote-" + plugin.pluginId
+                                        width: parent.width
+                                        visible: !!text
+                                        text: plugin.note
+                                        error: plugin.noteError
+                                    }
+                                }
                             }
                         }
                         UsagePage {
@@ -525,7 +609,7 @@ Popup {
             NumberAnimation { duration: icon.page === "appearance" ? 700 : 600; easing.type: Easing.Bezier; easing.bezierCurve: Theme.motion }
         }
         onChosenChanged: {
-            if (chosen && page === "providers" && !Theme.reducedMotion)
+            if (chosen && (page === "providers" || page === "plugins") && !Theme.reducedMotion)
                 plug.restart()
         }
         SequentialAnimation {
@@ -563,7 +647,7 @@ Popup {
             }
             // The plug: its prongs and body (pushed in), then the cord.
             ShapePath {
-                strokeColor: icon.page === "providers" ? icon.color : "transparent"
+                strokeColor: icon.page === "providers" || icon.page === "plugins" ? icon.color : "transparent"
                 strokeWidth: 5.5
                 capStyle: ShapePath.RoundCap
                 joinStyle: ShapePath.RoundJoin
@@ -581,7 +665,7 @@ Popup {
                 PathLine { x: 14; y: 16 - 5 * icon.push }
             }
             ShapePath {
-                strokeColor: icon.page === "providers" ? icon.color : "transparent"
+                strokeColor: icon.page === "providers" || icon.page === "plugins" ? icon.color : "transparent"
                 strokeWidth: 5.5
                 capStyle: ShapePath.RoundCap
                 joinStyle: ShapePath.RoundJoin
@@ -673,12 +757,14 @@ Popup {
     // hover fill under the pointer and the 2 px focus ring.
     component PillButton: AbstractButton {
         id: pill
+        // false: shown and focusable like a disabled button, but its owner ignores clicks.
+        property bool actionable: true
         height: 32
         implicitWidth: label.implicitWidth + 28
         width: implicitWidth
         hoverEnabled: true
         focusPolicy: Qt.StrongFocus
-        opacity: enabled ? 1 : 0.5
+        opacity: enabled && actionable ? 1 : 0.5
         background: Item {
             Rectangle {
                 anchors.fill: parent
@@ -697,7 +783,7 @@ Popup {
                     anchors.margins: 1
                     radius: 15
                     antialiasing: true
-                    color: pill.hovered ? Theme.hover : Theme.composerBg
+                    color: pill.hovered && pill.actionable ? Theme.hover : Theme.composerBg
                     Behavior on color { ColorAnimation { duration: 200; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease } }
                 }
             }

@@ -30,6 +30,8 @@ QQuickItem *findVisual(QQuickItem *item, const QString &name)
 }
 } // namespace
 
+int pluginSmoke(QQmlApplicationEngine &engine, QQuickWindow *window);
+
 // Bounded offline rendering and optional fake-backend integration check.
 int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
 {
@@ -508,6 +510,8 @@ int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
                       "effort returns when the selected model's capabilities return");
             }
         }
+        check(!findVisual(window->contentItem(), QStringLiteral("settingsTab-plugins")),
+              "Plugins hidden when backend does not advertise runtime plugins");
         check(!findVisual(window->contentItem(), QStringLiteral("settingsTab-model")),
               "no extra Model tab");
         check(!findVisual(window->contentItem(), QStringLiteral("settingsTab-notifications")),
@@ -585,6 +589,7 @@ int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
     QTest::qWait(100);
     check(!window->grabWindow().isNull(), "light theme paints");
     Theme::choose(QStringLiteral("dark"));
+    failures += pluginSmoke(engine, window);
     check(!engine.property("smokeWarnings").toBool(), "no QML binding/load warnings");
     QSignalSpy closing(&controller, &WindowController::closeRequested);
     window->close();

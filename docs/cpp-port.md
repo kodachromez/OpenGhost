@@ -73,7 +73,7 @@ for the excluded name, artwork, animations or design.
 | Window/composition | `src/main.cpp`, `window.*`, `qml/Main.qml`, `Backdrop.qml`; clipboard/selection and QML network-denial helpers |
 | Sidebar/chat | `qml/Sidebar.qml`, `ChatEntry.qml`, `LiveText.qml`, `src/model.*`; folderless Chats, hover/glide/fade/selection |
 | Composer | Existing composer in `Main.qml`, model/effort controls/stages, mode picker/dock, file cards and tooltips |
-| Settings | `SettingsDialog.qml`, General, Providers, Usage, Appearance; `settings.*`, `appearance.*`, `offline_services.h` projections |
+| Settings | `SettingsDialog.qml`, General, Providers, capability-gated Plugins, Usage, Appearance; `settings.*`, `appearance.*`, `offline_services.h`, `window.*` projections |
 | Markdown/code | `markdown.*`, `highlight.*`, `rich.*`, `cssfont.*`, Markdown/Block/InlineText/CodeBlock/TableBlock QML |
 | TeX/diagrams | `tex.*`, `diagram*.cpp/.h`, `diagramview.*`; native painting/selection, the inherited 1.3 43-kind diagram engine |
 | Artwork/motion | Procedural `ghost.*`, 1.3 `Splash.qml`/`mist.frag`, welcome/working ghost, `motion.*`, `wave.*`, `reveal.*`, effects/springs and shaders |
@@ -132,6 +132,7 @@ those payloads are extensible, not because the UI speaks RPC.
 | --- | --- |
 | `initialize`, `shutdown` | `Initialize`, `Initialized`, `Capabilities`, `BackendInfo`, `Shutdown`; fake implements them. Service startup currently requires protocol `0.1` and session recovery, then reads models/providers. |
 | `models.list`, `auth.providers` | `ModelsList`, `ProvidersList`, `Model`, `Provider`; existing picker/provider UI, fake catalog only. |
+| `plugin.list/enable/disable`, `plugin.changed` | `PluginsList`, `EnablePlugin`, `DisablePlugin`, `PluginsListed`, `PluginUpdated`, `PluginChanged`; conditional Settings page, tested at the semantic seam only. `Capabilities::runtimePlugins` maps to `capabilities.plugins.runtime`; no adapter is implemented here. |
 | `auth.setKey/login/cancel/logout` | `SetKey`, `Login`, `CancelLogin`, `Logout`; key prompt and sign-in/wait/cancel/logout UI, fixture status only. |
 | `account.limits` | `GetAccountLimits`, `AccountLimits`, `LimitWindow`; types only, fake refuses, no invented balances. |
 | `turn.start` | `StartTurn`, `SessionParams`, `Input`, `StartAccepted`; identity-checked asynchronous acceptance, not completion. |
@@ -152,7 +153,7 @@ uses an absent version (create-only). Rename/index/preferences are frontend-owne
 from its payload: turn/message start/delta/completion, reasoning, tool
 start/progress/completion, approval resolution, compaction notices, input
 acceptance, session updates and usage. `GlobalEvent` holds auth/model
-invalidations and logs; `closed(Error)` signals connection loss. Auth/model
+invalidations, plugin snapshots and logs; `closed(Error)` signals connection loss. Auth/model
 changes trigger rereads, not blind adoption of unordered snapshots.
 
 The frontend is backend-agnostic **through these semantics**, not through an
@@ -170,6 +171,43 @@ range validation, request deadlines (reference: 60 seconds, login 15 minutes,
 compact 10 minutes), reverse-call lifetimes and connection replacement. Another
 backend may need another wire mapping. Neither belongs in QML or requires
 changing native rendering. No adapter work was done in this pass.
+
+### Plugin state
+
+[`frontend/plugins.*`](../src/frontend/plugins.h) is owned by `ChatService`, uses
+its normal request correlation and has its own change signal/errors. Plugin
+operations do not set chat pending/error flags or refresh the model catalog.
+Initialization explicitly gates discovery on `runtimePlugins`; disconnect clears
+rows/capability and invalidates pending plugin callbacks. A subsequent successful
+initialization reads a fresh list. This does not add a reconnect supervisor.
+
+Rows retain backend snapshots and per-ID pending/error bookkeeping. Toggle
+requests never optimistically alter enabled state; returned snapshots reconcile
+it. Every observation carries a local tick (not a backend version), relying on
+ABP's order: events and answers arrive in backend order, and an answer is never
+older than a `plugin.changed` before it. An answer is adopted only if nothing
+about its plugin was observed after it was sent; a list replaces only rows not
+observed after it was sent (so live events racing it win, including newly
+observed IDs) and clears only doubt that predates it. A failed operation marks
+the row unconfirmed and rereads state with a list sent afterwards, without
+retrying the mutation; an older in-flight list cannot reauthorize it, and the
+row error clears once a later observation confirms the state. Failed refreshes
+leave unconfirmed rows read-only. A `disabling` plugin can be re-enabled (the
+backend keeps its settling calls). List load errors, persistence warnings and a
+`persisted` of `memory`/`ambiguous` are displayed, not interpreted as frontend
+activation/persistence policy. Plugin requests are not chat work: Stop before
+acceptance cancels only the turn's own start/retry request.
+
+`SettingsDialog.qml` reuses its existing rows, pills, status text, plug icon and
+navigation/entrance animations. Rows come from `PluginModel`, a keyed list model
+updated in place, and the page list depends only on `runtimePlugins`' own
+signal, so updates neither recreate row/tab delegates nor drop keyboard focus.
+A pending or unconfirmed toggle stays focusable but does not act. Unavailable
+and unknown states are not toggleable. All names, IDs and descriptions come from the backend and
+render as plain text. No host-tool registration, plugin code loading, local
+preference or restart is involved. The backend API is still typed, **not a wire
+implementation**; `tests/plugins.cpp` and `tests/plugin_smoke.cpp` use the scripted
+`tests/plugin_fixture.h`, not the Rust backend or live RPC.
 
 ## Frontend state and recovery
 
@@ -402,16 +440,18 @@ CMake selects `src/platform/linux.cpp` on Linux and `portable.cpp` elsewhere;
 
 ## Validation coverage and follow-up boundaries
 
-The existing focused suite contains 29 contract test functions (QtTest reports
-33 passes including data rows and init/cleanup) and two UI smokes. It exercises refusal, uncertain
+The existing general contract suite contains 29 test functions (QtTest reports
+33 passes including data rows and init/cleanup), plus a dedicated plugin contract
+suite and two UI smokes. It exercises refusal, uncertain
 acceptance, ordered/interleaved projection, terminal/Stop sealing, exact Retry,
 steering receipts, attachment ownership, auth invalidation, approvals/host
 lifetimes, library/restart/checkpoint failure, mini/folder/lock state, ledger
 round trips and Qt metatype copies. See [`tests/contract.cpp`](../tests/contract.cpp)
 and [`tests/smoke.cpp`](../tests/smoke.cpp).
 
-UI smokes drive existing QML controls, both themes/four settings pages, native
-renderers, splash handoff, pins/collapse and disconnected/fake behavior. The
+UI smokes drive existing QML controls, both themes/four base settings pages, native
+renderers, splash handoff, pins/collapse and disconnected/fake behavior. They also
+drive the conditional Plugins page over an explicitly injected scripted backend. The
 reported splash artifact from an earlier pass was not reproduced/diagnosed;
 handoff state checks are not frame-by-frame visual qualification. A subsequent
 [fresh visual audit](visual-parity.md) adds the desktop-safe headless/offscreen

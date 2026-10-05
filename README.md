@@ -64,22 +64,27 @@ cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release \
   -DOPENGHOST_BUILD_SMOKE_TEST=ON
 cmake --build build-release --parallel 4
 ctest --test-dir build-release \
-  -R '^(native_contract_test|native_ui_smoke|native_fake_ui_smoke)$' \
+  -R '^(native_contract_test|native_plugins_test|native_ui_smoke|native_fake_ui_smoke)$' \
   --output-on-failure
 ```
 
 Use `ctest -C Release` with multi-configuration generators. The option defaults
-to **OFF** and enables all three checks:
+to **OFF** and enables all four checks:
 
 - `native_contract_test`: typed contract, identity/cancellation/recovery, store,
   checkpoint failures, mini-chat/lock state, usage, attachments, approvals/auth
   and host routing. No GUI or real backend.
+- `native_plugins_test`: capability-gated plugin discovery, authoritative toggles,
+  live/external changes, disabling, failures and connection-generation refreshes
+  through a scripted typed backend (not real RPC).
 - `native_ui_smoke`: disconnected QML launch, splash handoff, themes/settings,
   refusal paths and Markdown/TeX/diagram rendering.
 - `native_fake_ui_smoke`: the same UI plus production effort-slider visibility,
   seven levels, keyboard/pointer selection, busy locking and model changes;
   actual composer submission, streaming, Escape, steering, Retry,
   attachment/approval cards, deletion and fixture auth.
+  Both UI smokes also drive the production Plugins page over a scripted backend:
+  button dispatch, pending controls, failures, external changes and capability loss.
 
 CTest uses offscreen/software rendering. Smokes isolate appearance, preferences
 and the library in temporary directories (even the fake smoke uses a temporary
@@ -125,17 +130,18 @@ successful integration with a real backend.
 
 | Area | Current status |
 | --- | --- |
-| Native presentation | Implemented window/sidebar/composer, four settings pages, themes, splash/motion, selection/copy, Markdown/code/TeX/diagram rendering. Full visual parity is unqualified. |
+| Native presentation | Implemented window/sidebar/composer, four base settings pages plus capability-gated Plugins, themes, splash/motion, selection/copy, Markdown/code/TeX/diagram rendering. Full visual parity is unqualified. |
 | Local preferences | Implemented appearance, standing instructions, explicit model/effort and Ask/Auto/Full preference persistence. Pinned-file preparation is unsupported. |
 | Chat flow in the existing UI | Implemented draft/open/search/local rename, pins/collapse, streaming, Escape Stop, Retry, steering, deletion, approval cards and text attachment cards. Turn-dependent behavior is exercised only with the fake. |
 | Local state/recovery | Implemented index/display-cache/checkpoint/reconciliation logic, tested with stores and scripted backends. Caches are not backend history; persistence caveats are below. |
 | Mini chat, locks, folder creation | State/service APIs and tests exist. **No mini-chat dialog, lock/unlock screen or add-folder picker is exposed in the UI.** Production encryption is absent. Existing folder groups can be displayed/collapsed and their chats managed. |
 | Models/auth/usage | Frontend selectors, status, login controls and usage views exist. Catalog, sign-in, approval effects and token counts are **simulated** in fake mode. No provider credentials are saved. |
+| Runtime plugin management | Data-driven Settings page and connection-scoped state implemented at the typed backend seam; hidden without the runtime capability. Scripted contract/UI tests only; real plugin RPC needs the still-absent adapter/transport. |
 | Real generation, tools, durable backend recovery | **Backend-dependent and unavailable.** No backend is bundled or contacted. |
 | Built-in browser panel | Implemented in the default build on Qt WebEngine guests: globe toggle, resizable panel, tabs, address/search, back/forward/reload/stop, loading/failure/crash states, saved layout and tabs, persistent site profile, driving/Take control/Hand back overlays. Usable without a backend. |
 | Host browser/media tools | Typed requests and tested dispatch/cancellation bookkeeping exist. The panel reports its snapshot but publishes **no browser tools** yet (`available: false`), so host calls refuse. No downloads, page context menu or media preparation. |
 | Compaction/account limits | Contract types exist; fake refuses them, no operational compaction UI or live billing/limits. Saved compact/stats rows are retained as cache data, not rendered as cards. |
-| Other intentionally absent UI | No tool/subagent/reasoning transcript panels, source-port service/workspace picker, voice controls, extra settings tabs or visual diagram form editor. Reasoning/tool activity is not assistant text. |
+| Other intentionally absent UI | No tool/subagent/reasoning transcript panels, source-port service/workspace picker, voice controls, other extra settings tabs or visual diagram form editor. Reasoning/tool activity is not assistant text. |
 
 The composer **+ file picker** handles text attachments; the reference's broader
 plus-menu operations are not implemented. No new controls were invented to
@@ -220,6 +226,34 @@ cancellation, approval and error semantics — or explicitly refuse unsupported
 operations. Merely forwarding text is insufficient. The current service requires
 session recovery during initialization. Details and the ABP-oriented future
 wire responsibilities are in [the port notes](docs/cpp-port.md#typed-boundary-and-future-adapters).
+
+### Runtime plugins
+
+Settings adds **Plugins** only when an initialized backend advertises runtime
+plugins. `ChatService` owns the connection-scoped `Plugins` projection; QML
+observes display rows through `WindowController`. Every returned ID is shown,
+without a built-in allowlist or inference from tool activity. State is not saved
+as a local preference.
+
+The typed commands correspond to `plugin.list`, `plugin.enable {pluginId}` and
+`plugin.disable {pluginId}`; `PluginChanged` corresponds to global
+`plugin.changed {plugin}`. The future wire adapter must map
+`initialize.capabilities.plugins.runtime` to `Capabilities::runtimePlugins` and
+preserve snapshots/notifications. **There is no JSON-RPC serialization or live
+connection in this checkout yet.** The shipped disconnected and fake backends
+therefore do not expose this page; the plugin tests inject an advertising backend.
+
+Initialization (including reinitialization after connection loss) refreshes the
+list. On/Off controls retain the backend's state while pending. A disabling
+plugin shows how many running calls it is waiting for and can be turned back on.
+Unavailable or unknown-state plugins cannot be toggled. Failures show inline without
+changing chat state and reread the list; the error clears once a later read or
+notification confirms the state, and an unconfirmed state stays non-interactive
+with a Refresh action after a failed read. A change the backend keeps only in
+memory (or could not confirm saving) says it may not survive a restart. External
+notifications apply immediately, including during a turn, and update rows in
+place so keyboard focus stays put. Stopping a chat never cancels plugin requests.
+Neither a toggle nor its failure restarts anything.
 
 ## Local persistence and recovery
 
