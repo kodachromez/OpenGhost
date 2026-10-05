@@ -13,13 +13,18 @@
 #include <QLineF>
 #include <QPointer>
 #include <QQmlApplicationEngine>
+#include <QQmlComponent>
 #include <QQmlContext>
 #include <QQmlExpression>
 #include <QQuickItem>
 #include <QQuickWindow>
+#include <QSemaphore>
 #include <QSignalSpy>
 #include <QTemporaryDir>
+#include <QThread>
 #include <QtTest>
+#include <atomic>
+#include <memory>
 
 int browserSmoke(QQmlApplicationEngine &engine, WindowController &controller);
 
@@ -59,6 +64,91 @@ QByteArray fixturePng(int width, int height)
     buffer.open(QIODevice::WriteOnly);
     image.save(&buffer, "PNG");
     return bytes;
+}
+
+// Exercise the splash Loader's retirement between sync and render, rather than
+// relying on the scheduler to hit the small window at the normal handoff.
+// Qt 6.11's software Shape node dereferences its GUI item during render: that
+// item may already be detached/deleted. A painted aura must instead draw the
+// snapshot made during sync, while the GUI was blocked.
+bool retireSplashDuringRender(QQmlApplicationEngine &engine, QQuickWindow *window)
+{
+    QQmlComponent component(&engine);
+    component.setData(R"(
+        import QtQuick
+        Loader { source: "qrc:/OpenGhost/Ui/Splash.qml" }
+    )",
+                      QUrl());
+    std::unique_ptr<QQuickItem> loader(qobject_cast<QQuickItem *>(component.create()));
+    if (!loader)
+        return false;
+    loader->setParentItem(window->contentItem());
+    loader->setSize(window->size());
+    loader->setZ(2000);
+    QPointer<QQuickItem> splash = loader->property("item").value<QQuickItem *>();
+    // Exposed, with the aura visible; not the initial expose synchronization.
+    if (!splash ||
+        !QTest::qWaitFor([&] { return splash->property("now").toReal() >= 900; }, 2500) ||
+        window->grabWindow().isNull())
+        return false;
+
+    struct State {
+        std::atomic<bool> armed{true}, pending{false}, done{false};
+        std::atomic<bool> threaded{false}, destroyed{false}, timedOut{false};
+        QSemaphore retired;
+    };
+    const auto state = std::make_shared<State>();
+    const auto sync = QObject::connect(
+        window, &QQuickWindow::afterSynchronizing, window,
+        [state, window, item = QPointer<QQuickItem>(loader.get()), splash] {
+            if (!state->armed.exchange(false))
+                return;
+            state->threaded = QThread::currentThread() != window->thread();
+            if (!state->threaded) {
+                state->done = true; // No concurrent retirement under the basic loop.
+                return;
+            }
+            state->pending = true;
+            QMetaObject::invokeMethod(
+                window,
+                [state, item, splash] {
+                    if (item)
+                        item->setProperty("active", false);
+                    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+                    state->destroyed = !splash;
+                    qInfo() << "Splash retirement before render: deleted ="
+                            << state->destroyed.load();
+                    state->retired.release();
+                },
+                Qt::QueuedConnection);
+        },
+        Qt::DirectConnection);
+    const auto render = QObject::connect(
+        window, &QQuickWindow::beforeRendering, window,
+        [state] {
+            if (state->pending)
+                state->timedOut = !state->retired.tryAcquire(1, 2000);
+        },
+        Qt::DirectConnection);
+    const auto rendered = QObject::connect(
+        window, &QQuickWindow::afterRendering, window,
+        [state] {
+            if (state->pending.exchange(false))
+                state->done = true;
+        },
+        Qt::DirectConnection);
+    loader->setX(1); // Dirty the scene so the synchronized frame must render.
+    window->update();
+    const bool done = QTest::qWaitFor([&] { return state->done.load(); }, 3000);
+    QObject::disconnect(sync);
+    QObject::disconnect(render);
+    QObject::disconnect(rendered);
+    const bool expectedThread = qgetenv("QSG_RENDER_LOOP") == "threaded";
+    const bool ok = done && !state->timedOut && (!expectedThread || state->threaded) &&
+                    (!state->threaded || state->destroyed);
+    if (ok && state->threaded)
+        qInfo() << "PASS: splash deleted between scenegraph sync and render";
+    return ok;
 }
 } // namespace
 
@@ -149,6 +239,7 @@ int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
           "welcome ghost takes over after splash");
     check(!window->grabWindow().isNull(), "window paints");
     check(window->contentItem()->opacity() > 0.99, "1.3 splash reveals the app");
+    check(retireSplashDuringRender(engine, window), "splash retirement during rendering is safe");
 
     if (fake) {
         check(controller.ready(), "fake handshake and catalog available");

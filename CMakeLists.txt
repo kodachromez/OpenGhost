@@ -74,7 +74,8 @@ qt_add_qml_module(native_window URI OpenGhost.Native VERSION 1.0 NO_PLUGIN RESOU
         src/selection.h src/selection.cpp
         src/diagramview.h src/diagramview.cpp src/medialoader.h src/medialoader.cpp
         src/mediafetch.h src/mediafetch.cpp src/videoinfo.h src/videoinfo.cpp
-        src/browserfocus.h src/browserfocus.cpp)
+        src/browserfocus.h src/browserfocus.cpp
+        src/splashaura.h src/splashaura.cpp)
 target_link_libraries(native_window PUBLIC native_contract native_rich Qt6::Gui Qt6::Network
     Qt6::Quick Qt6::QuickControls2)
 native_warnings(native_window)

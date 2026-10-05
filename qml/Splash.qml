@@ -1,5 +1,4 @@
 import QtQuick
-import QtQuick.Shapes
 import OpenGhost.Native
 
 // The startup splash, OpenGhost 1.3's (splash.js, splash-mist.js). Night
@@ -242,9 +241,10 @@ Item {
         }
         // Without shaders: .splash-aura, a soft light in the middle that
         // rises over 900 ms and swells as the Ghost lands.
-        Shape {
+        SplashAura {
             id: aura
             visible: !splash.shaded
+            color: Theme.splash.aura
             readonly property real t: Math.max(0, splash.now)
             readonly property real risen: Theme.bezier(0.22, 1, 0.36, 1, splash.clamp(t / 900))
             readonly property real swell: splash.settled && splash.landedAt >= 0 ? 1 : splash.clamp((t - (splash.landAt - 120)) / 1400)
@@ -257,16 +257,6 @@ Item {
                      : swellEased < 0.28 ? 0.62 + 0.38 * swellEased / 0.28 : 1 - 0.18 * (swellEased - 0.28) / 0.72
             scale: swell <= 0 ? 0.84 + 0.12 * risen
                    : swellEased < 0.28 ? 0.96 + 0.11 * swellEased / 0.28 : 1.07 - 0.07 * (swellEased - 0.28) / 0.72
-            ShapePath {
-                strokeColor: "transparent"
-                fillGradient: RadialGradient {
-                    centerX: 600; centerY: 600; centerRadius: 600
-                    focalX: 600; focalY: 600
-                    GradientStop { position: 0; color: Theme.splash.aura }
-                    GradientStop { position: 1; color: "transparent" }
-                }
-                PathRectangle { width: 1200; height: 1200 }
-            }
         }
     }
     // Swallow input while it plays; any key or click skips ahead.
