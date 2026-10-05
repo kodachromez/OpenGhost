@@ -30,13 +30,27 @@ async function pinned() {
 const file = (name, payload) => ({ name, size: 100, payload });
 const textFile = (name, chars) => file(name, { type: 'text', text: 'a'.repeat(chars) });
 
-test('pinned text metadata shows exact character counts, not estimated tokens; other metadata stays intact', async () => {
+test('pinned text metadata labels every token count as an estimate; other metadata stays intact', async () => {
  const window = await pinned(), general = Object.create(window.GeneralSettings.prototype);
- for (const chars of [0, 3200, 200000]) {
-  assert.equal(general.meta({ name: 'notes.txt', size: 100, kind: 'text', chars }), `Text · 100 B · ${chars.toLocaleString('en')} text characters`);
+ for (const [chars, count] of [[0, '0'], [32, '10'], [3200, '1k'], [3840, '1.2k'], [200000, '63k']]) {
+  assert.equal(general.meta({ name: 'notes.txt', size: 100, kind: 'text', chars }), `Text · 100 B · ≈${count} estimated tokens`);
  }
  assert.equal(general.meta({ name: 'photo.png', size: 100, kind: 'image', width: 640, height: 480 }), 'Image · 100 B · 640×480');
  assert.equal(general.meta({ name: 'data.bin', size: 100, kind: 'none' }), 'App · 100 B · read from disk when needed');
+});
+
+test('pinned text rows show the approximation marker and localized estimate wording', async () => {
+ const window = await pinned(), general = Object.create(window.GeneralSettings.prototype);
+ window.document = { createElement: () => {
+  const nodes = new Map();
+  return { dataset: {}, querySelector: selector => {
+   if (!nodes.has(selector)) nodes.set(selector, { setAttribute() {} });
+   return nodes.get(selector);
+  } };
+ } };
+ await window.UserContext.add([textFile('notes.txt', 3840)]);
+ const row = general.row(window.UserContext.files[0]);
+ assert.equal(row.querySelector('.general-file-meta').textContent, 'Text · 100 B · ≈1.2k estimated tokens');
 });
 
 test('local pinned-text cap counts only text; replacement and the separate file-count cap still work', async () => {

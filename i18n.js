@@ -196,7 +196,7 @@ const STRINGS = {
   'settings.files.hint': 'Notes, a style guide, a CV: whatever OpenGhost should always have at hand. Every chat sees what is inside them. Local limits: {files} files and {chars} extracted text characters, not model context limits.',
   'settings.files.drop': 'Drop files here or choose them',
   'settings.files.remove': 'Remove {name}',
-  'settings.files.chars': '{count} text characters',
+  'settings.files.tokenEstimate': '≈{count} estimated tokens',
   'settings.files.path': 'read from disk when needed',
   'settings.files.unreadable': 'OpenGhost can’t read {name}.',
   'settings.files.count': 'The local pinned-file limit is {count} files.',
