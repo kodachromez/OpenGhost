@@ -1,6 +1,7 @@
 #include "markdown.h"
 
 #include "highlight.h"
+#include "media.h"
 
 #include <QHash>
 #include <QRegularExpression>
@@ -1013,6 +1014,30 @@ QVector<Raw> parseRaw(const QStringList &lines, int openLine, bool top)
                 add(std::move(flow), i);
                 continue;
             }
+            // A picture or a video alone on its line is shown as itself even
+            // right under a line of words: the paragraph parts there, and the
+            // lines of pictures and videos make a paragraph of their own.
+            const int first = i - int(para.size());
+            QVector<bool> shown;
+            if (para.size() > 1) {
+                for (int k = 0; k < para.size(); ++k) {
+                    MediaList ignored;
+                    shown << mediaItems(para.at(k), first + k == openLine, ignored);
+                }
+            }
+            if (shown.contains(true) && shown.contains(false)) {
+                for (int start = 0, k = 1; k <= para.size(); ++k) {
+                    if (k < para.size() && shown.at(k) == shown.at(start))
+                        continue;
+                    Raw part;
+                    part.type = Raw::Para;
+                    part.from = first + start;
+                    part.lines = para.mid(start, k - start);
+                    add(std::move(part), first + k);
+                    start = k;
+                }
+                continue;
+            }
         }
         block.type = Raw::Para;
         block.from = i - int(para.size());
@@ -1097,6 +1122,12 @@ void seal(Block &b)
         h = mix(h, quint64(item.task + 7));
         for (const auto &child : item.blocks)
             h = mix(h, child->hash);
+    }
+    for (const MediaItem &item : b.media) {
+        h = mix(h, quint64(item.video) + 3);
+        h = mix(h, qHash(item.src));
+        h = mix(h, qHash(item.caption));
+        h = mix(h, qHash(item.href));
     }
     h = mix(h, quint64(b.omitted));
     b.hash = h;
@@ -1357,6 +1388,24 @@ BlockPtr Renderer::code(const Raw &raw, const State &state, bool end)
 BlockPtr Renderer::list(const Raw &raw, const State &state, bool end)
 {
     Block b;
+    // A list whose every item is a picture or a video is those pictures and
+    // videos, not a list of links.
+    QVector<MediaItem> found;
+    bool every = !raw.items.isEmpty();
+    for (const RawItem &item : raw.items) {
+        MediaList media;
+        every =
+            every && item.task < 0 && mediaItems(item.body.join(QLatin1Char('\n')), false, media);
+        if (!every)
+            break;
+        found += media.items;
+    }
+    if (every) {
+        b.kind = Kind::Media;
+        b.media = std::move(found);
+        b.open = end && m_options.live;
+        return finished(std::move(b));
+    }
     b.kind = Kind::List;
     b.flag = raw.ordered;
     b.level = raw.start;
@@ -1540,11 +1589,22 @@ BlockPtr Renderer::render(const Raw &raw, const State &state, bool end)
         b.tone = state.tone >= 0 ? state.tone : state.firstTone();
         b.text = text(raw.text, end);
         return finished(std::move(b));
-    case Raw::Para:
+    case Raw::Para: {
+        // Inside a list or a quote a link stays a link: only a list that is
+        // all pictures and videos is shown as them.
+        MediaList media;
+        if (!state.depth &&
+            mediaItems(raw.lines.join(QLatin1Char('\n')), end && m_options.live, media)) {
+            b.kind = Kind::Media;
+            b.media = std::move(media.items);
+            b.open = end && m_options.live;
+            return finished(std::move(b));
+        }
         b.kind = Kind::Paragraph;
         b.tone = state.depth ? -1 : state.tone;
         b.text = text(raw.lines.join(QLatin1Char('\n')), end);
         return finished(std::move(b));
+    }
     case Raw::Flow:
         if (!take(raw.lines.size()))
             return nullptr;
@@ -1611,6 +1671,69 @@ bool renderable(const QString &text)
 }
 
 Inline inlineText(const QString &source, bool live) { return inlineOf(source, live); }
+
+QString linkLabel(const QString &url) { return chipLabel(url); }
+
+bool mediaItems(const QString &text, bool live, MediaList &out)
+{
+    // markdown.js MEDIA_ADDRESS, MEDIA_NAME, MEDIA_TOKEN and MEDIA_OPEN.
+#define MEDIA_ADDRESS R"(<?([^\s<>()]*(?:\([^\s<>()]*\)[^\s<>()]*)*)>?)"
+#define MEDIA_NAME R"((?:\s+(?:"[^"]*"|'[^']*'))?)"
+    thread_local const Rx token(QStringLiteral(
+        R"(^(?:\[!\[([^\]]*)\]\(\s*)" MEDIA_ADDRESS MEDIA_NAME R"(\s*\)\]\(\s*)" MEDIA_ADDRESS
+        R"(\s*\)|!\[([^\]]*)\]\(\s*)" MEDIA_ADDRESS MEDIA_NAME
+        R"(\s*\)|\[([^\]]+)\]\(\s*)" MEDIA_ADDRESS R"(\s*\)|(https?:\/\/[^\s<>"'`]+)))"));
+#undef MEDIA_ADDRESS
+#undef MEDIA_NAME
+    thread_local const Rx openPicture(QStringLiteral(R"(^(?:\[!?|!|(?:\[!\[|!\[)[^\n]*)$)"));
+    thread_local const Rx starts(QStringLiteral(R"(^(?:\[|!\[|https?:\/\/))"),
+                                 Rx::CaseInsensitiveOption);
+    thread_local const Rx trailing(QStringLiteral(R"([.,;:!?»"'…*_~)]$)"));
+    out = {};
+    QString rest = text.trimmed();
+    if (!starts.match(rest).hasMatch())
+        return false;
+    while (!rest.isEmpty()) {
+        // A picture inside a link is whole only with the link closed: until
+        // then its start reads as a link of its own.
+        const auto m = token.match(rest);
+        if (!m.hasMatch() || (rest.startsWith(QLatin1String("[![")) && !m.hasCaptured(2))) {
+            if (live && openPicture.match(rest).hasMatch()) {
+                out.open = true;
+                return true;
+            }
+            out = {};
+            return false;
+        }
+        MediaItem item;
+        if (m.hasCaptured(2) || m.hasCaptured(5)) {
+            item.src = m.hasCaptured(2) ? m.captured(2) : m.captured(5);
+            if (!item.src.startsWith(QLatin1String("http://"), Qt::CaseInsensitive) &&
+                !item.src.startsWith(QLatin1String("https://"), Qt::CaseInsensitive)) {
+                out = {};
+                return false;
+            }
+            item.caption = (m.hasCaptured(1) ? m.captured(1) : m.captured(4)).trimmed();
+            const QString href = m.captured(3);
+            item.href = safeUrl(href) ? href : QString();
+        } else {
+            QString url = m.hasCaptured(7) ? m.captured(7) : m.captured(8);
+            if (m.hasCaptured(8))
+                while (trailing.match(url).hasMatch())
+                    url.chop(1);
+            if (media::videoId(url).isEmpty()) {
+                out = {};
+                return false;
+            }
+            item.video = true;
+            item.src = url;
+            item.caption = m.captured(6).trimmed();
+        }
+        out.items << std::move(item);
+        rest = trimStart(rest.mid(m.capturedLength(0)));
+    }
+    return !out.items.isEmpty();
+}
 
 void expandMath(Inline &text, int ref)
 {

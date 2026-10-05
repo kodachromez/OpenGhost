@@ -60,18 +60,22 @@ cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release \
   -DOPENGHOST_BUILD_SMOKE_TEST=ON
 cmake --build build-release --parallel 4
 ctest --test-dir build-release \
-  -R '^(native_contract_test|native_ui_smoke|native_fake_ui_smoke)$' \
+  -R '^(native_contract_test|native_media_test|native_ui_smoke|native_fake_ui_smoke)$' \
   --output-on-failure
 ```
 
 Use `ctest -C Release` with multi-configuration generators. The option defaults
-to **OFF** and enables all three checks:
+to **OFF** and enables all four checks:
 
 - `native_contract_test`: typed contract, identity/cancellation/recovery, store,
   checkpoint failures, mini-chat/lock state, usage, attachments, approvals/auth
   and host routing. No GUI or real backend.
+- `native_media_test`: reply picture/video parsing, trusted-place and redirect
+  rules, video link words, stack shape and the media loader's consent, decode
+  bounds and stale-load handling, with an injected fetch. No network.
 - `native_ui_smoke`: disconnected QML launch, splash handoff, themes/settings,
-  refusal paths and Markdown/TeX/diagram rendering.
+  refusal paths and Markdown/TeX/diagram rendering, plus a reply's picture
+  stack, click-to-load plate, lost links and video cards from fixture bytes.
 - `native_fake_ui_smoke`: the same UI plus production effort-slider visibility,
   seven levels, keyboard/pointer selection, busy locking and model changes;
   actual composer submission, streaming, Escape, steering, Retry,
@@ -340,7 +344,12 @@ offscreen/software tests and Wayland/OpenGL smokes. Linux selects threaded
 rendering/portal defaults and KDE reduced-motion discovery. The portable override
 `OPENGHOST_REDUCED_MOTION=0/1` is available. QML networking is denied; explicit
 HTTP(S) links (and allowed mail links) open through the OS, so this is not a
-sandbox or a guarantee that external applications stay offline.
+sandbox or a guarantee that external applications stay offline. The one
+exception is a reply's pictures and video previews (`src/medialoader.*`, the
+reference's media-embed.js rules): HTTPS from the reference's trusted preview
+hosts loads by itself, any other http(s) picture only after a click on its
+plate; bounded in time and size, re-checked on every redirect, no cookies or
+credentials.
 
 CMake has MSVC UTF-8/warning options, a Windows GUI executable and a macOS bundle,
 but **Windows/macOS have not been built or run in this audit**. Still to validate:

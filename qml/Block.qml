@@ -42,6 +42,7 @@ Item {
     required property int omitted // List items or table rows past markdown's bounds.
     // A fence cut off by the transcript's display bound: its source is a prefix.
     required property bool clipped
+    required property var media // Media: its pictures and videos (MediaBlock).
     required property double born // When the row was made (ms): entry motion.
     property var host: null
     property real wideWidth: width
@@ -224,7 +225,8 @@ Item {
             rule: rule,
             flow: flow,
             list: list,
-            quote: quote
+            quote: quote,
+            media: mediaBlock
         })[block.kind] ?? null
     }
 
@@ -241,6 +243,16 @@ Item {
             wrapMode: Text.Wrap
             color: Theme.secondary
             font.pixelSize: 13
+        }
+    }
+
+    Component {
+        id: mediaBlock
+        MediaBlock {
+            width: content.width
+            items: block.media
+            live: block.open
+            host: block.host
         }
     }
 

@@ -1,10 +1,12 @@
 #include "diagram.h"
 #include "markdown.h"
+#include "medialoader.h"
 #include "rich.h"
 #include "tex.h"
 #include "theme.h"
 #include "window.h"
 
+#include <QBuffer>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QPointer>
@@ -25,6 +27,32 @@ QQuickItem *findVisual(QQuickItem *item, const QString &name)
         if (auto *found = findVisual(child, name))
             return found;
     return nullptr;
+}
+
+void findAll(QQuickItem *item, const QString &name, QList<QQuickItem *> &out)
+{
+    if (item->objectName() == name && item->isVisible())
+        out << item;
+    for (auto *child : item->childItems())
+        findAll(child, name, out);
+}
+
+QList<QQuickItem *> findAll(QQuickItem *item, const QString &name)
+{
+    QList<QQuickItem *> out;
+    findAll(item, name, out);
+    return out;
+}
+
+QByteArray fixturePng(int width, int height)
+{
+    QImage image(width, height, QImage::Format_RGB32);
+    image.fill(QColor(56, 101, 148));
+    QByteArray bytes;
+    QBuffer buffer(&bytes);
+    buffer.open(QIODevice::WriteOnly);
+    image.save(&buffer, "PNG");
+    return bytes;
 }
 } // namespace
 
@@ -465,6 +493,125 @@ int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
     auto *markdownView = replyItem ? findVisual(replyItem, QStringLiteral("markdown")) : nullptr;
     check(markdownView && markdownView->property("trailingMargin").toInt() == 22,
           "last wide diagram retains its bottom margin for toolbar collapse");
+
+    // A reply's pictures and videos, their bytes from a fixture: nothing
+    // here reaches the network, and nothing untrusted is asked for unasked.
+    {
+        const QString first = "https://upload.wikimedia.org/wikipedia/commons/first.png";
+        const QString second = "https://upload.wikimedia.org/wikipedia/commons/second.png";
+        const QString elsewhere = "https://example.com/elsewhere.png";
+        const QString gone = "https://th.bing.com/th/id/gone";
+        const QString talk = "https://www.youtube.com/watch?v=aaaaaaaaaaa";
+        const QString old = "https://youtu.be/bbbbbbbbbbb";
+        const QString lost = "https://www.youtube.com/watch?v=ccccccccccc";
+        QHash<QString, QByteArray> bytes{
+            {first, fixturePng(240, 120)},
+            {second, fixturePng(120, 160)},
+            {elsewhere, fixturePng(200, 150)},
+            {"https://i.ytimg.com/vi/aaaaaaaaaaa/hq720.jpg", fixturePng(480, 270)},
+            {"https://i.ytimg.com/vi/bbbbbbbbbbb/hq720.jpg", fixturePng(120, 90)},
+            {"https://i.ytimg.com/vi/bbbbbbbbbbb/mqdefault.jpg", fixturePng(320, 180)}};
+        QStringList asked;
+        MediaLoader::instance()->setFetch(
+            [&bytes, &asked](const QString &url, bool, const MediaLoader::Done &done) {
+                asked << url;
+                done(bytes.value(url));
+            });
+        reply.state = QStringLiteral("live");
+        reply.key = QStringLiteral("smoke-media");
+        reply.text = QStringLiteral("![First](%1)\n![Second](").arg(first);
+        controller.transcript()->reset({reply});
+        QTest::qWait(300);
+        replyItem = findVisual(window->contentItem(), QStringLiteral("entry-assistant"));
+        check(replyItem && findVisual(replyItem, QStringLiteral("mediaWait")) &&
+                  !findVisual(replyItem, QStringLiteral("mediaStack")) && asked.isEmpty(),
+              "pictures still being written wait as one plate and load nothing");
+        reply.state = QStringLiteral("done");
+        reply.text = QStringLiteral("Here they are:\n![First](%1)\n![Second](%2)\n"
+                                    "[![Elsewhere](%3)](https://example.com/page)\n![Gone](%4)\n\n"
+                                    "[A talk · A channel · 4:40](%5) [%6](%6)\n\n%7")
+                         .arg(first, second, elsewhere, gone, talk, old, lost);
+        ++reply.revision;
+        controller.transcript()->apply({reply});
+        replyItem = findVisual(window->contentItem(), QStringLiteral("entry-assistant"));
+        check(replyItem &&
+                  QTest::qWaitFor(
+                      [&] { return findAll(replyItem, QStringLiteral("mediaCard")).size() == 2; },
+                      3000),
+              "trusted pictures load into a stack of what came");
+        check(!asked.contains(elsewhere), "a picture from elsewhere is not fetched unasked");
+        auto *stack = replyItem ? findVisual(replyItem, QStringLiteral("mediaStack")) : nullptr;
+        auto *caption =
+            replyItem ? findVisual(replyItem, QStringLiteral("mediaCaptionText")) : nullptr;
+        check(caption && caption->property("text").toString() == QStringLiteral("First"),
+              "the caption is the picture on top's");
+        check(stack && QMetaObject::invokeMethod(stack, "go", Q_ARG(QVariant, 1)) &&
+                  caption->property("text").toString() == QStringLiteral("Second"),
+              "turning the stack changes the caption");
+        const QString unrelated = "https://upload.wikimedia.org/wikipedia/commons/unrelated.png";
+        MediaLoader::instance()->load(unrelated, false);
+        check(QTest::qWaitFor([&] { return MediaLoader::instance()->state(unrelated) == "failed"; },
+                              1000),
+              "an unrelated picture settles");
+        QTest::qWait(50);
+        check(stack && stack->property("index").toInt() == 1 &&
+                  caption->property("text").toString() == QStringLiteral("Second"),
+              "a stack keeps its place while other pictures load");
+        check(replyItem &&
+                  QTest::qWaitFor(
+                      [&] { return findAll(replyItem, QStringLiteral("mediaLost")).size() == 1; },
+                      1000),
+              "a picture that did not come stays a link");
+        const auto asks =
+            replyItem ? findAll(replyItem, QStringLiteral("mediaAsk")) : QList<QQuickItem *>();
+        check(asks.size() == 1, "a picture from elsewhere waits for a click");
+        if (asks.size() == 1) {
+            const QPointF at = asks.first()->mapToScene(
+                QPointF(asks.first()->width() / 2, asks.first()->height() / 2));
+            QTest::mouseClick(window, Qt::LeftButton, {}, at.toPoint());
+            check(QTest::qWaitFor(
+                      [&] { return findAll(replyItem, QStringLiteral("mediaCard")).size() == 3; },
+                      3000) &&
+                      asked.contains(elsewhere) &&
+                      findAll(replyItem, QStringLiteral("mediaAsk")).isEmpty(),
+                  "a click on the plate asks for the picture and adds it to the stack");
+        }
+        // Blocks below the pictures are built over the next frames (Pacer).
+        QList<QQuickItem *> videos;
+        check(QTest::qWaitFor(
+                  [&] {
+                      videos = findAll(replyItem, QStringLiteral("mediaVideo"));
+                      return videos.size() == 3;
+                  },
+                  3000),
+              "every video link is a card");
+        if (videos.size() == 3) {
+            check(QTest::qWaitFor(
+                      [&] {
+                          return videos[0]->property("loaded").toBool() &&
+                                 videos[1]->property("loaded").toBool() &&
+                                 videos[2]->property("missing").toBool();
+                      },
+                      3000),
+                  "previews load, a missing wide one falls back, and none at all leaves the link");
+            check(videos[1]->property("tried").toInt() == 1,
+                  "YouTube's narrow placeholder is not a preview");
+            auto *title = findVisual(videos[0], QStringLiteral("mediaVideoTitle"));
+            auto *by = findVisual(videos[0], QStringLiteral("mediaVideoBy"));
+            check(title && title->property("text").toString() == QStringLiteral("A talk") && by &&
+                      by->property("text").toString() == QStringLiteral("A channel"),
+                  "a video link's words give its name and maker");
+            auto *otherBy = findVisual(videos[1], QStringLiteral("mediaVideoBy"));
+            auto *otherTitle = findVisual(videos[1], QStringLiteral("mediaVideoTitle"));
+            check(otherBy && otherBy->property("text").toString() == QStringLiteral("YouTube") &&
+                      otherTitle && !otherTitle->isVisible(),
+                  "a bare video link shows no invented name");
+            auto *thumb = findVisual(videos[2], QStringLiteral("mediaVideoThumb"));
+            check(thumb && !thumb->isVisible(), "a video without a preview loses its plate");
+        }
+        check(!window->grabWindow().isNull(), "a reply with pictures and videos paints");
+        MediaLoader::instance()->setFetch({});
+    }
     controller.transcript()->reset({});
 
     auto *dialog = window->findChild<QObject *>(QStringLiteral("settingsDialog"));

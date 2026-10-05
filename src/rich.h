@@ -104,6 +104,7 @@ class BlockModel final : public QAbstractListModel
         OmittedRole,
         ClippedRole,
         BornRole,
+        MediaRole, // Media: its pictures and videos (see data()).
     };
 
     // What holds these blocks: it sets the space between them. Plain:

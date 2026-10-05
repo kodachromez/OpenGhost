@@ -1,5 +1,6 @@
 // Test-only presentation injection. No backend, wire, credentials or host dialogs.
 #include "diagram.h"
+#include "medialoader.h"
 #include "rich.h"
 #include "window.h"
 #include <QDir>
@@ -125,6 +126,22 @@ int parityTest(QQmlApplicationEngine &engine, WindowController &controller, cons
             }
             controller.sessions()->apply({});
             controller.transcript()->reset({});
+            // A reply's pictures come only from the fixture's bytes, for the
+            // addresses it serves; every other load fails. Never the network.
+            {
+                const QByteArray bytes =
+                    QByteArray::fromBase64(f["imageData"].toString().toLatin1());
+                QStringList served{"https://parity.invalid/image.png"};
+                if (f.contains("mediaUrls")) {
+                    served.clear();
+                    for (auto url : f["mediaUrls"].toArray())
+                        served << url.toString();
+                }
+                MediaLoader::instance()->setFetch(
+                    [bytes, served](const QString &url, bool, const MediaLoader::Done &done) {
+                        done(served.contains(url) ? bytes : QByteArray());
+                    });
+            }
             QTest::qWait(30);
             QVector<Entry> rows;
             for (auto r : f["rows"].toArray()) {
@@ -225,6 +242,36 @@ int parityTest(QQmlApplicationEngine &engine, WindowController &controller, cons
                 "false;");
             if (f.contains("nativeAfter"))
                 run(f["nativeAfter"].toString());
+            // Real pointer clicks on every visible control of that name (a
+            // picture's consent plate), as the reference clicks its own. A
+            // click may rebuild the others, so each round finds them afresh.
+            if (f.contains("nativeClick")) {
+                const QString name = f["nativeClick"].toString();
+                const auto first = [&]() -> QQuickItem * {
+                    QQuickItem *found = nullptr;
+                    std::function<void(QQuickItem *)> look = [&](QQuickItem *item) {
+                        if (!found && item->objectName() == name && item->isVisible())
+                            found = item;
+                        for (auto *child : item->childItems())
+                            look(child);
+                    };
+                    look(window->contentItem());
+                    return found;
+                };
+                int clicks = 0;
+                for (QQuickItem *target = first(); target && clicks < 16; target = first()) {
+                    const QPointF at =
+                        target->mapToScene(QPointF(target->width() / 2, target->height() / 2));
+                    QTest::mouseClick(window, Qt::LeftButton, {}, at.toPoint());
+                    ++clicks;
+                    QTest::qWait(150);
+                }
+                if (!clicks || first())
+                    qFatal("Fixture click targets did not all respond: %s", qPrintable(id));
+                // The reference clicks without a pointer: nothing stays hovered.
+                QTest::mouseMove(window, QPoint(window->width() - 2, window->height() - 2));
+                QTest::qWait(250);
+            }
             for (auto p : f["propertiesAfter"].toArray()) {
                 const auto property = p.toObject();
                 auto *item = visual(window->contentItem(), property["object"].toString());
@@ -240,6 +287,21 @@ int parityTest(QQmlApplicationEngine &engine, WindowController &controller, cons
                     qFatal("Missing fixture action target: %s", qPrintable(id));
             }
             QTest::qWait(f["afterWait"].toInt(100));
+            if (f.contains("imageData") && f["mediaUrls"].toArray({QJsonValue("x")}).size() > 0) {
+                bool shown = false;
+                std::function<void(QQuickItem *)> find = [&](QQuickItem *item) {
+                    if ((item->objectName() == "mediaImage" ||
+                         item->objectName() == "mediaVideoImage") &&
+                        item->isVisible() && item->property("status").toInt() == 1 /* Ready */ &&
+                        item->property("sourceSize").toSize().width() == 240)
+                        shown = true;
+                    for (auto *child : item->childItems())
+                        find(child);
+                };
+                find(window->contentItem());
+                if (!shown)
+                    qFatal("Synthetic media image did not load: %s", qPrintable(id));
+            }
             if (dialog && dialog->property("visible").toBool()) {
                 const QStringList pages{"general", "providers", "usage", "appearance"};
                 auto *glide = visual(window->contentItem(), "settingsGlide");
@@ -274,6 +336,7 @@ int parityTest(QQmlApplicationEngine &engine, WindowController &controller, cons
             qInfo().noquote() << "captured" << pass << id;
         }
     }
+    MediaLoader::instance()->setFetch({});
     // The window outlives this function. Its last injected ledger must too.
     if (usage) {
         usage->setParent(&controller);

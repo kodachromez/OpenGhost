@@ -90,10 +90,11 @@ Safety/ownership details:
    Renderer commands have deadlines and owned process groups; interruption/error
    terminates the group. The private display is reaped in `finally`.
 4. Temporary HOME/config/data/cache/runtime/browser profiles; no real credential,
-   library or provider state. The native network-denying factory stays in place.
-   Reference HTTP(S) requests are intercepted and refused, except one synthetic
-   image URL fulfilled directly from fixture PNG bytes. No real image/model request
-   is sent. No file chooser, external browser, clipboard write or approval answer
+   library or provider state. The native network-denying factory stays in place,
+   and the native media loader gets an injected fetch. Both sides refuse every
+   HTTP(S) request except a fixture's served picture addresses (`mediaUrls`,
+   default the one synthetic image URL), fulfilled from fixture PNG bytes. No
+   real image/model request is sent. No file chooser, external browser, clipboard write or approval answer
    is invoked by the parity snapshots.
 5. Smoke-only native parity flags reject visible platforms and Qt platform
    overrides **before** constructing the application. No automatic visible retry.
@@ -181,7 +182,7 @@ coverage, not every possible data combination, animation frame or interaction.
 | Settings/auth | All four pages in dark/light; small/wide sheet; disconnected/connected/waiting/error/key prompt provider states; empty/populated/multi-provider usage |
 | Markdown | Headings/emphasis, nested/task/number lists, quotes/callout, table alignment, links/rule, literal HTML, Unicode/RTL/emoji, dark/light/2× |
 | Code/math | C++, Python, JavaScript, JSON, diff, long code, column arithmetic; inline/display TeX and matrix |
-| Media/files | Held/loaded image, image stack, blocked video thumbnail, sent image metadata, single/multiple sent/composer cards, attachment-note and drop presentation |
+| Media/files | Held/loaded image, image stack, blocked video thumbnail, trusted/captioned/lost/mixed galleries, loaded video previews (one and several), writing-in-progress plate, sent image metadata, single/multiple sent/composer cards, attachment-note and drop presentation |
 | Approval | Command, file-diff and web cards, collapsed and expanded; identical display objects, no actual operation/answer |
 | Diagram | All 43 dispatch families, plus light, invalid fallback and editor |
 | Unported reference views | Add dock, attachment-note editor, drop art, stats card, compact notice, mini-chat, lock and password field; measured as gaps |
@@ -252,8 +253,7 @@ Remaining visible findings:
 - Selection/veil/menu differences, including absent mini-chat action; sent file
   preview refusals and vertical rows rather than reference cards/thumbnails.
 - Add dock, attachment notes, drop art, stats/compact/mini/lock/browser views are
-  absent, not secretly implemented by the fixture injection. Media network denial
-  remains intact. These require separate product-scope decisions, not pixel hacks.
+  absent, not secretly implemented by the fixture injection. These require separate product-scope decisions, not pixel hacks.
 
 ## Safe fixes made
 

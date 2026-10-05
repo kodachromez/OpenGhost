@@ -89,7 +89,7 @@ def fixtures():
     im=Image.new('RGB',(240,120),'#386594'); draw=ImageDraw.Draw(im); draw.rectangle((20,20,120,100),fill='#7ecba9'); draw.ellipse((140,30,220,110),fill='#e9b94f')
     buf=io.BytesIO(); im.save(buf,format='PNG'); png=base64.b64encode(buf.getvalue()).decode()
     for name,text in markdown.items():
-        extra = dict(imageData=png,reference="{const asks=document.querySelectorAll('.md-gallery-ask'); if(!asks.length) throw Error('Missing image consent controls'); asks.forEach(el=>el.click());}",classification='intentional difference',notes='Reference image consent clicked, request fulfilled from synthetic local bytes by CDP; native network denial is retained, not bypassed.') if name in ['image','image-stack'] else {}
+        extra = dict(imageData=png,reference="{const asks=document.querySelectorAll('.md-gallery-ask'); if(!asks.length) throw Error('Missing image consent controls'); asks.forEach(el=>el.click());}",nativeClick='mediaAsk',notes='Both adapters click the image consent control; the request is fulfilled from synthetic local bytes (CDP in the reference, an injected MediaLoader fetch natively). No network.') if name in ['image','image-stack'] else {}
         add('markdown-'+name,rows=[reply(text)],**extra)
     add('markdown-light',theme='light',rows=[reply(markdown['headings']+'\n\n'+markdown['code-cpp'])])
     for name in ['single','multiple']:
@@ -97,7 +97,24 @@ def fixtures():
         if name=='multiple': cards += [dict(name='report.pdf',size=2400000,mime='application/pdf'),dict(name='main.cpp',size=3456,mime='text/plain')]
         add('attachments-sent-'+name,rows=[dict(prompt,attachments=cards)])
         add('attachments-composer-'+name,cards=cards)
-    add('markdown-image-held',rows=[reply(markdown['image'])],classification='intentional difference',notes='Reference click-to-load consent versus the native unavailable media link; no request is permitted.')
+    add('markdown-image-held',rows=[reply(markdown['image'])],notes='Both show the click-to-load plate for a picture from an untrusted place; no request is made.')
+    # Reply pictures and videos (media-embed.js): trusted places load by themselves, from
+    # synthetic bytes on both sides; anything not served stays a link or a plain card.
+    trusted='https://upload.wikimedia.org/wikipedia/commons/parity.png'
+    thumb=lambda id: f'https://i.ytimg.com/vi/{id}/hq720.jpg'
+    media={
+        'gallery-trusted':(f'![A trusted picture]({trusted})',[trusted]),
+        'gallery-source':(f'[![A captioned picture]({trusted})](https://example.com/page)',[trusted]),
+        'gallery-lost':(f'![Not there]({trusted})',[]),
+        'gallery-mixed':(f'Pictures:\n![Trusted]({trusted})\n![Elsewhere](https://parity.invalid/image.png)',[trusted]),
+        'video-thumb':('[A talk · A channel · 4:40](https://www.youtube.com/watch?v=abcdefghijk)',[thumb('abcdefghijk')]),
+        'videos-many':('[First talk · One](https://youtu.be/aaaaaaaaaaa) [Second talk · Two](https://youtu.be/bbbbbbbbbbb) [Third talk · Three · 12:05](https://youtu.be/ccccccccccc)',[thumb(x*11) for x in 'abc']),
+    }
+    for name,(text,served) in media.items():
+        add('media-'+name,rows=[reply(text)],imageData=png,mediaUrls=served,
+            notes='Served addresses fulfilled from synthetic bytes in both adapters; any other request fails. No network.')
+    add('media-streaming',rows=[reply(f'![First]({trusted})\n![Second](https://upload.wiki',state='live',copyable=False)],
+        notes='Pictures still being written wait as one plate in both renderers; nothing is requested.')
     add('attachment-image',rows=[dict(prompt,attachments=[dict(name='sample.png',mime='image/png',size=len(buf.getvalue()),image=True,url='data:image/png;base64,'+png,width=240,height=120)])],classification='intentional difference',notes='Reference image bytes are display data; native sent-card projection only retains metadata, so no thumbnail is fabricated.')
     for kind,effect in [('command','run'),('file','change'),('web','online')]:
         info=dict(kind=kind,effect=effect,badge=True,title='Review this operation',places=[dict(kind='file' if kind=='file' else 'folder',label='project',title='/fixture/project')],reveal='changes' if kind=='file' else 'command')

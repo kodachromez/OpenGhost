@@ -32,7 +32,7 @@ try {
   const pages = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
   ws = new WebSocket(pages.find(p => p.type === 'page').webSocketDebuggerUrl);
   await new Promise((resolve,reject) => { ws.onopen=resolve; ws.onerror=reject; });
-  let next=1, fixtureImage='';
+  let next=1, fixtureImage='', served=new Set();
   const waiting = new Map(), errors = [];
   ws.onmessage = ({data}) => {
     const msg=JSON.parse(data);
@@ -40,7 +40,7 @@ try {
     if (msg.method === 'Runtime.exceptionThrown') errors.push(msg.params.exceptionDetails);
     if (msg.method === 'Fetch.requestPaused') {
       const p=msg.params;
-      if(p.request.url==='https://parity.invalid/image.png' && fixtureImage)
+      if(served.has(p.request.url) && fixtureImage)
         void send('Fetch.fulfillRequest',{requestId:p.requestId,responseCode:200,responseHeaders:[{name:'Content-Type',value:'image/png'}],body:fixtureImage});
       else void send('Fetch.failRequest',{requestId:p.requestId,errorReason:'BlockedByClient'});
     }
@@ -70,6 +70,7 @@ try {
   for(let pass=0;pass<2;pass++) for(const f of fixtures) {
     if(f.manual) continue;
     fixtureImage=f.imageData||'';
+    served=new Set(f.mediaUrls||['https://parity.invalid/image.png']);
     await send('Emulation.setDeviceMetricsOverride',{width:f.width||1280,height:f.height||840,deviceScaleFactor:f.dpr||1,mobile:false});
     await send('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:f.motion?'no-preference':'reduce'},{name:'prefers-color-scheme',value:f.systemDark===false?'light':'dark'}]});
     await send('Page.navigate',{url:pathToFileURL(path.join(root,'reference/openghost/index.html')).href});
@@ -90,7 +91,7 @@ try {
     await evaluate(`document.querySelector('.thread').scrollTop=${f.scroll||0};`);
     if(f.referenceAfter) await evaluate(f.referenceAfter+'; true');
     await sleep(f.afterWait||100);
-    if(f.imageData && !await evaluate("[...document.querySelectorAll('.md-gallery img')].some(img=>img.complete && img.naturalWidth===240)"))
+    if(f.imageData && (f.mediaUrls||['x']).length && !await evaluate("[...document.querySelectorAll('.md-gallery img, .md-video-img')].some(img=>img.complete && img.naturalWidth===240)"))
       throw Error('Synthetic gallery image did not load: '+f.id);
     const geometry = await evaluate(`Object.fromEntries(['.sidebar','.composer','.thread','.welcome'].map(s=>{const r=document.querySelector(s).getBoundingClientRect();return [s,[r.x,r.y,r.width,r.height]]}))`);
     const image=await send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});

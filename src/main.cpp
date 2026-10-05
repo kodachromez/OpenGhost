@@ -1,5 +1,6 @@
 #include "appearance.h"
 #include "backend/fake_backend.h"
+#include "medialoader.h"
 #include "platform/platform.h"
 #include "window.h"
 #include <cstdio>
@@ -114,6 +115,8 @@ int main(int argc, char *argv[])
         [&engine](const QList<QQmlError> &) { engine.setProperty("smokeWarnings", true); });
 #endif
     engine.setNetworkAccessManagerFactory(denyNetwork());
+    // A reply's pictures, which MediaLoader alone fetches under its rules.
+    engine.addImageProvider(QStringLiteral("openghost-media"), new MediaImages);
     QVariantMap initial{{"frontend", QVariant::fromValue(&controller)}};
 #ifdef OPENGHOST_SMOKE_TEST
     // The offscreen GLX backing surface is allocated on first show and does
