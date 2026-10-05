@@ -254,6 +254,7 @@ ChatService::ChatService(Backend *backend, PreferencesStore *preferences, Librar
                 chat.reconciled = false;
                 chat.turn.terminal = true;
                 finishRows(chat, QStringLiteral("unconfirmed"));
+                m_host->turnEnded(chat.id);
             }
             m_approvals.clear();
             m_earlyApprovals.clear();
@@ -1381,6 +1382,7 @@ void ChatService::endTurn(ChatRecord &chat, const TurnCompleted &done, bool repl
     auto &turn = chat.turn;
     turn.terminal = true;
     cancelHost(turn); // A host step still running ends with its turn.
+    m_host->turnEnded(chat.id);
     turn.completed = replay ? -1 : QDateTime::currentMSecsSinceEpoch();
     const auto finish = done.finishReason.value_or(turn.finishReason);
     turn.activity.clear();

@@ -9,12 +9,15 @@
   absent from the reference's chat path.
 - No Rust agent/backend, source-port RPC/client, provider logic, tools, Electron,
   Chromium, WebEngine, Node or React in the native target. The legacy web files
-  under `reference/` are reference material only.
+  under `reference/` are reference material only. One exception: the built-in
+  browser panel's pages are Qt WebEngine guests (the reference's are Chromium
+  webviews), behind `OPENGHOST_BROWSER` (default ON). WebEngine never renders the
+  app's own UI, and an OFF build has no panel and reports no browser.
 - Keep backend integration separate from rendering. No fabricated acceptance,
   results, credentials or session state when disconnected.
 - Platform-specific work belongs in `src/platform/`, selected by CMake.
 - Read `docs/cpp-port.md` before migrating dependencies. Preserve attribution.
 - Focused checks: Release build with `OPENGHOST_BUILD_SMOKE_TEST=ON`, then
-  `native_contract_test`, `native_ui_smoke`, `native_fake_ui_smoke`, and
-  `git diff --check`. See README.md for commands and docs/repository-readiness.md
+  `native_contract_test`, `native_browser_test`, `native_ui_smoke`,
+  `native_fake_ui_smoke`, and `git diff --check`. See README.md for commands and docs/repository-readiness.md
   for known limitations; passing fake tests do not qualify a real backend.

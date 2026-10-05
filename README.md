@@ -26,11 +26,15 @@ Requirements:
   QuickControls2, QuickDialogs2 and ShaderTools; the Qt Quick Layouts, Shapes
   and Effects QML modules must also be available.
 - Qt Test when enabling the optional tests below.
+- Qt WebEngine (WebEngineQuick) for the built-in browser panel, unless configured
+  with `-DOPENGHOST_BROWSER=OFF`.
 
 Qt must be discoverable through CMake (for example,
 `-DCMAKE_PREFIX_PATH=/path/to/Qt/6.11.x/gcc_64`). There is no Cargo, Node,
-Electron, Chromium, WebEngine, React or provider SDK build dependency. The
-JavaScript expressions in QML are part of Qt, not a browser/Node runtime.
+Electron, React or provider SDK build dependency. Qt WebEngine's Chromium renders
+only the pages inside the built-in browser panel, as the reference's Chromium
+webviews do; `-DOPENGHOST_BROWSER=OFF` builds without it and without the panel.
+The JavaScript expressions in QML are part of Qt, not a browser/Node runtime.
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -128,7 +132,8 @@ successful integration with a real backend.
 | Mini chat, locks, folder creation | State/service APIs and tests exist. **No mini-chat dialog, lock/unlock screen or add-folder picker is exposed in the UI.** Production encryption is absent. Existing folder groups can be displayed/collapsed and their chats managed. |
 | Models/auth/usage | Frontend selectors, status, login controls and usage views exist. Catalog, sign-in, approval effects and token counts are **simulated** in fake mode. No provider credentials are saved. |
 | Real generation, tools, durable backend recovery | **Backend-dependent and unavailable.** No backend is bundled or contacted. |
-| Host browser/media tools | Typed requests and tested dispatch/cancellation bookkeeping exist; shipped `NoHost` publishes no tools or browser and requests refuse. No browser engine, downloads or media preparation. |
+| Built-in browser panel | Implemented in the default build on Qt WebEngine guests: globe toggle, resizable panel, tabs, address/search, back/forward/reload/stop, loading/failure/crash states, saved layout and tabs, persistent site profile, driving/Take control/Hand back overlays. Usable without a backend. |
+| Host browser/media tools | Typed requests and tested dispatch/cancellation bookkeeping exist. The panel reports its snapshot but publishes **no browser tools** yet (`available: false`), so host calls refuse. No downloads, page context menu or media preparation. |
 | Compaction/account limits | Contract types exist; fake refuses them, no operational compaction UI or live billing/limits. Saved compact/stats rows are retained as cache data, not rendered as cards. |
 | Other intentionally absent UI | No tool/subagent/reasoning transcript panels, source-port service/workspace picker, voice controls, extra settings tabs or visual diagram form editor. Reasoning/tool activity is not assistant text. |
 
@@ -312,8 +317,23 @@ policy, not frontend sandboxing or local tool enforcement.
 
 `HostServices` publishes tool schemas at initialization and routes only named,
 live-turn calls, tracking duplicate in-flight calls, cancellation and turn-end
-release. The default `NoHost` exposes no browser/tools, so `ChatService` returns
-`unsupported`. A scripted test host exercises routing, not a working browser.
+release. The desktop build's `Browser` host (`src/frontend/browser.*`) supplies
+the panel's `host.browser` snapshot and change notifications and releases a
+chat's hold on the browser when its turn ends, but publishes no tools yet; an
+OFF build uses `NoHost` (null browser). Either way host calls return
+`unsupported`. A scripted test host exercises routing, not browser operations.
+
+### Built-in browser
+
+The panel (`qml/BrowserPanel.qml`, `qml/BrowserGuest.qml`) draws the host's
+state; each tab's page is a WebEngine guest in its own persistent profile
+(`AppDataLocation/browser`), and the layout and tab URLs/titles are saved to
+`browser.json` beside the preferences. Guests get no app objects or channel.
+`native_browser_test` checks the host's lifecycle, navigation/error/crash states,
+panel open/width, hand-back and turn-end release without an engine; both UI
+smokes drive the real panel on local pages (`data:` URLs and a refused loopback
+port; no network). An `-DOPENGHOST_BROWSER=OFF` smoke checks the panel's absence.
+Status by feature: [browser/web audit](docs/browser-web-feature-audit.md).
 
 ## Repository map
 

@@ -1,5 +1,6 @@
 #include "appearance.h"
 #include "backend/fake_backend.h"
+#include "frontend/browser.h"
 #include "platform/platform.h"
 #include "window.h"
 #include <cstdio>
@@ -13,6 +14,9 @@
 #include <QQmlApplicationEngine>
 #include <QStandardPaths>
 #include <QTemporaryDir>
+#ifdef OPENGHOST_BROWSER
+#include <QtWebEngineQuick/qtwebenginequickglobal.h>
+#endif
 
 #ifdef OPENGHOST_SMOKE_TEST
 int smokeTest(QQmlApplicationEngine &engine, WindowController &controller);
@@ -38,6 +42,10 @@ int main(int argc, char *argv[])
     }
 #endif
     platform::beforeApplication();
+#ifdef OPENGHOST_BROWSER
+    // The browser panel's pages (Qt WebEngine) share the window's GL context.
+    QtWebEngineQuick::initialize();
+#endif
     QGuiApplication app(argc, argv);
     platform::afterApplication();
     app.setApplicationName(QStringLiteral("openghost-native"));
@@ -72,6 +80,7 @@ int main(int argc, char *argv[])
     QString appearancePath;
     QString preferencesPath;
     QString dataPath;
+    QString browserPath, browserStorage;
 #ifdef OPENGHOST_SMOKE_TEST
     QTemporaryDir testSettings;
     if (parser.isSet(QStringLiteral("smoke-test")) ||
@@ -81,12 +90,19 @@ int main(int argc, char *argv[])
         appearancePath = testSettings.path() + QStringLiteral("/appearance.json");
         preferencesPath = testSettings.path() + QStringLiteral("/preferences.json");
         dataPath = testSettings.path() + QStringLiteral("/library");
+        browserPath = testSettings.path() + QStringLiteral("/browser.json");
+        browserStorage = testSettings.path() + QStringLiteral("/browser");
     } else
 #endif
     {
         const QString config = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
         appearancePath = config + QStringLiteral("/appearance.json");
         preferencesPath = config + QStringLiteral("/preferences.json");
+        // The browser panel's layout and tabs (openghost.browser), and its
+        // sites' own storage (persist:browser): signed-in sites stay signed in.
+        browserPath = config + QStringLiteral("/browser.json");
+        browserStorage = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) +
+                         QStringLiteral("/browser");
         // Display caches, recovery markers, chat index and usage ledger: local
         // frontend state, never backend history or credentials. The fake's
         // sessions die with the process, so its chats never enter the profile.
@@ -105,7 +121,14 @@ int main(int argc, char *argv[])
     std::unique_ptr<openghost::Backend> backend;
     if (parser.isSet(QStringLiteral("fake-backend")))
         backend = std::make_unique<openghost::FakeBackend>();
-    WindowController controller(backend.get(), preferencesPath, dataPath);
+    std::unique_ptr<openghost::Browser> browser;
+#ifdef OPENGHOST_BROWSER
+    // The desktop panel exists with or without an agent backend.
+    browser = std::make_unique<openghost::Browser>(browserPath, browserStorage);
+#else
+    Q_UNUSED(browserStorage)
+#endif
+    WindowController controller(backend.get(), preferencesPath, dataPath, browser.get());
     QObject::connect(&controller, &WindowController::closeRequested, &app, &QCoreApplication::quit);
     QQmlApplicationEngine engine;
 #ifdef OPENGHOST_SMOKE_TEST

@@ -15,6 +15,8 @@
 #include <QTemporaryDir>
 #include <QtTest>
 
+int browserSmoke(QQmlApplicationEngine &engine, WindowController &controller);
+
 namespace
 {
 QQuickItem *findVisual(QQuickItem *item, const QString &name)
@@ -578,6 +580,7 @@ int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
                   "usage does not invent a display name for an unlisted provider");
         }
     }
+    failures += browserSmoke(engine, controller);
     Theme::choose(QStringLiteral("light"));
     QTest::qWait(100);
     check(!window->grabWindow().isNull(), "light theme paints");

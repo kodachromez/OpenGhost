@@ -238,7 +238,9 @@ Result FakeBackend::execute(const Command &command)
         auto &turn = session->turns[session->active];
         if (steer->turnId != turn.recovery.turnId || steer->clientInputId.isEmpty())
             return failure("stale_turn", "Wrong steering identity.");
-        if (!supported(steer->input) || steer->host.browser ||
+        // A browser snapshot is context the fake ignores: it simulates no
+        // browser operation and publishes no host tool.
+        if (!supported(steer->input) ||
             (steer->input.text.trimmed().isEmpty() && steer->input.attachments.isEmpty()))
             return failure("unsupported", "Unsupported steering input.");
         if (turn.steering.contains(steer->clientInputId)) {
@@ -255,11 +257,10 @@ Result FakeBackend::execute(const Command &command)
             (start->input.text.trimmed().isEmpty() && start->input.attachments.isEmpty()))
             return failure(QStringLiteral("invalid_request"),
                            QStringLiteral("Session, client turn and text required."));
-        if (!supported(start->input) || !start->params.userContext.files.isEmpty() ||
-            start->params.host.browser)
+        if (!supported(start->input) || !start->params.userContext.files.isEmpty())
             return failure(QStringLiteral("unsupported"),
-                           QStringLiteral("Fake supports prepared text attachments only; browser, "
-                                          "media and pinned files remain mocked."));
+                           QStringLiteral("Fake supports prepared text attachments only; media "
+                                          "and pinned files remain mocked."));
         if (!m_connected || !valid(start->params.selection))
             return failure(QStringLiteral("model_unavailable"),
                            QStringLiteral("Choose a fake catalog model."));

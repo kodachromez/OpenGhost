@@ -10,6 +10,13 @@ set(CMAKE_FIND_PACKAGE_RESOLVE_SYMLINKS ON)
 find_package(Qt6 6.11 REQUIRED COMPONENTS Core Gui Network Qml Quick QuickControls2
     QuickDialogs2 ShaderTools)
 qt_policy(SET QTP0001 NEW)
+# The built-in browser panel (browser-panel.js): its pages are Qt WebEngine
+# guests, as the reference's are Chromium webviews. OFF builds have no panel and
+# report no browser (host.browser = null), as the reference's web build does.
+option(OPENGHOST_BROWSER "Build the built-in browser panel on Qt WebEngine" ON)
+if(OPENGHOST_BROWSER)
+    find_package(Qt6 6.11 REQUIRED COMPONENTS WebEngineQuick)
+endif()
 
 function(native_warnings target)
     if(MSVC)
@@ -37,6 +44,8 @@ add_library(native_contract STATIC src/backend/types.h src/backend/backend.h
 target_include_directories(native_contract PUBLIC src)
 target_link_libraries(native_contract PUBLIC Qt6::Core)
 native_warnings(native_contract)
+# The browser panel's state and host.browser snapshot; no engine, QtCore only.
+target_sources(native_contract PRIVATE src/frontend/browser.h src/frontend/browser.cpp)
 
 add_library(native_window STATIC src/model.cpp src/settings.cpp src/window.cpp src/motion.cpp
     src/appearance.cpp src/presentation.cpp src/offline_services.h src/platform/desktop.cpp)
@@ -51,7 +60,8 @@ qt_add_qml_module(native_window URI OpenGhost.Native VERSION 1.0 NO_PLUGIN RESOU
         src/shadow.h src/shadow.cpp src/reveal.h src/reveal.cpp
         src/exposure.h src/exposure.cpp src/wave.h src/wave.cpp
         src/selection.h src/selection.cpp
-        src/diagramview.h src/diagramview.cpp)
+        src/diagramview.h src/diagramview.cpp
+        src/browserfocus.h src/browserfocus.cpp)
 target_link_libraries(native_window PUBLIC native_contract native_rich Qt6::Gui Qt6::Network
     Qt6::Quick Qt6::QuickControls2)
 native_warnings(native_window)
@@ -73,6 +83,14 @@ foreach(name Main ChatEntry LiveText Sidebar SettingsDialog Markdown Block Inlin
     set_source_files_properties(qml/${name}.qml PROPERTIES QT_RESOURCE_ALIAS ${name}.qml)
     list(APPEND qml_files qml/${name}.qml)
 endforeach()
+if(OPENGHOST_BROWSER)
+    foreach(name BrowserPanel BrowserGuest)
+        set_source_files_properties(qml/${name}.qml PROPERTIES QT_RESOURCE_ALIAS ${name}.qml)
+        list(APPEND qml_files qml/${name}.qml)
+    endforeach()
+    target_link_libraries(openghost-native PRIVATE Qt6::WebEngineQuick)
+    target_compile_definitions(openghost-native PRIVATE OPENGHOST_BROWSER)
+endif()
 qt_add_qml_module(openghost-native URI OpenGhost.Ui VERSION 1.0 RESOURCE_PREFIX /
     QML_FILES ${qml_files} IMPORTS OpenGhost.Native)
 qt_add_resources(openghost-native icon PREFIX / BASE resources FILES resources/openghost.png)
@@ -94,6 +112,14 @@ if(OPENGHOST_BUILD_SMOKE_TEST)
     add_test(NAME native_fake_ui_smoke COMMAND openghost-native --smoke-test --fake-backend)
     set_tests_properties(native_ui_smoke native_fake_ui_smoke PROPERTIES TIMEOUT 30
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_QPA_PLATFORMTHEME=generic;QT_FORCE_STDERR_LOGGING=1;OPENGHOST_REDUCED_MOTION=0")
+    # The browser panel's state machine, and its real guests in the UI smoke.
+    add_executable(native_browser_test tests/browser.cpp)
+    target_link_libraries(native_browser_test PRIVATE native_contract Qt6::Test)
+    native_warnings(native_browser_test)
+    add_test(NAME native_browser_test COMMAND native_browser_test)
+    set_tests_properties(native_browser_test PROPERTIES TIMEOUT 15)
+    target_sources(openghost-native PRIVATE tests/browser_smoke.cpp)
+    set_tests_properties(native_ui_smoke native_fake_ui_smoke PROPERTIES TIMEOUT 60)
 endif()
 
 include(GNUInstallDirs)

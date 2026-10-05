@@ -486,6 +486,31 @@ ApplicationWindow {
         onFolderWanted: window.notice = "Folder management is not connected in this UI shell."
         onRefused: text => window.notice = text
     }
+    // The built-in browser (browser-panel.js), only in the desktop build: a
+    // card --chat-gap from the window's right edge, under the chat card, which
+    // makes room for it while it is open (.app.is-browser-open .main).
+    readonly property var browser: frontend.browser
+    readonly property real browserRoom: width - (sidebarOpen ? sidebarWidth : 0) - 3 * 8
+    readonly property int browserWidth: browser ? (browser.savedWidth, browser.widthFor(browserRoom)) : 0
+    readonly property bool browserResizing: browserLoader.item ? browserLoader.item.resizing : false
+    property real chatRight: browser && browser.open ? 16 + browserWidth : 8
+    Behavior on chatRight {
+        enabled: !Theme.reducedMotion && !window.browserResizing
+        NumberAnimation { duration: 600; easing.type: Easing.Bezier; easing.bezierCurve: Theme.motion }
+    }
+    Loader {
+        id: browserLoader
+        objectName: "browserLoader"
+        active: window.browser !== null
+        x: window.width - 8 - window.browserWidth
+        width: window.browserWidth
+        height: window.height - 8
+        Component.onCompleted: if (window.browser) setSource("BrowserPanel.qml", {
+            browser: window.browser, frontend: window.frontend })
+        onLoaded: item.room = Qt.binding(() => window.browserRoom)
+    }
+    // A press outside the panel takes the keyboard back from its pages.
+    BrowserFocus { panel: browserLoader.item }
     // The chat panel (.main): flush with the sidebar and the window's top,
     // --chat-gap (8 px) inside the right and bottom edges, on its own
     // background, with the double contour: 1.5 px --contour-inner inside,
@@ -527,7 +552,7 @@ ApplicationWindow {
     Rectangle {
         id: panel
         x: window.sidebarOpen ? window.sidebarWidth : 8
-        width: window.width - x - 8
+        width: window.width - x - window.chatRight
         height: window.height - 8
         radius: 12
         antialiasing: true
@@ -595,6 +620,80 @@ ApplicationWindow {
                 }
             }
             onClicked: window.sidebarOpen = !window.sidebarOpen
+        }
+        // .browser-toggle: the globe 10 px inside the top-right corner, in the
+        // desktop build only. Hovering spins its meridian (170/19); open, the
+        // globe fills (170/24); a dot pulses while the agent uses the browser.
+        ToolButton {
+            id: browserToggle
+            objectName: "browserToggle"
+            visible: window.browser !== null
+            x: panel.width - 42
+            y: 10
+            z: 3
+            width: 32
+            height: 32
+            padding: 0
+            Accessible.name: window.browser && window.browser.open ? "Hide browser" : "Show browser"
+            ButtonTip { text: browserToggle.Accessible.name }
+            Spring { id: globeSpin; goal: !Theme.reducedMotion && browserToggle.hovered ? 1 : 0; k: 170; c: 19 }
+            Spring {
+                id: globeOpen
+                goal: window.browser && window.browser.open ? 1 : 0
+                k: 170
+                c: 24
+                Component.onCompleted: snap()
+            }
+            Spring { id: globePress; goal: browserToggle.down ? 1 : 0; k: 230; c: 27 }
+            background: Rectangle {
+                radius: 8
+                color: "transparent"
+                border.width: 2
+                border.color: Theme.alpha(Theme.strong, 0.35)
+                visible: browserToggle.visualFocus
+            }
+            contentItem: Item {
+                opacity: browserToggle.hovered || browserToggle.visualFocus ? 0.85 : 0.55
+                Behavior on opacity { NumberAnimation { duration: 200; easing.type: Easing.Bezier; easing.bezierCurve: Theme.ease } }
+                Item {
+                    anchors.centerIn: parent
+                    anchors.verticalCenterOffset: 2 * globePress.value * 22 / 60
+                    width: 22
+                    height: 22
+                    opacity: 1 - 0.3 * globePress.value
+                    GlobeIcon {
+                        objectName: "globeGlyph"
+                        anchors.fill: parent
+                        spin: globeSpin.value
+                        open: globeOpen.value
+                        color: Theme.strong
+                    }
+                    // .live: r 6 at (83, 37) of the 30…90 view.
+                    Rectangle {
+                        objectName: "browserLive"
+                        x: 53 * 22 / 60 - width / 2
+                        y: 7 * 22 / 60 - height / 2
+                        width: 12 * 22 / 60
+                        height: width
+                        radius: width / 2
+                        color: Theme.strong
+                        visible: window.browser !== null && window.browser.agent
+                        SequentialAnimation on opacity {
+                            running: !Theme.reducedMotion && window.browser !== null && window.browser.agent
+                            loops: Animation.Infinite
+                            NumberAnimation { to: 0.35; duration: 800; easing.type: Easing.InOutQuad }
+                            NumberAnimation { to: 1; duration: 800; easing.type: Easing.InOutQuad }
+                        }
+                        SequentialAnimation on scale {
+                            running: !Theme.reducedMotion && window.browser !== null && window.browser.agent
+                            loops: Animation.Infinite
+                            NumberAnimation { to: 0.75; duration: 800; easing.type: Easing.InOutQuad }
+                            NumberAnimation { to: 1; duration: 800; easing.type: Easing.InOutQuad }
+                        }
+                    }
+                }
+            }
+            onClicked: window.browser.toggle()
         }
         // The thread fills the panel and scrolls under the floating composer
         // (.thread-view); its list ends above the composer (--composer-space).

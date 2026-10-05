@@ -23,6 +23,8 @@ class WindowController final : public QObject
     Q_PROPERTY(QObject *settings READ settings CONSTANT)
     Q_PROPERTY(QObject *general READ general CONSTANT)
     Q_PROPERTY(QObject *usage READ usage CONSTANT)
+    // The desktop build's browser panel (openghost::Browser); null without one.
+    Q_PROPERTY(QObject *browser READ browser CONSTANT)
     Q_PROPERTY(QString status READ status NOTIFY changed)
     Q_PROPERTY(bool routine READ routine NOTIFY changed)
     Q_PROPERTY(QString activity READ activity NOTIFY changed)
@@ -44,13 +46,15 @@ class WindowController final : public QObject
   public:
     explicit WindowController(QObject *parent = nullptr);
     // `dataPath`: the frontend's local chat/usage store; empty keeps it in memory.
+    // `host`: the desktop's host services (the browser panel), else none.
     WindowController(openghost::Backend *backend, QString preferencesPath, QString dataPath = {},
-                     QObject *parent = nullptr);
+                     openghost::HostServices *host = nullptr, QObject *parent = nullptr);
     TranscriptModel *transcript() { return &m_transcript; }
     SessionModel *sessions() { return &m_sessions; }
     Settings *settings() { return &m_settings; }
     GeneralPreview *general() { return &m_general; }
     UsagePreview *usage() { return &m_usage; }
+    QObject *browser() const { return m_browser; }
     QString status() const { return m_notice.isEmpty() ? m_chat.status() : m_notice; }
     QString session() const { return m_chat.current().id; }
     bool ready() const { return m_chat.ready(); }
@@ -162,6 +166,7 @@ class WindowController final : public QObject
     }
     void sync();
     void catalog();
+    QObject *m_browser = nullptr;
     openghost::PreferencesStore m_preferences;
     std::unique_ptr<openghost::KeyStore> m_store;
     openghost::Library m_library;

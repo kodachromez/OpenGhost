@@ -10,7 +10,8 @@ current audit findings and qualification limits.
 The target is the **dissected OpenGhost 1.3 frontend**, not a redesign. The native
 C++17/Qt 6.11+ implementation supplies the window, sidebar, composer, settings,
 renderers, original splash/motion and frontend-owned state. It builds without an
-agent backend, credentials, workspace grants, Node or a browser runtime.
+agent backend, credentials, workspace grants or Node. The built-in browser panel's
+pages need Qt WebEngine; `-DOPENGHOST_BROWSER=OFF` builds without it.
 
 Normal startup is disconnected. `--fake-backend` injects a QtCore-only in-memory
 fixture. There is **no real backend, wire adapter, process transport, RPC or FFI**.
@@ -98,10 +99,12 @@ QML resource namespaces are `OpenGhost.Ui` and `OpenGhost.Native`.
   Recover/Abandon & Delete banner. The reference's `chat.js::applyEvent` tracks
   tool status/working ghost, not tool-result cards. Approval cards and model
   thinking-level selection remain; reasoning events are not drawn.
-- No mini-chat dialog, password lock screen, add-folder picker, browser panel,
-  broader plus-menu operations or visual diagram form editor. Mini/lock/folder
+- No mini-chat dialog, password lock screen, add-folder picker, broader
+  plus-menu operations or visual diagram form editor. Mini/lock/folder
   **state** exists; that does not imply those views are ported.
-- No Electron, Chromium, WebEngine, Node or React in the native target.
+- No Electron, Node or React in the native target. Qt WebEngine (Chromium) is
+  used only for the browser panel's guest pages (`OPENGHOST_BROWSER`), mirroring
+  the reference's Chromium webviews; it never renders the app's own UI.
 
 ## Typed boundary and future adapters
 
@@ -320,10 +323,14 @@ a local timer. Account limits/billing remain unsupported.
 tool schemas and asynchronous completion/cancellation. `ChatService` checks
 published names, live session/turn and duplicate **in-flight** call identities;
 finished callbacks answer once, reverse cancellation releases without answering,
-and turn end cancels/releases with a cancelled result. Shipped `NoHost` publishes
-no tools and a null browser, so the service refuses calls as unsupported. Tests
-inject a scripted host; browser engine/page identities, hand-back queue, downloads
-and media handling do not exist. Observed browser sign-in is never verified auth.
+and turn end cancels/releases with a cancelled result and tells the host
+(`turnEnded`) so the browser drops that chat's hold. The desktop build's
+[`Browser`](../src/frontend/browser.h) reports the panel's snapshot and changes but
+publishes no tools (`available: false`); an OFF build's `NoHost` reports a null
+browser. Either way the service refuses host calls as unsupported. Tests inject a
+scripted host; browser operations, page/ref identities, the agent-side hand-back
+wait, downloads and media handling do not exist yet. Observed browser sign-in is
+never verified auth. The fake accepts a browser snapshot as ignored context.
 
 ## Fake-backend limits
 

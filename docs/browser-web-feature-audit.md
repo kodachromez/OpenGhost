@@ -14,11 +14,19 @@ as `346e242` during the audit; their source diff was checked for impact on these
 findings. This commit contains only this document. No features, transport, Rust,
 RPC or FFI were added, and the reference was not changed.
 
-**The native application has no built-in browser, and implements none of the 11
-reference browser tools.** Browser-shaped C++ values and a scripted contract test
-are not a browser implementation. File support is a real but restricted UTF-8
-text-attachment path. Image previews and pinned-file settings are stubs; reply
-media and the browser download service are absent.
+**Update — browser foundation slice.** The desktop build now has the reference's
+built-in browser panel on Qt WebEngine guests (`OPENGHOST_BROWSER`, default ON,
+chosen because the reference renders its pages in embedded Chromium webviews):
+panel/toggle/width, tabs, address and navigation controls, guest lifecycle,
+loading/failure/crash states, saved layout, focus lending, Take control / Hand
+back state and turn-end release, and the live `host.browser` snapshot. Rows moved
+by that work are marked in the matrix and listed under
+[this pass](#browser-foundation-slice). **It still implements none of the 11
+reference browser tools:** no tool is published and the snapshot says
+`available: false`. The rest of this audit's original findings stand. File
+support is a real but restricted UTF-8 text-attachment path. Image previews and
+pinned-file settings are stubs; reply media and the browser download service are
+absent.
 
 ### Summary counts
 
@@ -28,12 +36,16 @@ Reference absences listed later are not counted as missing features.
 
 | Status | Features |
 | --- | ---: |
-| MATCH | 6 |
-| PARTIAL | 10 |
-| MOCK ONLY | 4 |
-| MISSING | 54 |
+| MATCH | 12 |
+| PARTIAL | 19 |
+| MOCK ONLY | 3 |
+| MISSING | 40 |
 | INTENTIONAL DIFFERENCE | 1 |
 | **Total** | **75** |
+
+The original audit counted 6 / 10 / 4 / 54 / 1; the browser foundation slice
+moved B01–B04, B06 and B15 to MATCH, B05, B07, B09–B13 and H07 from MISSING to
+PARTIAL, and H02 from MOCK ONLY to PARTIAL.
 
 - **MATCH:** the scoped frontend behavior exists, including deliberately inert
   presentation. Does not imply a connected agent or identical pixels.
@@ -72,16 +84,20 @@ Reference absences listed later are not counted as missing features.
 
 ### Native
 
-1. `src/main.cpp` creates either no `Backend` or `FakeBackend`.
-   `WindowController` constructs `ChatService` **without** a `HostServices`
-   argument. `ChatService` therefore selects `NoHost` in both modes.
-2. `src/frontend/host.h::NoHost` returns no browser and no tools.
-   `ChatService::initialize` publishes that empty list; `params` and steering
-   supply a null browser. `reverse` refuses unpublished host tools before calling
-   `run`. The no-op `NoHost::run` is not an executable browser fallback.
-3. `CMakeLists.txt`, the native source tree and the QML registration list have no
-   browser panel, engine, browser controller, PDF extractor or media service.
-   `FakeBackend` explicitly refuses browser context, non-text attachments and
+1. `src/main.cpp` creates either no `Backend` or `FakeBackend`. With
+   `OPENGHOST_BROWSER` it initializes Qt WebEngine and creates an
+   `openghost::Browser` host (`src/frontend/browser.*`), passed through
+   `WindowController` to `ChatService` in both modes; an OFF build passes none,
+   so `ChatService` selects `NoHost`.
+2. `Browser::tools()` is empty, like `NoHost`'s: `ChatService::initialize`
+   publishes no host tools and `reverse` refuses host calls before `run`.
+   `Browser::browser()` supplies the panel's snapshot (`available: false`) to
+   `params`, steering and `browserChanged`; `NoHost` supplies null.
+   `HostServices::turnEnded` is called on every turn end and disconnect.
+3. `qml/Main.qml` loads `qml/BrowserPanel.qml` (desktop build only), whose
+   `qml/BrowserGuest.qml` WebEngine views report page events to `Browser` and
+   carry out its `act` commands. There is still no PDF extractor or media service.
+   `FakeBackend` ignores browser context and refuses non-text attachments and
    pinned files. The test-only `ScriptedHost` advertises just `browser_snapshot`,
    records calls, and relies on the test to emit a result.
 4. `WindowController::pick` → `AttachmentStore::prepare/resolve` → `ChatService`
@@ -142,35 +158,35 @@ Generic JSON capacity is explicitly not credited as an implemented feature.
 
 | ID / reference feature | Status | Exact reference implementation | Native implementation and absent/different behavior | Contracts / new types; work |
 | --- | --- | --- | --- | --- |
-| B01 — Open/close browser panel and resize alongside chat | MISSING | `script.js` desktop composition; `browser-toggle.js::BrowserToggle`; `browser-panel.js::build/setOpen/fit/resizer`; `styles.css` browser selectors | None in `qml/Main.qml` or the `CMakeLists.txt` QML list. No globe toggle, sidebar panel, empty view, draggable width, closed-panel inertness or responsive chat/browser split. | BS has `open`; no boundary type. Local panel/control and width state needed. **UI-only** shell, with live content dependent on the host. |
-| B02 — User tab strip and tab management | MISSING | `browser-panel.js::addTab/newTab/select/close/render` | None; `src/frontend/host.h` is only a service seam. No title/favicon/loading tab strip, new/select/close or middle-click close. Reference manual creation may evict an older non-active tab above 12; tool creation instead refuses at capacity (T11). | BS has tab summaries; no boundary type. Local tab model, icons, guest ownership and UI operations needed. **Mixed** UI/host. |
-| B03 — Address entry, search and local-page navigation | MISSING | `browser-panel.js::normalize/go/syncBar/build`; `desktop/browser.js::normalize` | No address field or navigation host. Missing HTTPS/HTTP host normalization, Google query fallback, absolute local paths, `file:`, `about:` and `data:` pages; focus-select, Enter and Escape restoration, and dimmed URL components. Reference renderer and host normalizers differ slightly, e.g. host explicitly handles `[::1]`. | HT JSON and BS URLs suffice at the boundary. Local address/control interface needed. **Mixed** UI/host. |
-| B04 — Per-tab back/forward, reload/stop and external-open controls | MISSING | `browser-panel.js::build/syncBar`; `desktop/browser.js::navigate/adopt` | `src/platform/desktop.cpp::openLink` supports external links only. There is no guest navigation stack, enabled-state updates, reload-to-stop swap or browser toolbar. Reference has guest history, not a separate history-list UI. | BS does not contain `canGoBack/canGoForward`; local navigation state/actions needed, no boundary type. **Mixed**. |
-| B05 — Lazy guests, readiness, failure and crash recreation | MISSING | `browser-panel.js::constructor/createView/ensure/close`; `desktop/browser.js::adopt/entry` | No guest lifecycle under `NoHost`. Lazy saved tabs do not exist; no `dom-ready`, destroyed/failed/gone transitions or recreate-on-next-attempt behavior. | BS represents states but performs none. Local guest/readiness ownership required; no boundary type. **Host-service-only** lifecycle, projected by B06. |
-| B06 — Visible loading/error/retry states | MISSING | `browser-panel.js::createView/render/syncBar/build`; `styles.css` browser progress, spinner and error styles | No browser-specific spinner/progress, error host/code, retry button or crashed-page message in `qml/Main.qml`. A general disconnected notice is not this UI. | BS has loading/status, not detailed per-tab error text. Local error/toolbar presentation extension required; no boundary type. **UI-only**, fed by B05. |
-| B07 — Browser keyboard shortcuts and focus lending | MISSING | `desktop/browser.js::adopt` `before-input-event`; `browser-panel.js::constructor/run/giveBack/take/handBack` | No guest focus to transfer. Native composer Escape handling is not address/new/close/reload/history shortcuts, guest DevTools, or lending keyboard focus back to chat between agent steps. | BS control and HT calls insufficient for focus commands; local host/UI interface required, no boundary type. **Mixed**. |
-| B08 — Guest popup/new-tab routing and context menu | MISSING | `desktop/browser.js::adopt` window-open and context-menu handlers; `browser-panel.js::onEvent` | No equivalent in `src/platform/` or QML. Missing foreground/background tabs from guest links, separate `new-window` popup, open/copy link/image, editable cut/copy/paste/select-all, selection copy, history/reload and Inspect. | Local guest event/menu APIs needed; existing external-link helper is not enough. No boundary type. **Mixed** UI/host. |
-| B09 — Agent ownership overlays and pointer visualization | MISSING | `browser-panel.js::drive/sync/point`; `browser-toggle.js` live badge; `desktop/browser.js::pointer` | No driving badge, Take Control affordance, user-control banner, live toggle, animated cursor or click ripple. Generic working ghost in `qml/Main.qml` is not browser ownership. | BS control exists; HS has no pointer event or driver UI. Local event/driver projection needed, no boundary type. **Mixed**. |
-| B10 — Take Control / Hand Back without replaying the interrupted action | MISSING | `browser-panel.js::take/handBack/waitForAgent/release`; `chat.js::onHostTool/awaitHandBack/end` | `HostToolResult::Status::HandedBack` is unused behavior. No user hand-back wait, fresh snapshot instead of the old action, message-superseded wait, or turn-end release of hand-back UI. `cancelHost` only handles generic outstanding calls. | HT/BS can carry statuses and control. Local handoff/wait/driver interface and implementation needed; no boundary type. **Mixed** UI/host/orchestration. |
-| B11 — Guest/app trust boundary | MISSING | `desktop/browser.js::guard/adopt/entry/install/world`; `desktop/main.js::fromApp` and browser handlers; `desktop/preload.js` | No guest host at all. `denyNetwork()` and absence of WebEngine do not implement isolated browsing. Missing dedicated guest preload/partition, Node-disabled sandboxed guests, isolated observations and host ownership/sender checks. | Existing HT/HS envelopes suffice; a real isolated host and local guest ownership API are needed. No boundary type. **Host-service-only**. |
-| B12 — Browser site permission handling | MISSING | `desktop/browser.js::setup`, `ALLOWED` | No native site-permission service. Reference allows only `clipboard-sanitized-write`, `fullscreen`, `pointerLock` and denies other checked/requested permissions. These are not Ask/Auto/Full approvals or an interactive site-permission dialog. | Internal host policy, not AP and not new backend types. **Host-service-only**. |
-| B13 — Persistent cookies/site state and browser session configuration | MISSING | `browser-panel.js` and `desktop/browser.js` `persist:browser`; `desktop/browser.js::setup` user agent | No browser session/profile store or guest networking. Existing preferences and library JSON do not retain site logins, storage or the configured guest user agent. | BS is only a context summary. Local browser profile/session storage needed, no boundary type. **Mixed** host/persistence. |
-| B14 — Site sign-in submission observations, never verified auth | MISSING | `desktop/browser-preload.js::check`; `browser-panel.js::signedIn/snapshot`; `openghost.browser.accounts` | BS declares the fields and constant false verification, but no observation producer or saved account hints exists. Reference records hostname/time only, at most 30; it does not export password values or confirm login success. | BS already fully carries these hints; local observation event and storage required, no boundary type. **Mixed** host/persistence. |
-| B15 — Restore panel layout and tab URLs/titles after reload | MISSING | `browser-panel.js::constructor/save/select`; `openghost.browser` | No browser persistence in `src/frontend/preferences.cpp`, `src/frontend/store.cpp` or `src/main.cpp`. Reference saves open/width/nonblank tabs/active index, restores lazily and generates fresh handles; it does not persist guest navigation stacks or pending actions. | BS lacks panel width and is not a save format. Local persistence record needed; no boundary type. **Persistence-only**, once panel exists. |
-| B16 — Appearance follows the selected light/dark/system theme in sites | MISSING | `desktop/main.js` `nativeTheme.themeSource` and `theme:set`; `browser-panel.js`; `styles.css` browser theme variables | `src/appearance.cpp` and `qml/AppearancePage.qml` theme the native app, but there is no browser to receive the appearance setting. | Existing native appearance state can be reused; local host theme setter needed, no boundary type. **Mixed** UI/host. |
-| B17 — Browser downloads to the OS downloads directory and completion toast | MISSING | `desktop/browser.js::setup/uniqueFile` `will-download`; `browser-panel.js::onEvent/notify` | No download service or toast. Reference picks a nonexisting filename by suffix, saves via the browser and notifies on completed downloads only. It has no download manager, progress/cancel list, or persistent download UI. | HT `data` can return metadata, but HS lacks unsolicited download events. Local host completion event needed, no boundary type. **Mixed** host/UI. |
+| B01 — Open/close browser panel and resize alongside chat | MATCH | `script.js` desktop composition; `browser-toggle.js::BrowserToggle`; `browser-panel.js::build/setOpen/fit/resizer`; `styles.css` browser selectors | `qml/Main.qml` globe toggle (`GlobeIcon` in `src/icon.cpp`: meridian spin 170/19, open fill 170/24, live dot), `browserLoader`, `chatRight`; `qml/BrowserPanel.qml` card, `.97` closed scale and inert (`enabled: open`) state, grip; `Browser::setOpen/fit/resize`. The chat card makes room (16 px + width, 600 ms motion, none while dragging); width is 44 % of the room, ≥360, leaving the chat 400, and the dragged width is saved. Only the desktop build (`OPENGHOST_BROWSER`, default ON) has it, as only the reference's desktop build does. Pixel parity not certified; stage corners are drawn over, not clipped. | BS `open`; local panel state in `Browser`, no boundary type. Tested: `native_browser_test::panelOpenCloseAndWidth`, both UI smokes. |
+| B02 — User tab strip and tab management | MATCH | `browser-panel.js::addTab/newTab/select/close/render` | `qml/BrowserPanel.qml` strip over `BrowserTabs` (`src/frontend/browser.h`): title/host label, URL tooltip, favicon (engine `image://favicon`, globe fallback) or spinner, active/hover fills, rising entrance, New tab, select, close button and middle-click close; `Browser::addTab` evicts the oldest other inactive tab above 12 on manual creation. Tool creation's refusal at capacity is T11. Guest-initiated tabs are B08. | BS tab summaries; local `BrowserTabs` model, no boundary type. Tested: `tabsNavigationAndLoading`, `tabLimitAndLazyRestore`, UI smoke New tab/middle click. |
+| B03 — Address entry, search and local-page navigation | MATCH | `browser-panel.js::normalize/go/syncBar/build`; `desktop/browser.js::normalize` | `Browser::normalize` ports the panel's rules (schemes kept, absolute and drive paths to `file:`, local hosts to `http:`, host names to `https:`, else Google `q=` with `encodeURIComponent` escaping); `Browser::go` loads the live guest or creates one. `qml/BrowserPanel.qml` address: select-all on focus, Enter navigates and gives up focus, Escape restores, placeholder, and `Browser::urlParts`' dimmed scheme / host / dimmed rest at rest. The host-side `desktop/browser.js::normalize` (e.g. `[::1]`) serves `browser_navigate` and lands with T01. | HT/BS URLs; no boundary type. Tested: `normalizesLikeTheReference`, UI smoke typed `data:` page. |
+| B04 — Per-tab back/forward, reload/stop and external-open controls | MATCH | `browser-panel.js::build/syncBar`; `desktop/browser.js::navigate/adopt` | Bar buttons over `Browser::back/forward/reloadOrStop` → `act` → the guest's own history; enabled from the guest's `canGoBack/canGoForward` once ready; reload swaps to stop while loading; external open uses `WindowController::openExternal` (OS handler, HTTP(S)/mailto only, as before). No history-list UI, as in the reference. | Local navigation state (`Tab::back/forward`), no boundary type. Tested: `tabsNavigationAndLoading`, UI smoke Back. |
+| B05 — Lazy guests, readiness, failure and crash recreation | PARTIAL | `browser-panel.js::constructor/createView/ensure/close`; `desktop/browser.js::adopt/entry` | `Browser` keeps restored tabs lazy (no guest) until shown; `createView` starts a guest (`qml/BrowserGuest.qml`) with a 15 s readiness deadline; first finished document = `dom-ready`; a non-aborted main-frame failure or the deadline fails a pending readiness (`failed` stays, as in the reference); a renderer exit (`renderProcessTerminated`) drops the guest (`gone`, crash message) and Try again creates a new incarnation. Late events from replaced guests are ignored. Guests are only created on `https?/file/about/data` (guard()). Missing: `ensure()`'s recreate-before-a-tool-step, which belongs to the tool path. | BS states; local guest ownership, no boundary type. Tested: `tabsNavigationAndLoading`, `errorsCrashesAndRetry`, `readinessDeadlineAndGuard`; UI smoke kills the real renderer and recreates it. |
+| B06 — Visible loading/error/retry states | MATCH | `browser-panel.js::createView/render/syncBar/build`; `styles.css` browser progress, spinner and error styles | `qml/BrowserPanel.qml`: sweeping 2 px progress band and tab spinner while loading, empty state, failure card (`host · error`, Chromium's `ERR_*` text with Qt's `net::` prefix removed, Try again) and the crash message. | Local presentation; no boundary type. Tested: `errorsCrashesAndRetry`; UI smoke refused port, retry and crash. |
+| B07 — Browser keyboard shortcuts and focus lending | PARTIAL | `desktop/browser.js::adopt` `before-input-event`; `browser-panel.js::constructor/run/giveBack/take/handBack` | Focus lending is ported: `BrowserFocus` (`src/browserfocus.*`) takes the keyboard back from a page on any press outside the panel (yieldKeys); driving blurs the page; Take control focuses it; Hand back blurs it and records the lent page (`Browser::lent`). Missing: the guest shortcuts (F5/Ctrl+R, F12/Ctrl+Shift+I DevTools, Alt+arrows, Ctrl+L/T/W) and `giveBack` after a tool step. | Local focus interface, no boundary type. Tested: `takeControlAndHandBack`; UI smoke click-in/click-out, drive, take, hand back. |
+| B08 — Guest popup/new-tab routing and context menu | MISSING | `desktop/browser.js::adopt` window-open and context-menu handlers; `browser-panel.js::onEvent` | No equivalent in `src/platform/` or QML. Missing foreground/background tabs from guest links, separate `new-window` popup, open/copy link/image, editable cut/copy/paste/select-all, selection copy, history/reload and Inspect. The WebEngine guests suppress the engine's own page menu and ignore new-window requests rather than substitute non-reference behavior. | Local guest event/menu APIs needed; existing external-link helper is not enough. No boundary type. **Mixed** UI/host. |
+| B09 — Agent ownership overlays and pointer visualization | PARTIAL | `browser-panel.js::drive/sync/point`; `browser-toggle.js` live badge; `desktop/browser.js::pointer` | `qml/BrowserPanel.qml` driving ring/badge (input-blocking), hover-revealed Take control, user banner with Hand back; the toggle's pulsing live dot; all from `Browser::drive` state. Nothing drives yet without host tools. Missing: the animated cursor and click ripple (they need the tools' pointer events). | BS control; local driver state, no boundary type. Tested: `takeControlAndHandBack`, UI smoke overlays. |
+| B10 — Take Control / Hand Back without replaying the interrupted action | PARTIAL | `browser-panel.js::take/handBack/waitForAgent/release`; `chat.js::onHostTool/awaitHandBack/end` | Panel side ported: `Browser::take/handBack/waitForAgent/release`, the last driver ending releases waiters and returns control to the agent, and `ChatService` now calls `HostServices::turnEnded` on every turn end and disconnect so a chat's hold ends with its turn (`chat.js::end` → `drive(conv, false)`). Missing (needs host tools): `onHostTool`'s claim/drive, `awaitHandBack` (back/message/abort), the fresh snapshot instead of the interrupted action, and the `HandedBack` status. | HT/BS statuses; local handoff interface, no boundary type. Tested: `takeControlAndHandBack`, `turnEndReleasesOnlyItsChat`, `chatTurnsReportAndReleaseTheBrowser`. |
+| B11 — Guest/app trust boundary | PARTIAL | `desktop/browser.js::guard/adopt/entry/install/world`; `desktop/main.js::fromApp` and browser handlers; `desktop/preload.js` | Guests are separate Chromium renderer processes with no web channel, app objects or Node; their profile is separate from the app; creation is limited to the guard()'s schemes; they only report events to `Browser` and execute its `act`. Missing: the guest preload (`browser-preload.js`) and isolated observation world, which come with the tools and B14; there is no host-tool bridge yet to sender-check. | Existing envelopes suffice. No boundary type. **Host-service-only**. |
+| B12 — Browser site permission handling | PARTIAL | `desktop/browser.js::setup`, `ALLOWED` | `qml/BrowserGuest.qml` grants pointer lock (`MouseLock`) and fullscreen requests and denies every other permission request. Differences: Qt has no separate sanitized-clipboard-write permission or synchronous permission-check handler; not yet covered by a test. | Internal host policy, not AP and not new backend types. |
+| B13 — Persistent cookies/site state and browser session configuration | PARTIAL | `browser-panel.js` and `desktop/browser.js` `persist:browser`; `desktop/browser.js::setup` user agent | `qml/BrowserPanel.qml` builds one persistent WebEngine profile (`storageName: browser`) under `AppDataLocation/browser` (smoke runs: a temporary directory) with the reference's plain Chrome user agent on the engine's Chromium version. Not yet verified across an application restart. | Local browser profile; no boundary type. |
+| B14 — Site sign-in submission observations, never verified auth | MISSING | `desktop/browser-preload.js::check`; `browser-panel.js::signedIn/snapshot`; `openghost.browser.accounts` | BS declares the fields and constant false verification, but no observation producer or saved account hints exists. Reference records hostname/time only, at most 30; it does not export password values or confirm login success. The panel's snapshot always carries an empty `signedIn` list and `signedInVerified=false`. | BS already fully carries these hints; local observation event and storage required, no boundary type. **Mixed** host/persistence. |
+| B15 — Restore panel layout and tab URLs/titles after reload | MATCH | `browser-panel.js::constructor/save/select`; `openghost.browser` | `Browser::save/load` → `browser.json` beside the preferences (atomic `QSaveFile`): open, width, non-blank tabs' URL/title and active index. Restore is lazy (only the shown active tab gets a guest), with fresh handles; unreadable data falls back to an empty closed panel; navigation stacks and pending actions are not saved. | Local persistence record; no boundary type. Tested: `tabLimitAndLazyRestore`. |
+| B16 — Appearance follows the selected light/dark/system theme in sites | MISSING | `desktop/main.js` `nativeTheme.themeSource` and `theme:set`; `browser-panel.js`; `styles.css` browser theme variables | `src/appearance.cpp` and `qml/AppearancePage.qml` theme the native app, but there is no browser to receive the appearance setting. No theme choice is passed to the guests. | Existing native appearance state can be reused; local host theme setter needed, no boundary type. **Mixed** UI/host. |
+| B17 — Browser downloads to the OS downloads directory and completion toast | MISSING | `desktop/browser.js::setup/uniqueFile` `will-download`; `browser-panel.js::onEvent/notify` | No download service or toast. Reference picks a nonexisting filename by suffix, saves via the browser and notifies on completed downloads only. It has no download manager, progress/cancel list, or persistent download UI. The guests accept no download, so WebEngine cancels it; nothing is saved. | HT `data` can return metadata, but HS lacks unsolicited download events. Local host completion event needed, no boundary type. **Mixed** host/UI. |
 
 ## B. Browser request/response, ownership and recovery plumbing
 
 | ID / reference feature | Status | Exact reference implementation | Native implementation and absent/different behavior | Contracts / new types; work |
 | --- | --- | --- | --- | --- |
 | H01 — Discover and publish the eleven available browser tools | MOCK ONLY | `host-tools.js::SCHEMAS/schemas`; `backend-client.js::hello` | `src/frontend/chat_service.cpp::initialize` forwards `HS.tools()`, but `NoHost` returns empty. `tests/contract.cpp::ScriptedHost` publishes one fixture schema. No native reference schema set or working registered browser capability. | HT/HS already support registration; no new types, implement schemas and a real host before advertising them. **Host-service-only**. |
-| H02 — Current browser context on start/retry/steer and change notifications | MOCK ONLY | `browser-panel.js::snapshot/report`; `chat.js::sessionParams/steer`; `backend-client.js` | `ChatService::params/steer` and constructor's `browserChanged` forwarding exist, but the shipped composition always produces null and the fake ignores changes. No live empty/closed/loading/ready context producer. Null is correct for *no panel*, not parity with the desktop panel. | BS/HostContext and `Backend::browserChanged` already suffice. No new types for reporting; host implementation required. **Host-service-only**. |
+| H02 — Current browser context on start/retry/steer and change notifications | PARTIAL | `browser-panel.js::snapshot/report`; `chat.js::sessionParams/steer`; `backend-client.js` | The desktop build's `Browser` is the composed `HostServices`: `ChatService::params/steer` send its explicit snapshot (also when empty or closed: tabs with stable IDs, state, loading, revision, title, URL, active; control; `signedInVerified=false`) and `browserChanged` reports deduplicated changes. Difference: `available` is false and status `unavailable` until browser tools are published (the reference's desktop snapshot is available); sign-in hints are B14. The fake accepts the snapshot as ignored context. OFF builds keep the null browser. | BS/HostContext and `Backend::browserChanged` suffice; no new types. Tested: `panelOpenCloseAndWidth`, `chatTurnsReportAndReleaseTheBrowser`, fake UI smoke sends with a panel. |
 | H03 — Reverse-call correlation, admission and duplicate prevention | PARTIAL | `chat.js::claim/onHostTool`; `backend-client.js` reverse-ID handling | `ChatService::reverse` verifies published tool, session, accepted turn, nonempty call ID and outstanding duplicates. It refuses host calls before `remoteId` exists instead of awaiting acceptance/recovery as JS does. On `finished`, it removes `turn.hostCalls`, so a later repeat of the same tool-call ID is not remembered for the rest of the turn; JS `turn.requests` remembers it. | HT/RequestId already suffice. No new types; need retained seen-call bookkeeping and early-call admission logic. **Host-service-only** frontend orchestration. |
-| H04 — Stop/request-cancel/terminal cleanup and late-result suppression | PARTIAL | `chat.js::onHostTool/end/stop`; `backend-client.js` reverse cancellation; `browser-panel.js::cancel`; `desktop/main.js::cancelBrowser` | `ChatService` cancels injected calls on stop/end/disconnect and drops late `finished` results; tested by `hostToolsRoutedAndReleased`. No real guest cancellation or app-close browser cleanup. Native `reverseCancelled` removes the call without answering it; reference cancellation settles the reverse handler with cancelled content while connected. Native terminal cancellation returns error text as well as cancelled status; reference uses empty content. | HT already has status/reason/error. No boundary types needed; real host cancellation/teardown and orchestration parity required. **Host-service-only**. |
+| H04 — Stop/request-cancel/terminal cleanup and late-result suppression | PARTIAL | `chat.js::onHostTool/end/stop`; `backend-client.js` reverse cancellation; `browser-panel.js::cancel`; `desktop/main.js::cancelBrowser` | `ChatService` cancels injected calls on stop/end/disconnect and drops late `finished` results; tested by `hostToolsRoutedAndReleased`. No real guest cancellation or app-close browser cleanup. Native `reverseCancelled` removes the call without answering it; reference cancellation settles the reverse handler with cancelled content while connected. Native terminal cancellation returns error text as well as cancelled status; reference uses empty content. The browser host now also hears `turnEnded`, releasing that chat's driving and hand-back waiters (B10). | HT already has status/reason/error. No boundary types needed; real host cancellation/teardown and orchestration parity required. **Host-service-only**. |
 | H05 — Serialize browser steps across chats and pin receipt-time targets | MISSING | `browser-panel.js::run/tabsTool`; `desktop/browser.js::run` queues | `ChatService::reverse` directly invokes an injected host; `NoHost` has no queue. No cross-main/mini-chat serialization, receipt-time active-tab capture, queued cancellation barriers or predecessor-slot retention. | HT args already carry `tabId`; local queue/operation lease state needed, no boundary type. **Host-service-only**. |
 | H06 — Fresh page/ref/target validation before further input | MISSING | `desktop/browser.js::revise/check/install/point/world/act`; `browser-panel.js::run` revision checks | No validator or observations. BS revisions and JSON `pageId`/`ref` capacity do not reject stale pages, disconnected refs, covered/moved targets, tab switches or navigation during pointer delay. No invalidation after partial input. | HT args/data and BS sufficient. Local observation/lease/ref state required, no boundary type. **Host-service-only**. |
-| H07 — Readiness/operation/dispatch deadlines and truthful errors | MISSING | `browser-panel.js::interruptible/ensure/run`; `desktop/browser.js::timed/check/settle/navigate/run` | No browser deadlines, loading settle or browser error mapping. Reference bounds readiness at 15 s, renderer operation at 90 s, host operation at 75 s, individual calls at 12 s and navigation at 30 s. Late timed-out continuations cannot issue more input; cancellation does not undo already-issued actions. | HT status and `data.code` can represent failures. Local deadline/cancellation implementation required, no boundary type. **Host-service-only**. |
+| H07 — Readiness/operation/dispatch deadlines and truthful errors | PARTIAL | `browser-panel.js::interruptible/ensure/run`; `desktop/browser.js::timed/check/settle/navigate/run` | The 15 s guest readiness deadline and truthful navigation/crash failures exist (B05/B06). Missing with the tools: the 90 s renderer and 75 s host operation, 12 s call and 30 s navigation deadlines, loading settle and the tool error codes. | HT status and `data.code` can represent failures. Local deadline implementation, no boundary type. |
 | H08 — Browser response formatter: text/images, metadata and errors | MISSING | `host-tools.js::result/read/readable/flatten`; `chat.js::onHostTool` status assignment | `HostToolResult` and `ChatService` can forward a supplied response; no native equivalent builds it. Missing refs, IDs, coverage/truncation/scroll, text-error formatting, screenshot labels and read pagination output. This is a caller response, not a tool card UI. | HT fully accommodates reference output through text/image variants and JSON `data`. No new boundary types; formatter/extraction implementation needed. **Host-service-only**. |
 | H09 — Attribute downloaded files to the initiating guest/operation | MISSING | `desktop/browser.js::setup/state`; `host-tools.js::result`; `test/browser-lifecycle.test.js` download test | No producer of `{file, at, operationId}` metadata. Reference snapshots report only downloads completed for that operation; later/other calls cannot consume them. Late completion may still toast (B17). | HT `data.downloads` already fits. Local download ownership/tracking needed, no boundary type. **Host-service-only**. |
 | H10 — Restoring chat display does not replay browser actions | MATCH | `chat.js::reconcile/recoverTurn/applyEvent`; `library.js::displayMessages` | `src/frontend/chat_service.cpp` recovery replays display events, not `HostToolRequest`s; `src/frontend/library.cpp::displayMessages` discards tool histories. Restored browser-looking text is not executable. This narrow safety match does not establish recoverable browser operation state. | Existing recovery/display contracts suffice. **No missing work** for this behavior. |
@@ -194,10 +210,10 @@ state/services are needed as described in B/H rows.
 | T05 — `browser_select` | MISSING | `host-tools.js::SCHEMAS`; `desktop/browser.js::install.choose/act` | Native select option matching by text/value, input/change dispatch, error on no matching option/non-select, returned selection note/snapshot. | HT sufficient; local DOM operation host. **Host-service-only**. |
 | T06 — `browser_press` | MISSING | `host-tools.js::SCHEMAS`; `desktop/browser.js::keyOf/press/act` | Key combinations and modifiers, bounded repeat count (1–20), key release and page-change barrier between repetitions. | HT sufficient; real keyboard host. **Host-service-only**. |
 | T07 — `browser_scroll` | MISSING | `host-tools.js::SCHEMAS`; `desktop/browser.js::install.reveal/act` | Ref reveal or up/down wheel by viewport share (default 0.8, clamped 0.1–10), settle and snapshot. | HT sufficient; local guest metrics/input host. **Host-service-only**. |
-| T08 — `browser_screenshot` | MISSING | `host-tools.js::SCHEMAS/result`; `desktop/browser.js::screenshot/act` | Viewport/full-page capture capped at four screens, at most 1,280 px output width, JPEG quality 82, image data URL, dimensions/scale/page dimensions/truncation and coordinate guidance. No native capture; no missing *chat screenshot card* is inferred. | `HostToolResult::Image` and JSON `data` suffice. **Host-service-only**. |
+| T08 — `browser_screenshot` | MISSING | `host-tools.js::SCHEMAS/result`; `desktop/browser.js::screenshot/act` | Viewport/full-page capture capped at four screens, at most 1,280 px output width, JPEG quality 82, image data URL, dimensions/scale/page dimensions/truncation and coordinate guidance. No native capture; no missing *chat screenshot card* is inferred. The panel presents live guest frames (B01/B06); no capture/encoding for the tool exists. | `HostToolResult::Image` and JSON `data` suffice. **Host-service-only**. |
 | T09 — `browser_read` | MISSING | `desktop/browser.js::act` read case; `host-tools.js::read/readable/flatten/code` | Freeze source HTML with `readId`; reject missing/stale continuation; cap source at 4 Mi UTF-16 units; convert headings/lists/code/tables/links; 40,000-unit text slices with exact continuation metadata. Reference may include hidden text and excludes form controls, iframes and shadow roots. | HT sufficient; frozen read storage and HTML-to-text service, no new boundary type. **Host-service-only**; frozen reads are runtime state, not durable recovery. |
 | T10 — `browser_wait` | MISSING | `host-tools.js::SCHEMAS`; `desktop/browser.js::install.has/act` | Timed/text wait including open shadow roots, bounded 0.5–60 s, fresh snapshot, `wait_timeout` instead of fabricated success. | HT sufficient; cancellable local guest polling. **Host-service-only**. |
-| T11 — `browser_tabs` | MISSING | `host-tools.js::SCHEMAS`; `browser-panel.js::tabsTool/tabsText` | List/new/switch/close, stable IDs (positional `tab` not executable targeting), new-at-12 refusal without eviction, switch snapshot and optional new-tab navigation. | BS/HT sufficient; local tab owner/controller. **Mixed** UI/host; unlike the other ten, tab management is in the reference panel. |
+| T11 — `browser_tabs` | MISSING | `host-tools.js::SCHEMAS`; `browser-panel.js::tabsTool/tabsText` | List/new/switch/close, stable IDs (positional `tab` not executable targeting), new-at-12 refusal without eviction, switch snapshot and optional new-tab navigation. The panel's tab owner (B02) exists; the tool does not. | BS/HT sufficient; local tab owner/controller. **Mixed** UI/host; unlike the other ten, tab management is in the reference panel. |
 
 ## D. Tool presentation, permissions and approvals
 
@@ -297,10 +313,10 @@ These negative findings prevent an audit from manufacturing port requirements:
 
 ## Highest-priority gaps
 
-1. **A real frontend-owned browser host and panel** (B01–B13, T01–T11). No native
-   surface can navigate, retain site state, take screenshots, read a page or act
-   on a page today. Advertising the existing types as browser support would be
-   misleading.
+1. **The browser tools on the new host** (T01–T11, B05/B07/B09–B11 remainders,
+   B08, B14, B16, B17). The panel now navigates and keeps site state for the
+   user, but nothing can snapshot, read, screenshot or act on a page for the
+   agent. Advertising the existing types as browser support would be misleading.
 2. **Ownership and safety before enabling any automation** (B10–B12, H03–H07).
    In particular, retain tool-call IDs after settlement and handle early calls;
    then implement global serialization, stable targets, page/ref invalidation,
@@ -331,19 +347,19 @@ No implementation is authorized or performed by this audit.
 | 1 | Keep truthful absence/refusal; correct H03/H04 admission/dedup/cancellation using the existing typed seam; define the local host/UI boundaries | Yes, deterministic contract tests | No fake published capabilities or duplicate/late dispatch. No new transport required. |
 | 2 | Repair file display projection and implement local image/text/PDF/Office/video preparation, notes/paste/drop and General pinned storage | Yes; fixture files and native host services suffice | Picker → owned payload → preview/cache restore tested for success, unreadable inputs, limits, cancellation/teardown and save failure. Sending to an actual agent remains blocked. |
 | 3 | Implement media blocks/slider/cards and narrowly scoped icon/thumbnail/oEmbed services, after deciding resource policy | Yes, using local deterministic fixtures | Streaming/restored views, consent-before-fetch for untrusted images, failed-load fallbacks and metadata cache. Do not add players/upload APIs absent from the reference. |
-| 4 | Choose an approved browser-host technology/trust model, then manual panel, tabs, address/history, lifecycle, permission rules and site profile | Yes with a **real browser host**, not with current NoHost | Real guest readiness/crash/navigation/focus/isolation checks. This cannot be achieved with a drawing-only panel. |
+| 4 | Choose an approved browser-host technology/trust model, then manual panel, tabs, address/history, lifecycle, permission rules and site profile | Yes with a **real browser host**, not with current NoHost | **Largely done** (optional Qt WebEngine host; see [this pass](#browser-foundation-slice)). Remaining: guest shortcuts, popups/context menu, restart-verified profile, permission tests. |
 | 5 | Introduce tab ownership and snapshot/read/screenshot/wait; then enable navigation, tab mutations and input only behind targeting/cancellation barriers; add Take Control/Hand Back and download attribution | Can test locally without an agent, but needs real host | Reference-style local-page lifecycle tests, stale/covered/moved-target refusal, queued cancellation and late completion. A snapshot's IDs must bind subsequent input. |
 | 6 | Persist browser layout/account hints, apply browser theme; finish folder services and approval-details persistence | Yes, after owners/services exist | Reload restores only intended state; fresh guest/page identities; no action replay, no cookie/credential leakage into display history. |
 | 7 | Only under a separately approved integration task, connect the semantic backend boundary and advertise supported schemas/guide/localPaths | No, requires real backend **and** completed host for browser flows | Actual discovery → named-turn approval → host call → response → terminal/recovery behavior, including real image/file support. Never infer success from the fake demo. |
 
 ## Blockers and ownership boundaries
 
-- **Browser host selection is a project-scope blocker.** The current native target
-  excludes Electron/Chromium/WebEngine and contains no alternative browser host.
-  Reference DOM/CDP algorithms cannot execute in Qt Quick alone. Porting their
-  semantics requires an explicitly approved host architecture, not quietly
-  adding a forbidden engine or pretending an external OS browser exposes the
-  same automation/partition/hand-back behavior.
+- **Browser host selection was resolved** for this slice: the owner approved
+  Qt WebEngine as an optional build feature (`OPENGHOST_BROWSER`, default ON),
+  because the reference's browser is embedded Chromium webviews, not an
+  externally controlled OS browser. The reference's DOM/CDP tool algorithms still
+  need porting onto it (Qt WebEngine has no `webContents.debugger`; see the
+  remaining blockers under [this pass](#browser-foundation-slice)).
 - **Current UI resource policy blocks reference media networking.** A deliberate
   frontend-host resource policy is needed for favicons, permitted remote images,
   thumbnails and oEmbed. This is not provider/model networking and is not a
@@ -369,7 +385,68 @@ No implementation is authorized or performed by this audit.
   refs, downloads or authorization. Neither side currently promises exactly-once
   browser effects across a crash.
 
+## Browser foundation slice
+
+Scope: host/service lifecycle, panel UI, visibility/open/close, tab and active-page
+state, navigation/loading/error state, hand-back/focus, the live page surface and
+the `host.browser` snapshot. No browser tool, Rust, RPC or FFI was added, and the
+reference was not changed.
+
+| Piece | Native implementation |
+| --- | --- |
+| Host state and snapshot | `src/frontend/browser.h/.cpp` (`Browser`, `BrowserTabs`); QtCore only, in `native_contract` |
+| Panel and guests | `qml/BrowserPanel.qml`, `qml/BrowserGuest.qml` (only with `OPENGHOST_BROWSER`) |
+| Toggle and layout | `qml/Main.qml` (`browserToggle`, `browserLoader`, `chatRight`), `GlobeIcon` and `browser-*` glyphs in `src/icon.*` |
+| Focus yield | `src/browserfocus.*` (`BrowserFocus`) |
+| Composition | `src/main.cpp`, `WindowController(…, host)`, `HostServices::turnEnded` called from `ChatService` |
+| Fake | `FakeBackend` accepts a browser snapshot as ignored context |
+
+Remaining blockers before the 11 browser tools:
+
+1. **An observation/automation layer on Qt WebEngine.** The reference runs its
+   DOM heuristics in an isolated world through Electron's preload and acts through
+   CDP (`webContents.debugger`: input events, focus emulation, screenshots).
+   Qt WebEngine offers `runJavaScript` in an `ApplicationWorld`/user world and
+   `QWebEngineScript` injection, but no public CDP client; trusted mouse/key input
+   must instead be synthesized as Qt events into the guest, and full-page capture
+   needs its own approach. This choice gates T02–T10 and H06.
+2. **Publishing tools and flipping `available`.** `Browser::tools()`/`run` and the
+   snapshot's `available`/status must change together, with the reference schemas
+   (`host-tools.js::SCHEMAS`) and the response formatter (H08).
+3. **Chat-side orchestration** (B10/H03–H05): `onHostTool`'s claim and driving,
+   `awaitHandBack`, the global step queue with receipt-time targets, revision
+   checks, deadlines (H07) and retained seen-call IDs.
+4. **Guest preload equivalents**: sign-in observation (B14), page events for the
+   pointer overlay (B09), popups/context menu (B08) and downloads with operation
+   attribution (B17/H09).
+
 ## Evidence and focused validation
+
+Browser foundation slice, Release builds of this commit's tree, with each setting
+of `OPENGHOST_BROWSER`:
+
+```sh
+cmake -S . -B build-browser -DCMAKE_BUILD_TYPE=Release -DOPENGHOST_BUILD_SMOKE_TEST=ON
+cmake --build build-browser --parallel 8
+ctest --test-dir build-browser --output-on-failure
+cmake -S . -B build-browser-off -DCMAKE_BUILD_TYPE=Release \
+  -DOPENGHOST_BUILD_SMOKE_TEST=ON -DOPENGHOST_BROWSER=OFF
+cmake --build build-browser-off --parallel 8
+ctest --test-dir build-browser-off --output-on-failure
+git diff --check
+```
+
+Results: 4/4 tests passed in each build (`native_contract_test`,
+`native_browser_test` with 12/12 functions, `native_ui_smoke`,
+`native_fake_ui_smoke`). With the browser, the UI smokes (offscreen, software Qt
+Quick) open the real panel with the toggle, type a `data:` page into the address
+bar, check its frame in the window, go Back, show and retry a refused-loopback
+failure, move focus into and out of the page, drive/Take control/Hand back/turn
+end, kill the guest's renderer and recreate it, open and middle-click-close a tab,
+and close the panel. Without it, they check that no panel, toggle or host exists;
+`ldd` showed no WebEngine library linked. No visual-parity suite or live backend
+was run.
+Original audit evidence follows.
 
 Source tracing covered the actual reference entry/bridge paths, the whole browser
 panel/host/preload and tool schemas, attachment reader/tray, PDF host, media/link

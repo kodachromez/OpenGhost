@@ -170,6 +170,17 @@ const QHash<QString, Glyph> &glyphs()
          {"M52 30A22 22 0 1 1 8 30A22 22 0 1 1 52 30ZM8.5 30h43"
           "M30 8c-6.5 6-10 13.5-10 22s3.5 16 10 22c6.5-6 10-13.5 10-22s-3.5-16-10-22z",
           5.5, 60}},
+        // The browser panel's controls (browser-panel.js ICONS, view 30 30
+        // 60 60 moved to 0 0).
+        {"browser-back", {"M35 12 17 30l18 18", 5.5, 60}},
+        {"browser-forward", {"M25 12l18 18-18 18", 5.5, 60}},
+        {"browser-reload", {"M47.5 21A19 19 0 1 0 49 30M49 8v13.5H35.5", 5.5, 60}},
+        {"browser-stop", {"M16 16l28 28M44 16 16 44", 5.5, 60}},
+        {"browser-plus", {"M30 14v32M14 30h32", 5.5, 60}},
+        {"browser-close", {"M20 20l20 20M40 20 20 40", 5.5, 60}},
+        {"browser-external",
+         {"M35 10h15v15M50 10 28 32M43 37v8a5 5 0 0 1-5 5H15a5 5 0 0 1-5-5V22a5 5 0 0 1 5-5h8", 5.5,
+          60}},
         // The jump to the latest message (scroll-button.js, view 30 30 60 60).
         {"arrow-down", {"M30 6v47M11 34L30 53L49 34", 6, 60}},
         // A link chip's globe (styles.css .link-chip-icon::before).
@@ -359,6 +370,65 @@ void ToggleIcon::paint(QPainter *painter)
     lines.moveTo(m_split, 9);
     lines.lineTo(m_split, 51);
     painter->strokePath(lines, QPen(m_color, 5.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+}
+
+GlobeIcon::GlobeIcon(QQuickItem *parent) : QQuickPaintedItem(parent)
+{
+    setAntialiasing(true);
+    setImplicitSize(22, 22);
+}
+
+void GlobeIcon::setSpin(qreal spin)
+{
+    if (qFuzzyCompare(spin, m_spin))
+        return;
+    m_spin = spin;
+    emit spinChanged();
+    update();
+}
+
+void GlobeIcon::setOpen(qreal open)
+{
+    if (qFuzzyCompare(open, m_open))
+        return;
+    m_open = open;
+    emit openChanged();
+    update();
+}
+
+void GlobeIcon::setColor(const QColor &color)
+{
+    if (color == m_color)
+        return;
+    m_color = color;
+    emit colorChanged();
+    update();
+}
+
+void GlobeIcon::paint(QPainter *painter)
+{
+    const qreal scale = std::min(width(), height()) / 60;
+    painter->setRenderHint(QPainter::Antialiasing);
+    painter->translate((width() - 60 * scale) / 2, (height() - 60 * scale) / 2);
+    painter->scale(scale, scale);
+    const QPen pen(m_color, 5.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+    QPainterPath globe;
+    globe.addEllipse(QPointF(30, 30), 22, 22);
+    QColor fill = m_color;
+    fill.setAlphaF(m_color.alphaF() * m_open * 0.3);
+    painter->fillPath(globe, fill);
+    painter->strokePath(globe, pen);
+    // The meridian narrows (rx 10 → 3.5) and moves 2.5 units as it spins,
+    // clipped to the globe.
+    QPainterPath meridian;
+    meridian.addEllipse(QPointF(30 + 2.5 * m_spin, 30), std::max<qreal>(0.5, 10 - 6.5 * m_spin),
+                        22);
+    QPainterPathStroker stroker(pen);
+    painter->fillPath(stroker.createStroke(meridian).intersected(globe), m_color);
+    QPainterPath equator;
+    equator.moveTo(8.5, 30);
+    equator.lineTo(51.5, 30);
+    painter->strokePath(equator, pen);
 }
 
 

@@ -1,4 +1,5 @@
 #include "window.h"
+#include "frontend/browser.h"
 #include "platform/platform.h"
 #include "rich.h"
 
@@ -54,7 +55,10 @@ void selectControlsStyle()
         QQuickStyle::setStyle(QStringLiteral("Fusion"));
 }
 
-WindowController::WindowController(QObject *parent) : WindowController(nullptr, {}, {}, parent) {}
+WindowController::WindowController(QObject *parent)
+    : WindowController(nullptr, {}, {}, nullptr, parent)
+{
+}
 
 namespace
 {
@@ -67,9 +71,11 @@ std::unique_ptr<openghost::KeyStore> keyStore(const QString &path)
 } // namespace
 
 WindowController::WindowController(openghost::Backend *backend, QString preferencesPath,
-                                   QString dataPath, QObject *parent)
-    : QObject(parent), m_preferences(std::move(preferencesPath)), m_store(keyStore(dataPath)),
-      m_library(m_store.get()), m_chat(backend, &m_preferences, &m_library),
+                                   QString dataPath, openghost::HostServices *host,
+                                   QObject *parent)
+    : QObject(parent), m_browser(qobject_cast<openghost::Browser *>(host)),
+      m_preferences(std::move(preferencesPath)), m_store(keyStore(dataPath)),
+      m_library(m_store.get()), m_chat(backend, &m_preferences, &m_library, host),
       m_general(&m_preferences), m_usage(m_store.get())
 {
     registerNativeTypes();

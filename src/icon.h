@@ -88,6 +88,37 @@ class ToggleIcon : public QQuickPaintedItem
     QColor m_color{255, 255, 255};
 };
 
+// The browser toggle's globe (browser-toggle.js): its meridian narrows as
+// the pointer spins it (`spin` 0 → 1) and the globe fills to .3 while the
+// panel is open (`open` 0 → 1).
+class GlobeIcon : public QQuickPaintedItem
+{
+    Q_OBJECT
+    QML_ELEMENT
+    Q_PROPERTY(qreal spin READ spin WRITE setSpin NOTIFY spinChanged)
+    Q_PROPERTY(qreal open READ open WRITE setOpen NOTIFY openChanged)
+    Q_PROPERTY(QColor color READ color WRITE setColor NOTIFY colorChanged)
+
+  public:
+    explicit GlobeIcon(QQuickItem *parent = nullptr);
+    qreal spin() const { return m_spin; }
+    void setSpin(qreal spin);
+    qreal open() const { return m_open; }
+    void setOpen(qreal open);
+    QColor color() const { return m_color; }
+    void setColor(const QColor &color);
+    void paint(QPainter *painter) override;
+
+  signals:
+    void spinChanged();
+    void openChanged();
+    void colorChanged();
+
+  private:
+    qreal m_spin = 0, m_open = 0;
+    QColor m_color{255, 255, 255};
+};
+
 // A chosen file's kind icon (openghost/file-kinds.js): a page tinted in the
 // kind's tone with its glyph and extension label. `kind` names the kind as
 // the attachment meta line shows it ("Text", "Rust", "PDF").
