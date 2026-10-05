@@ -15,6 +15,9 @@ state service, local preferences and an explicit `--fake-backend` fixture.
 The third step wires the existing UI through that boundary, including steering,
 Retry, deletion, text attachments, approvals, simulated auth and usage/timing.
 Default launch remains disconnected; there is no Rust, RPC, FFI or process adapter.
+The fourth step (below) completes the frontend-local state the reference keeps
+across restarts: chat index, display caches with recovery checkpoints, mini
+chats, folders, pins, lock state and the usage ledger, still frontend only.
 
 The clean fork was made on branch `cpp-native-extraction` at
 `/home/brian/openghost-native-qt`, because the supplied Rust-backend worktree and
@@ -182,7 +185,8 @@ The fake intentionally emits `turn.started` before its acceptance reply.
 
 | Data/state the original expects | Native representation / owner |
 | --- | --- |
-| Session incarnation, high-water sequence, accepted client/remote turn IDs, recovery display journal | Boundary types; in-memory `FakeBackend` sessions; frontend `ChatRecord` tracks its own display state |
+| Session incarnation, high-water sequence, accepted client/remote turn IDs, recovery display journal | Boundary types; in-memory `FakeBackend` sessions; `ChatRecord` display state, adopted from `session.get` on reopen (never persisted) |
+| Chat index, display caches, recovery markers, mini chats, locks | `frontend/library.*` over `frontend/store.*` (`index`, `chats/<id>`, `mini/<id>`), the `library.js` schema |
 | Frontend chat identity/title/rename/timestamps/model/mode, active turn/message buffers, local drafts and annotations | `frontend/chat_service.*`, existing QML draft cache/list models; not backend history |
 | Full attachment input vs lossy cache previews | Separate `Attachment` and `DisplayAttachment`, `Input` and `DisplayInput`; no conversion of previews back into input |
 | Standing instructions and pinned payloads | `UserContext` / `ContextFile`; instructions saved locally and sent on starts, pinned-file preparation not yet implemented |
@@ -190,7 +194,7 @@ The fake intentionally emits `turn.started` before its acceptance reply.
 | Backend model capabilities and availability | Exact provider/model pair, optional context/vision/default thinking and advertised levels; no guessed medium/first effort, no fallback for removed models |
 | Browser availability, lifecycle/control/open state, tab IDs/revisions, sign-in observations | `BrowserState` / `HostContext`; absent browser is null, observations are not verified auth |
 | Errors and permitted actions | Extensible named `Error` code/message/provider/action/retryable/status; no silent conversion of unknown outcome to not-started |
-| Usage windows, balances/credits, per-event counts | Session-lifetime local ledger and reply metrics; limits/balances remain unsupported |
+| Usage windows, balances/credits, per-event counts | Persistent local ledger (`usage`, `usage.js` v2, v1 upgraded) and per-reply `usage` in the display cache; limits/balances remain unsupported |
 | Appearance | Existing frontend-local Qt appearance store, unchanged |
 
 `Entry`, `Session`, `Selection`, `Account` and QML roles remain **display-only**
@@ -230,11 +234,11 @@ acceptance nor the frontend display cache is durable across application exit.
 It is a development fixture, **not a conforming production ABP backend**.
 
 This is a buildable extraction, **not yet a complete functional or pixel-exact
-1.3 clone**. The inherited native port still lacks parts of the reference,
-including persistent mini-chat, chat locks, browser/media integration, plus-menu
-operations, and the visual diagram form editor. They have not been invented in
-this first pass. Existing text/antialiasing, shadow and drawing differences also
-remain; this task did not rerun the original full pixel-comparison suite.
+1.3 clone**. The inherited native UI still has no mini-chat dialog, lock screen,
+folder picker, browser panel, plus-menu operations or visual diagram form
+editor; their frontend *state* now exists (fourth step) but no UI was invented.
+Existing text/antialiasing, shadow and drawing differences also remain; this
+task did not rerun the original full pixel-comparison suite.
 
 ## Exercising the fake and remaining gaps
 
@@ -261,7 +265,8 @@ preparation, pinned files, compaction and host tools still refuse explicitly. Au
 
 - **Chats:** draft creation, sidebar open/search/local rename, independent active
   sessions and cached composer drafts. Deletion removes the display/draft only
-  after backend acknowledgement. Sessions and usage remain in memory.
+  after backend acknowledgement. With `--fake-backend` the library stays in
+  memory (the fake's sessions die with the process); a normal launch saves it.
 - **Turns:** existing Send and Escape Stop, Send-as-steering while running,
   exact failed-turn Retry and explicit uncertain-start reconciliation. Stop
   freezes presentation immediately; a late start acknowledgement still triggers
@@ -301,41 +306,129 @@ succeeds without another user bubble. Every completed fake reply emits fixed
 Providers → Add API key accepts only `fixture`; Sign in is a cancellable local
 timer. Never enter real credentials into this demo.
 
-### Still absent / deliberately bounded
+## Fourth step: frontend completeness audit
 
-Production durable chat index/checkpoints and usage storage; general restart/
-reconnect and snapshot/live-race buffering (a stale snapshot refuses rather than
-merging); retry-of-retry uncertainty and versioned-session missing-turn resend;
-model switching during a live response and queued input across that switch;
-compaction execution and a context-meter UI; full provider error-action routing
-and real OAuth/browser/limits; image/PDF/office/video preparation and previews,
-pinned payload storage and paste/drop extraction. Full browser/media/file-host
-systems remain mocked or explicitly unsupported. There is no general transport
-replacement or production recovery promise.
+Source of truth: `library.js`, `chat-store.js`, `chat.js` (`load`, `reconcile`,
+`recoverTurn`, `checkpoint`, `startTurn`, `resume`, settlement, `SideChat`),
+`mini-chat.js`, `chat-lock.js`, `usage.js`, `host-tools.js` and
+`desktop/preload.js`. Nothing in `reference/openghost/` was changed. No backend
+method, DTO or contract type was added or changed; the fake now merely accepts
+the existing `SessionParams::side` instead of refusing it.
 
-**Original frontend state/services not yet given complete native representations:**
+### 1. Implemented native frontend behavior (tested)
 
-- Persisted library/folder/home-space layout and collapse/pin metadata, chat-lock
-  encryption/unlock state, legacy display-cache migration, stats/compact/moved
-  display entries, mini-chat lifecycle/clear/move state (only `SideContext` exists).
-- Persistent pending-input/retry-preparation checkpoints, reply-part accounting
-  storage and local usage ledger disk schema (in-memory projection now exists).
-- Concrete browser tool argument/result schemas beyond the generic schema/JSON
-  fields: navigate/snapshot/click/type/select/press/scroll/screenshot/read/wait/tabs,
-  page/ref/read identities, serialized execution/hand-back queue and downloads.
-  Browser state and generic host-tool envelopes are represented, not a browser engine.
-- Desktop host file/path/folder/PDF extraction and release APIs, pinned payload
-  storage, media/video-info embedding and browser event bridge. Native window,
-  clipboard, links and appearance remain the existing implementations.
-- The existing provider prompt is adapted to semantic API-key and waiting state;
-  production OAuth presentation still needs qualification. Attachment cards now
-  admit 20 prepared text files; image/picture previews and full host preparation
-  remain absent. No backend resource/attachment authority is implied.
+- **Local store** (`frontend/store.*`): one JSON object per key under the app
+  data directory, published with `QSaveFile`; validated relative keys, 64 MiB
+  bound. Absent, readable and *unreadable* are distinct; nothing unreadable is
+  replaced. `MemoryKeyStore` is the explicit ephemeral/test store.
+- **Chat index** (`frontend/library.*`, `library.js` version 1): folders with
+  name/collapsed/added, home (folderless) chats with their own collision-free
+  `space` names (Windows device names and reserved characters refused), title,
+  `named`, `pinned`, created/updated, model selection, lock metadata; unknown
+  index fields are kept as read. An unreadable/unknown-version index makes the
+  library read-only (no chat can be created) and is never overwritten.
+- **Display caches**: the `displayMessages` allowlist (user/assistant/compact/
+  stats/moved; legacy image slots; pasted/video metadata) plus the recovery
+  markers `backendTurn`, `clientInputId`, `pendingTurn` and steering receipts.
+  Error/Stopped notes stay view-only, as in the reference. Compact/stats entries
+  are preserved unchanged but not drawn (this port has no such cards). Full
+  attachment payloads are never stored; only display metadata is.
+- **Retry/recovery checkpoints**: every start, steer and failed-turn retry first
+  commits the index and its display checkpoint with the pending marker; a failed
+  checkpoint dispatches nothing. A positively undispatched start keeps its exact
+  prepared input and client ID for Retry; a failed steer is `notApplied`; a
+  failed retry checkpoint leaves the failed turn intact. Markers are cleared only
+  by the backend's completion of an acknowledged start (or an acknowledged
+  cancel), never by local Stop or an invalid/unacknowledged start. A retry's
+  pending marker sits on its hidden open reply part, as in `resume()`.
+- **Restore/reopen after restart or interruption**: chats reappear from the
+  index as display-only, unreconciled records. Opening reads the cache, then
+  `session.get` with the saved pending client turn. Missing session: kept for
+  display only and Send is refused. Pending turn not in the journal:
+  `turn_missing`, kept and not resent. A pending turn that is present is
+  rebuilt from its journal (cached prompt bubbles and saved queued inputs reused,
+  unaccepted queued input left visible but never sent), then the result is
+  checkpointed. The session version is adopted from `session.get`; live events
+  that race it are buffered (256) and applied once beyond its revision; events
+  for a not-yet-reconciled restored chat are ignored, never guessed from deltas.
+- **Mini chat state** (`openMini`/`sendMini`/`stopMini`/`retryMini`/
+  `approveMini`/`closeMini`/`clearMini`): session `<id>:mini`, its own cache
+  `mini/<id>` with `seen`; a new mini session is "missing and empty"; Send
+  after the chat moved on adds the *Caught up with the main chat* entry and
+  `side.moved`; `side.parent`/`parentBusy` are sent; closing stops its reply and
+  keeps it; Clear deletes only the mini session and its cache. Deleting a chat
+  deletes both sessions (refusing a `:mini` ID collision) and both caches.
+- **Folders and pins**: pins and folder/home collapse are saved in the index and
+  drive the existing sidebar (its memory-only state was removed). Kept folders
+  without chats are listed by activity; deleting a folder deletes its chats one
+  acknowledged session at a time, a failure leaving the rest intact. New Chat in
+  a known folder attaches the draft to it.
+- **Lock state machine**: protect (index lock first, then sealed messages and
+  mini cache), lock on leaving, unlock against the sealed title (wrong password
+  refused), unprotect (clear messages first, then the index). A locked chat
+  opens to a "locked" state, refuses Send and is never read or saved as empty.
+  Locked titles show as *Locked local view*.
+- **Usage ledger**: persistent `usage.js` v2 (JSON-pair keys, v1 `provider|model`
+  upgrade), debounced 800 ms and flushed on exit; an unreadable ledger is neither
+  extended nor overwritten. Per-reply usage is kept on assistant entries. Replay
+  still never charges the ledger.
+- **Host-service contract** (`frontend/host.h`): browser state is the host's
+  (`null` when there is no panel), published tools come from the host at
+  `initialize`, and `host.tool` calls are correlated to the live turn, refused
+  when unpublished/stale/duplicate, answered exactly once, released on
+  `$/cancelRequest` and answered `cancelled` when their turn ends.
+
+These are exercised by `native_contract_test` (store/library, restart, interrupted
+start, checkpoint failure, mini chat, folders/pins, locks, ledger, host routing) and the fake UI
+smoke (pins and collapse through the real sidebar model and a file-backed store).
+**State without a UI entry point in this port:** mini chat, lock/unlock and
+adding a folder are reachable only through `ChatService`; the reference's mini
+dialog, lock screen and folder picker were not ported.
+
+### 2. Intentionally mocked host/backend services
+
+- `FakeBackend`: in-memory sessions only; after an app restart its sessions are
+  gone, so the frontend correctly reports them missing. In fake mode the library
+  is therefore kept in memory.
+- **Chat-lock cipher/KDF** (`ChatSealer`): QtCore has no AES-GCM or PBKDF2, so
+  production supplies none. Protected chats from an index stay locked; protect
+  and unlock refuse. Tests use an HMAC-authenticated XOR **fixture**, not a cipher.
+- **Host services**: `NoHost` (no browser panel, no tools, `unsupported`). The
+  browser engine, page/ref/read identities, serialized hand-back queue,
+  downloads, media/video embedding and PDF/image/office preparation remain absent.
+- **Desktop file host**: no folder picker (`pickFolder`), chats-folder path
+  (`chatsFolder`; home chats therefore send an empty `cwd`, as the reference
+  does without a desktop host), `releaseFolder`, path lookup or pinned-file
+  payload storage. Text attachments stay the only prepared input.
+
+### 3. Only completable with the real Rust backend connected
+
+- Qualifying `session.get` against the real journal: incarnation/revision after a
+  backend restart, which turn is returned without `clientTurnId`, journal event
+  identities, and the raced-event boundary under a real stream.
+- Real `<id>:mini` sessions with `side` parameters, idempotent deletion of a
+  never-opened mini session, and folder deletion against real acknowledgements.
+- Reconciliation of real uncertain outcomes (lost acknowledgements, cancel
+  races, retry-of-retry), approvals and host calls across reconnect, provider
+  error-action routing, real usage events/model names, compaction notices and
+  `account.limits`. The ABP adapter over `ByteTransport` is still absent.
+
+### 4. Windows/macOS portability still outstanding
+
+- Path identity follows `library.js`: case-sensitive on Linux, lower-cased
+  elsewhere. Case-sensitive macOS volumes and Windows Unicode case folding/8.3
+  names are not handled.
+- Store files: `:` in keys is escaped in file names; long paths (>260 on Windows),
+  `QSaveFile` replacement under antivirus/indexer locks and macOS sandbox
+  containers are unqualified. No owner-only permissions/ACLs are applied on any
+  platform; caches follow the process umask/ACL defaults.
+- A real chat-lock sealer needs a platform crypto provider (CNG, CommonCrypto or a
+  vetted library) behind `ChatSealer`, selected under `src/platform/`.
+- `AppDataLocation`/`AppConfigLocation` differ per platform; no migration between
+  them is attempted.
 
 The original frontend's local display/cache contracts are not ABP history and
-must not become an invented backend API. These are follow-ups, not intended
-behavior redesigns. No real backend should be connected to this partial state
-service until durability, reconciliation and refusal semantics are completed.
+must not become an invented backend API.
 
 ## Platform boundaries and remaining Windows/macOS work
 
@@ -443,10 +536,16 @@ Null and nested session recovery; they pass, but are not a proof of compiler
 correctness. A compiler/Qt fix or separately qualified value-wrapper change is
 still needed for a warning-free GCC Release build.
 
+## Fourth-step focused checks
+
+On Linux / Qt 6.11.2 / GCC 16.2.1: fresh Release configure and build, then
+`native_contract_test` (28 cases), `native_ui_smoke` and `native_fake_ui_smoke`,
+all passing offscreen/software. The only Release warnings are the two known
+GCC `-Wmaybe-uninitialized` metatype diagnostics above. No Rust, RPC, FFI, Node,
+live provider, Windows or macOS run was performed.
+
 ## Next smallest migration step
 
-Keep rendering fixed. Finish frontend-local persistence and general snapshot/live
-reconciliation, including uncertain retry attempts and reconnect. Qualify the
-remaining host preparation and real auth presentation against the semantic peer
-before implementing a separately tested adapter over `ByteTransport`. No Rust,
-RPC, FFI, Node or live provider was introduced or tested in this step.
+Keep rendering fixed. Port the reference's mini-chat dialog, lock screen and
+folder picker onto the existing state, add a qualified platform sealer, then
+implement and separately test an ABP adapter over `ByteTransport`.

@@ -32,7 +32,8 @@ native_warnings(native_rich)
 add_library(native_contract STATIC src/backend/types.h src/backend/backend.h
     src/backend/transport.h src/backend/fake_backend.cpp
     src/frontend/preferences.cpp src/frontend/chat_service.cpp
-    src/frontend/attachments.cpp src/frontend/usage.cpp)
+    src/frontend/attachments.cpp src/frontend/usage.cpp src/frontend/store.cpp
+    src/frontend/library.cpp src/frontend/host.h)
 target_include_directories(native_contract PUBLIC src)
 target_link_libraries(native_contract PUBLIC Qt6::Core)
 native_warnings(native_contract)

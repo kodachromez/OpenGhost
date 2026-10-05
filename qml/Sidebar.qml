@@ -47,9 +47,10 @@ Pane {
     readonly property bool emptyHome: sessions.homeCount === 0 && !searching
     // The Folders heading keeps 12 px from anything above it.
     readonly property bool headingGap: sessions.pinnedCount > 0 || homeShown
-    // Folder paths collapsed by the reader: memory only, as in OpenGhost.
-    // A search, and the draft's own folder, show a folder open.
-    property var collapsed: ({})
+    // Folder paths collapsed by the reader, saved in the chat index as in
+    // OpenGhost (library.js). A search, and the draft's own folder, show a
+    // folder open.
+    property var collapsed: frontend.collapsedFolders()
     function isCollapsed(folder) {
         const key = groupKey(folder)
         return !searching && collapsed[key] === true
@@ -63,6 +64,7 @@ Pane {
         else
             next[folder] = true
         collapsed = next
+        frontend.toggleFolder(folder)
     }
     function hiddenAt(row) {
         return row >= sessions.pinnedCount && isCollapsed(sessions.folderAt(row))

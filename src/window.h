@@ -2,9 +2,11 @@
 
 #include "frontend/attachments.h"
 #include "frontend/chat_service.h"
+#include "frontend/store.h"
 #include "model.h"
 #include "offline_services.h"
 #include "settings.h"
+#include <memory>
 
 class QQuickTextDocument;
 class QQmlNetworkAccessManagerFactory;
@@ -41,7 +43,8 @@ class WindowController final : public QObject
     Q_PROPERTY(QVariantList approvals READ approvals NOTIFY approvalsChanged)
   public:
     explicit WindowController(QObject *parent = nullptr);
-    WindowController(openghost::Backend *backend, QString preferencesPath,
+    // `dataPath`: the frontend's local chat/usage store; empty keeps it in memory.
+    WindowController(openghost::Backend *backend, QString preferencesPath, QString dataPath = {},
                      QObject *parent = nullptr);
     TranscriptModel *transcript() { return &m_transcript; }
     SessionModel *sessions() { return &m_sessions; }
@@ -75,12 +78,16 @@ class WindowController final : public QObject
     QVariantMap modes() const;
     QVariantList approvals() const;
 
-    Q_INVOKABLE bool isWorkspace(const QString &folder) const { return folder.isEmpty(); }
+    // The folder New Chat's draft (or the open chat) belongs to; "" for none.
+    Q_INVOKABLE bool isWorkspace(const QString &folder) const
+    {
+        return m_chat.current().folder == folder;
+    }
     Q_INVOKABLE QString newChatIn(const QString &folder)
     {
-        if (!folder.isEmpty())
-            return backendUnavailable();
-        newChat();
+        if (!folder.isEmpty() && !m_library.folder(folder))
+            return QStringLiteral("This folder is not in the chat list.");
+        m_chat.newChat(folder);
         return {};
     }
     Q_INVOKABLE quint64 send(const QString &text, const QVariantList &files = {});
@@ -98,12 +105,18 @@ class WindowController final : public QObject
     Q_INVOKABLE void open(const QString &id) { m_chat.open(id); }
     Q_INVOKABLE void rename(const QString &id, const QString &title) { m_chat.rename(id, title); }
     Q_INVOKABLE void remove(const QString &id) { m_chat.remove(id); }
-    Q_INVOKABLE void removeFolder(const QString &folder)
+    Q_INVOKABLE void removeFolder(const QString &folder) { m_chat.removeFolder(folder); }
+    Q_INVOKABLE int folderChats(const QString &folder) const
     {
-        unavailable();
-        emit folderRemoved(folder, false, backendUnavailable());
+        return int(m_library.inFolder(folder).size());
     }
-    Q_INVOKABLE int folderChats(const QString &) const { return 0; }
+    // Saved folder collapse (library.js): "home:" for the chats without one.
+    Q_INVOKABLE QVariantMap collapsedFolders() const;
+    Q_INVOKABLE void toggleFolder(const QString &key)
+    {
+        m_chat.toggleFolder(key == QStringLiteral("home:") ? std::nullopt
+                                                           : std::optional<QString>(key));
+    }
     Q_INVOKABLE void setPermissionMode(const QString &name);
     Q_INVOKABLE void approve(const QString &id, bool allow)
     {
@@ -150,6 +163,8 @@ class WindowController final : public QObject
     void sync();
     void catalog();
     openghost::PreferencesStore m_preferences;
+    std::unique_ptr<openghost::KeyStore> m_store;
+    openghost::Library m_library;
     openghost::ChatService m_chat;
     QString m_notice;
     QVariantMap m_login;

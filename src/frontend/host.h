@@ -1,0 +1,42 @@
+#pragma once
+#include "backend/types.h"
+#include <QObject>
+
+namespace openghost
+{
+// UI-facing host services a desktop frontend supplies to the backend
+// (desktop/preload.js, host-tools.js, browser-host-tools.md): the built-in
+// browser's state and the host.tool calls run against it. The native port has
+// no browser engine, media embedding or desktop file host yet, so production
+// uses NoHost: no browser panel (null state), no published tools, and every
+// host.tool refuses with `unsupported`. Tests inject a scripted host to check
+// correlation, cancellation and turn-end release without a real browser.
+class HostServices : public QObject
+{
+    Q_OBJECT
+  public:
+    using QObject::QObject;
+    // nullopt: no browser panel (host.browser = null), never an invented one.
+    virtual std::optional<BrowserState> browser() const = 0;
+    // Published at initialize (host.tools); only these names may be called.
+    virtual QVector<HostToolSchema> tools() const = 0;
+    // Must settle with finished() exactly once, never inline, unless cancelled.
+    virtual void run(RequestId id, const HostToolRequest &request) = 0;
+    // The call was cancelled by the backend or its turn ended: release it.
+    virtual void cancel(RequestId id) = 0;
+  signals:
+    void finished(openghost::RequestId id, const openghost::HostToolResult &result);
+    void browserChanged(const openghost::BrowserState &state);
+};
+
+class NoHost final : public HostServices
+{
+    Q_OBJECT
+  public:
+    using HostServices::HostServices;
+    std::optional<BrowserState> browser() const override { return std::nullopt; }
+    QVector<HostToolSchema> tools() const override { return {}; }
+    void run(RequestId, const HostToolRequest &) override {}
+    void cancel(RequestId) override {}
+};
+} // namespace openghost

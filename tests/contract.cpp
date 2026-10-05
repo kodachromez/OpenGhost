@@ -1,10 +1,17 @@
 #include "backend/fake_backend.h"
 #include "frontend/attachments.h"
 #include "frontend/chat_service.h"
+#include "frontend/host.h"
+#include "frontend/library.h"
+#include "frontend/store.h"
 #include "frontend/usage.h"
 #include "settings.h"
+#include <QCryptographicHash>
+#include <QDir>
 #include <QEventLoop>
 #include <QFile>
+#include <QJsonDocument>
+#include <QMessageAuthenticationCode>
 #include <QTemporaryDir>
 #include <QtTest>
 
@@ -109,6 +116,76 @@ class InspectBackend final : public Backend
     }
     void browserChanged(const BrowserState &) override {}
 };
+
+// Test-only sealer: an HMAC-authenticated XOR stream. It checks the lock STATE
+// machine (sealed title, wrong key refusal, ordering); it is NOT a cipher claim.
+class TestSealer final : public ChatSealer
+{
+  public:
+    int salts = 0;
+    QString salt() override { return QStringLiteral("salt-%1").arg(++salts); }
+    std::optional<QByteArray> derive(const QString &password, const QString &salt, int) override
+    {
+        return QMessageAuthenticationCode::hash(password.toUtf8(), salt.toUtf8(),
+                                                QCryptographicHash::Sha256);
+    }
+    static QByteArray stream(const QByteArray &key, qsizetype size)
+    {
+        QByteArray out;
+        for (int block = 0; out.size() < size; ++block)
+            out += QCryptographicHash::hash(key + QByteArray::number(block),
+                                            QCryptographicHash::Sha256);
+        return out.left(size);
+    }
+    std::optional<QJsonObject> seal(const QByteArray &key, const QJsonObject &value) override
+    {
+        auto data = QJsonDocument(value).toJson(QJsonDocument::Compact);
+        const auto mask = stream(key, data.size());
+        for (qsizetype i = 0; i < data.size(); ++i)
+            data[i] = char(data[i] ^ mask[i]);
+        const auto tag = QMessageAuthenticationCode::hash(data, key, QCryptographicHash::Sha256);
+        return QJsonObject{{"iv", QString::fromLatin1(tag.toBase64())},
+                           {"data", QString::fromLatin1(data.toBase64())}};
+    }
+    std::optional<QJsonObject> open(const QByteArray &key, const QJsonObject &sealed) override
+    {
+        auto data = QByteArray::fromBase64(sealed.value("data").toString().toLatin1());
+        if (QMessageAuthenticationCode::hash(data, key, QCryptographicHash::Sha256).toBase64() !=
+            sealed.value("iv").toString().toLatin1())
+            return std::nullopt;
+        const auto mask = stream(key, data.size());
+        for (qsizetype i = 0; i < data.size(); ++i)
+            data[i] = char(data[i] ^ mask[i]);
+        return QJsonDocument::fromJson(data).object();
+    }
+};
+// A scripted host-service mock: one published tool, explicit settlement.
+class ScriptedHost final : public HostServices
+{
+  public:
+    QVector<RequestId> ran, cancelled;
+    std::optional<BrowserState> browser() const override { return std::nullopt; }
+    QVector<HostToolSchema> tools() const override
+    {
+        return {{QStringLiteral("browser_snapshot"), QStringLiteral("fixture"), {}}};
+    }
+    void run(RequestId id, const HostToolRequest &) override { ran.append(id); }
+    void cancel(RequestId id) override { cancelled.append(id); }
+};
+void settle(FakeBackend &fake)
+{
+    for (int i = 0; i < 200; ++i)
+        fake.advance();
+}
+template <class T> int countOf(const QVector<Command> &commands)
+{
+    return int(std::count_if(commands.cbegin(), commands.cend(),
+                             [](const auto &c) { return std::holds_alternative<T>(c); }));
+}
+template <class F> int countIf(const QVector<Command> &commands, F predicate)
+{
+    return int(std::count_if(commands.cbegin(), commands.cend(), predicate));
+}
 } // namespace
 
 class ContractTest : public QObject
@@ -734,6 +811,506 @@ class ContractTest : public QObject
         chat.authenticate(SetKey{"fake", QStringLiteral("fixture")});
         QTRY_COMPARE(chat.models().size(), 2);
         QTRY_VERIFY(!chat.providers().first().status.error.has_value());
+    }
+    void storeAndLibraryPersistence()
+    {
+        QTemporaryDir dir;
+        FileKeyStore files(dir.path());
+        QVERIFY(!KeyStore::validKey("../escape") && !KeyStore::validKey("a//b") &&
+                !KeyStore::validKey(""));
+        QVERIFY(!files.write("../escape", {}));
+        QCOMPARE(files.read("index").status, KeyStore::Status::Absent);
+        QVERIFY(files.write("mini/a:b", {{"x", 1}}));
+        QVERIFY(QFile::exists(dir.path() + "/mini/a%3Ab.json")); // ':' never in a file name
+        QCOMPARE(files.read("mini/a:b").value.value("x").toInt(), 1);
+        {
+            QFile corrupt(dir.path() + "/broken.json");
+            QVERIFY(corrupt.open(QIODevice::WriteOnly));
+            corrupt.write("{not json");
+        }
+        QCOMPARE(files.read("broken").status, KeyStore::Status::Unreadable);
+
+        QString id;
+        {
+            Library library(&files);
+            QVERIFY(library.writable());
+            const auto *chat = library.create({}, QStringLiteral("Plan: a/b <trip>?"));
+            QVERIFY(chat && chat->space);
+            id = chat->id;
+            QCOMPARE(*chat->space, QStringLiteral("Plan a b trip"));
+            QCOMPARE(*library.create({}, QStringLiteral("Plan: a/b <trip>?"))->space,
+                     QStringLiteral("Plan a b trip 2"));
+            QCOMPARE(Library::spaceName("con"), QStringLiteral("New chat con"));
+            QVERIFY(library.create(QStringLiteral("/work/project"), QStringLiteral("Folder chat")));
+            QVERIFY(library.setPinned(id, true));
+            QVERIFY(library.toggleFolder(QStringLiteral("/work/project")));
+            QVERIFY(library.toggleFolder(std::nullopt));
+            QVERIFY(library.retitle(id, QStringLiteral("Renamed"), true));
+            QJsonArray messages{
+                QJsonObject{{"role", "user"},
+                            {"text", "hi"},
+                            {"backendTurn", "c1"},
+                            {"pendingTurn", true},
+                            {"secret", "dropped"}},
+                QJsonObject{{"role", "system"}, {"content", "never kept"}},
+                QJsonObject{{"role", "assistant"}, {"content", "yo"}, {"steps", QJsonArray{1}}},
+                QJsonObject{{"role", "stats"}, {"stats", QJsonObject{{"uncounted", 2}}}}};
+            QVERIFY(library.saveMessages(id, messages, 42));
+        }
+        Library reread(&files);
+        QCOMPARE(reread.chats().size(), 3);
+        const auto *chat = reread.chat(id);
+        QVERIFY(chat->pinned && chat->named);
+        QCOMPARE(chat->title, QStringLiteral("Renamed"));
+        QVERIFY(reread.homeCollapsed());
+        QVERIFY(reread.folder("/work/project")->collapsed);
+        QCOMPARE(reread.inFolder("/work/project").size(), 1);
+        const auto body = reread.conversation(id);
+        QVERIFY(body);
+        QCOMPARE(body->tokens, 42.0);
+        QCOMPARE(body->messages.size(), 3); // unknown roles dropped
+        const auto user = body->messages.at(0).toObject();
+        QVERIFY(user.value("pendingTurn").toBool() && !user.contains("secret"));
+        QVERIFY(body->messages.at(1).toObject().value("uncounted").toBool());
+        // Folder removal takes its chats and their caches; home chats stay.
+        QCOMPARE(reread.removeFolder("/work/project").size(), 1);
+        QCOMPARE(reread.chats().size(), 2);
+        QVERIFY(reread.remove(id));
+        QCOMPARE(files.read("chats/" + id).status, KeyStore::Status::Absent);
+
+        // An unreadable index is never replaced by an empty list.
+        MemoryKeyStore memory;
+        memory.raw.insert("index", "garbage");
+        Library unreadable(&memory);
+        QVERIFY(!unreadable.writable() && !unreadable.error().isEmpty());
+        QVERIFY(!unreadable.create({}, "x") && !unreadable.persist());
+        QVERIFY(memory.raw.contains("index"));
+        memory.raw.clear();
+        memory.values.insert("index", {{"version", 9}});
+        QVERIFY(!Library(&memory).writable()); // unknown version: read-only
+    }
+    void restartRestoresAndReconciles()
+    {
+        FakeBackend fake(nullptr, 0);
+        MemoryKeyStore store;
+        PreferencesStore prefs({});
+        QString id;
+        {
+            Library library(&store);
+            UsageStore ledger(&store);
+            ChatService chat(&fake, &prefs, &library);
+            connect(&chat, &ChatService::usageRecorded, &ledger, &UsageStore::record);
+            chat.initialize();
+            QTRY_VERIFY(chat.ready());
+            QVERIFY(chat.send("remember me"));
+            QTRY_VERIFY(!chat.pending());
+            settle(fake);
+            QTRY_VERIFY(!chat.busy());
+            id = chat.current().id;
+            QVERIFY(chat.setPinned(id, true));
+            QVERIFY(ledger.flush());
+        }
+        // A new frontend process over the same local store and live backend.
+        Library library(&store);
+        UsageStore ledger(&store);
+        QCOMPARE(ledger.totals()["fake"].toMap()["tokens"].toDouble(), 130.0);
+        ChatService chat(&fake, &prefs, &library);
+        chat.initialize();
+        QTRY_VERIFY(chat.connected());
+        QCOMPARE(chat.chats().size(), 1);
+        QVERIFY(chat.chats().first().pinned);
+        QCOMPARE(chat.chats().first().title, QStringLiteral("remember me"));
+        QVERIFY(!chat.chats().first().reconciled); // display only until session.get
+        chat.open(id);
+        QTRY_VERIFY(chat.ready());
+        const auto &rows = chat.current().rows;
+        QCOMPARE(rows.first().text, QStringLiteral("remember me"));
+        QVERIFY(std::any_of(rows.cbegin(), rows.cend(), [](const auto &r) {
+            return r.role == DisplayRow::Role::Assistant && r.text.contains("remember me") &&
+                   r.usage && r.usage->input == 100;
+        }));
+        QVERIFY(
+            std::none_of(rows.cbegin(), rows.cend(), [](const auto &r) { return r.pendingTurn; }));
+        QVERIFY(chat.current().version.has_value()); // adopted from session.get
+        QVERIFY(chat.send("and continue"));
+        QTRY_VERIFY(!chat.pending());
+        settle(fake);
+        QTRY_VERIFY(!chat.busy());
+        QVERIFY(chat.current().rows.last().text.contains("and continue"));
+
+        // The backend's session is gone: the cache stays display-only, nothing is sent.
+        FakeBackend fresh(nullptr, 0);
+        Library again(&store);
+        ChatService orphan(&fresh, &prefs, &again);
+        orphan.initialize();
+        QTRY_VERIFY(orphan.connected());
+        orphan.open(id);
+        QTRY_VERIFY(!orphan.pending());
+        QVERIFY(!orphan.ready());
+        QVERIFY(orphan.status().contains("missing"));
+        QVERIFY(!orphan.current().rows.isEmpty());
+        QCOMPARE(orphan.send("lost"), 0u);
+    }
+    void interruptedStartRecoversWithoutResend()
+    {
+        InspectBackend backend;
+        MemoryKeyStore store;
+        PreferencesStore prefs({});
+        QString id, client;
+        {
+            Library library(&store);
+            ChatService chat(&backend, &prefs, &library);
+            chat.initialize();
+            QTRY_VERIFY(chat.ready());
+            backend.holdStart = true;
+            QVERIFY(chat.send("uncertain start"));
+            QTRY_VERIFY(backend.heldStart.has_value());
+            id = chat.current().id;
+            client = chat.current().turn.clientId;
+            // The required checkpoint reached storage before the start went out.
+            const auto saved = store.values.value("chats/" + id).value("messages").toArray();
+            QCOMPARE(saved.first().toObject().value("backendTurn").toString(), client);
+            QVERIFY(saved.first().toObject().value("pendingTurn").toBool());
+        } // "crash": the acknowledgement never reached this frontend
+        backend.holdStart = false;
+        backend.heldStart.reset();
+        settle(backend.fake);
+        const auto starts = countOf<StartTurn>(backend.commands);
+        Library library(&store);
+        ChatService chat(&backend, &prefs, &library);
+        chat.initialize();
+        QTRY_VERIFY(chat.connected());
+        chat.open(id);
+        QTRY_VERIFY(chat.ready());
+        QCOMPARE(countOf<StartTurn>(backend.commands), starts); // never resent
+        const auto &get = std::get<GetSession>(backend.commands.last());
+        QCOMPARE(get.clientTurnId.value_or(QString()), client);
+        QCOMPARE(chat.current().rows.first().text, QStringLiteral("uncertain start"));
+        QVERIFY(chat.current().rows.last().text.contains("uncertain start"));
+        QVERIFY(std::none_of(chat.current().rows.cbegin(), chat.current().rows.cend(),
+                             [](const auto &r) { return r.pendingTurn; }));
+        QVERIFY(!store.values.value("chats/" + id)
+                     .value("messages")
+                     .toArray()
+                     .first()
+                     .toObject()
+                     .value("pendingTurn")
+                     .toBool());
+
+        // A saved pending marker the backend never accepted: turn_missing, kept, not sent.
+        auto messages = store.values.value("chats/" + id).value("messages").toArray();
+        messages.append(QJsonObject{{"role", "user"},
+                                    {"text", "never accepted"},
+                                    {"backendTurn", "ghost-turn"},
+                                    {"pendingTurn", true}});
+        QVERIFY(store.write("chats/" + id, {{"version", 1}, {"messages", messages}}));
+        Library third(&store);
+        ChatService lost(&backend, &prefs, &third);
+        lost.initialize();
+        QTRY_VERIFY(lost.connected());
+        lost.open(id);
+        QTRY_VERIFY(!lost.pending());
+        QVERIFY(!lost.ready());
+        QVERIFY(lost.status().contains("did not accept the saved turn"));
+        QCOMPARE(countOf<StartTurn>(backend.commands), starts);
+        QCOMPARE(lost.current().rows.last().text, QStringLiteral("never accepted"));
+    }
+    void checkpointFailureNeverDispatches()
+    {
+        InspectBackend backend;
+        MemoryKeyStore store;
+        PreferencesStore prefs({});
+        Library library(&store);
+        ChatService chat(&backend, &prefs, &library);
+        chat.initialize();
+        QTRY_VERIFY(chat.ready());
+        store.failWrites = "chats/";
+        QVERIFY(chat.send("must not leave"));
+        QCOMPARE(countOf<StartTurn>(backend.commands), 0);
+        QVERIFY(chat.status().contains("checkpoint"));
+        QVERIFY(chat.canRetry());
+        const auto client = chat.current().turn.clientId;
+        chat.retry(); // still failing: still nothing dispatched
+        QCOMPARE(countOf<StartTurn>(backend.commands), 0);
+        store.failWrites.clear();
+        chat.retry();
+        QTRY_VERIFY(!chat.pending());
+        QCOMPARE(countOf<StartTurn>(backend.commands), 1);
+        QCOMPARE(std::get<StartTurn>(backend.commands.last()).clientTurnId, client);
+        settle(backend.fake);
+        QTRY_VERIFY(!chat.busy());
+        // Retry of a failed turn also checkpoints first; a steer failing it is not sent.
+        QVERIFY(chat.send("/fake error"));
+        QTRY_VERIFY(!chat.pending());
+        settle(backend.fake);
+        QTRY_VERIFY(chat.canRetry());
+        store.failWrites = "chats/";
+        const auto before = countOf<RetryTurn>(backend.commands);
+        chat.retry();
+        QCOMPARE(countOf<RetryTurn>(backend.commands), before);
+        QVERIFY(chat.canRetry()); // the failed turn is intact
+        store.failWrites.clear();
+    }
+    void miniChatLifecycle()
+    {
+        FakeBackend fake(nullptr, 0);
+        MemoryKeyStore store;
+        PreferencesStore prefs({});
+        Library library(&store);
+        ChatService chat(&fake, &prefs, &library);
+        chat.initialize();
+        QTRY_VERIFY(chat.ready());
+        QVERIFY(!chat.openMini().isEmpty()); // a draft has no mini chat
+        QVERIFY(chat.send("main question"));
+        QTRY_VERIFY(!chat.pending());
+        settle(fake);
+        QTRY_VERIFY(!chat.busy());
+        const auto id = chat.current().id;
+        const auto mainRows = chat.current().rows.size();
+        QVERIFY(chat.openMini().isEmpty());
+        QTRY_VERIFY(chat.mini() && chat.mini()->reconciled); // new mini session: missing + empty
+        QVERIFY(chat.sendMini("side question"));
+        QTRY_VERIFY(!chat.pending());
+        settle(fake);
+        QTRY_VERIFY(chat.mini()->turn.terminal);
+        QCOMPARE(chat.mini()->id, id + ":mini");
+        QVERIFY(chat.mini()->rows.last().text.contains("side question"));
+        QCOMPARE(chat.current().id, id); // main view untouched
+        QCOMPARE(chat.current().rows.size(), mainRows);
+        QCOMPARE(chat.chats().size(), 1); // the mini session is not a listed chat
+        QVERIFY(store.values.contains("mini/" + id));
+        QVERIFY(!chat.miniBehind());
+        chat.closeMini();
+        QVERIFY(!chat.mini());
+
+        QTest::qWait(5);
+        QVERIFY(chat.send("main moves on"));
+        QTRY_VERIFY(!chat.pending());
+        settle(fake);
+        QTRY_VERIFY(!chat.busy());
+        QVERIFY(chat.openMini().isEmpty());
+        QVERIFY(chat.miniBehind());
+        QVERIFY(chat.sendMini("after the move"));
+        QTRY_VERIFY(!chat.pending());
+        settle(fake);
+        QTRY_VERIFY(chat.mini()->turn.terminal);
+        QVERIFY(std::any_of(chat.mini()->rows.cbegin(), chat.mini()->rows.cend(),
+                            [](const auto &r) { return r.role == DisplayRow::Role::Moved; }));
+        QVERIFY(!chat.miniBehind());
+        const auto saved = store.values.value("mini/" + id);
+        QVERIFY(saved.value("seen").toDouble() > 0);
+        QVERIFY(std::any_of(saved.value("messages").toArray().cbegin(),
+                            saved.value("messages").toArray().cend(),
+                            [](const auto &m) { return m.toObject().value("role") == "moved"; }));
+
+        // Restart: the mini chat reopens from its own cache and reconciles.
+        {
+            Library reread(&store);
+            ChatService again(&fake, &prefs, &reread);
+            again.initialize();
+            QTRY_VERIFY(again.connected());
+            again.open(id);
+            QTRY_VERIFY(again.ready());
+            QVERIFY(again.openMini().isEmpty());
+            QTRY_VERIFY(again.mini()->reconciled);
+            QVERIFY(again.mini()->rows.last().text.contains("after the move"));
+        }
+        QSignalSpy cleared(&chat, &ChatService::miniCleared);
+        chat.clearMini();
+        QTRY_COMPARE(cleared.size(), 1);
+        QVERIFY(cleared.first().first().toBool());
+        QVERIFY(chat.mini()->rows.isEmpty() && !chat.mini()->version);
+        QVERIFY(!store.values.contains("mini/" + id));
+        QVERIFY(!chat.current().rows.isEmpty()); // only the mini session was deleted
+        QSignalSpy removed(&chat, &ChatService::removed);
+        chat.remove(id);
+        QTRY_COMPARE(removed.size(), 1);
+        QVERIFY(removed.first().at(1).toBool());
+        QVERIFY(!store.values.contains("chats/" + id));
+        QCOMPARE(ask(fake, GetSession{id + ":mini", {}}).index(), 0u);
+    }
+    void locksFailClosed()
+    {
+        FakeBackend fake(nullptr, 0);
+        MemoryKeyStore store;
+        PreferencesStore prefs({});
+        TestSealer sealer;
+        QString id;
+        {
+            Library library(&store, &sealer);
+            ChatService chat(&fake, &prefs, &library);
+            chat.initialize();
+            QTRY_VERIFY(chat.ready());
+            QVERIFY(chat.send("private words"));
+            QTRY_VERIFY(!chat.pending());
+            settle(fake);
+            QTRY_VERIFY(!chat.busy());
+            id = chat.current().id;
+            QVERIFY(chat.protect(id, "pw").isEmpty());
+            QVERIFY(chat.current().locked && chat.current().rows.isEmpty());
+            QVERIFY(store.values.value("chats/" + id).contains("sealed"));
+            // The title is sealed (its home `space` folder name stays plain, as in library.js).
+            QVERIFY(store.values.value("index")
+                        .value("chats")
+                        .toArray()
+                        .first()
+                        .toObject()
+                        .value("title")
+                        .toString()
+                        .isEmpty());
+            QCOMPARE(chat.send("refused"), 0u);
+            QCOMPARE(chat.unlock(id, "wrong"), QStringLiteral("Wrong password."));
+            QVERIFY(chat.unlock(id, "pw").isEmpty());
+            QCOMPARE(chat.current().rows.first().text, QStringLiteral("private words"));
+            QCOMPARE(chat.current().title, QStringLiteral("private words"));
+        }
+        // Without a sealer (this build's production state) a protected chat stays
+        // locked and is never overwritten as empty.
+        Library plain(&store);
+        QVERIFY(plain.isLocked(id));
+        QVERIFY(!plain.conversation(id));
+        QVERIFY(!plain.saveMessages(id, {}, 0));
+        QVERIFY(!plain.protect(plain.chats().first().id, "pw").isEmpty());
+        ChatService locked(&fake, &prefs, &plain);
+        locked.initialize();
+        QTRY_VERIFY(locked.connected());
+        QCOMPARE(locked.chats().first().title, QStringLiteral("Locked local view"));
+        locked.open(id);
+        QVERIFY(locked.current().locked && locked.status().contains("locked"));
+        QVERIFY(!locked.unlock(id, "pw").isEmpty());
+        QVERIFY(store.values.value("chats/" + id).contains("sealed"));
+        // With the key, removing the password writes the clear copy first.
+        Library keyed(&store, &sealer);
+        QVERIFY(keyed.unlock(id, "pw").isEmpty());
+        QVERIFY(keyed.unprotect(id).isEmpty());
+        QVERIFY(!store.values.value("chats/" + id).contains("sealed"));
+        QCOMPARE(*keyed.titleOf(id), QStringLiteral("private words"));
+    }
+    void usageLedgerPersists()
+    {
+        MemoryKeyStore store;
+        {
+            UsageStore ledger(&store);
+            Usage usage;
+            usage.provider = "p|x";
+            usage.model = "m";
+            usage.modelName = "Model";
+            usage.input = 10;
+            usage.cached = 20; // clamped to input
+            usage.output = 5;
+            ledger.record(usage);
+        } // destructor flushes the debounced save
+        UsageStore reread(&store);
+        const auto total = reread.totals()["p|x"].toMap();
+        QCOMPARE(total["tokens"].toDouble(), 15.0);
+        QCOMPARE(total["cached"].toDouble(), 10.0);
+        QCOMPARE(reread.nameOf(R"(["p|x","m"])"), QStringLiteral("Model"));
+        QVERIFY(reread.since() > 0);
+        // Version 1 keys upgrade on read.
+        const auto today = QDate::currentDate().toString(Qt::ISODate);
+        store.values.insert(
+            "usage",
+            {{"version", 1},
+             {"since", 1},
+             {"days", QJsonObject{{today, QJsonObject{{"prov|mod", QJsonArray{1, 0, 0, 2, 1}}}}}},
+             {"names", QJsonObject{}}});
+        UsageStore old(&store);
+        QCOMPARE(old.totals()["prov"].toMap()["tokens"].toDouble(), 3.0);
+        QCOMPARE(old.nameOf(R"(["prov","mod"])"), QStringLiteral("mod"));
+        // An unreadable ledger is neither extended nor overwritten.
+        store.raw.insert("usage", "broken");
+        UsageStore broken(&store);
+        QVERIFY(!broken.error().isEmpty());
+        Usage usage;
+        usage.provider = usage.model = "x";
+        usage.input = 1;
+        broken.record(usage);
+        QVERIFY(broken.flush());
+        QVERIFY(store.raw.contains("usage") && broken.totals().isEmpty());
+    }
+    void hostToolsRoutedAndReleased()
+    {
+        InspectBackend backend;
+        PreferencesStore prefs({});
+        ScriptedHost host;
+        MemoryKeyStore store;
+        Library library(&store);
+        ChatService chat(&backend, &prefs, &library, &host);
+        chat.initialize();
+        QTRY_VERIFY(chat.ready());
+        QCOMPARE(std::get<Initialize>(backend.commands.first()).tools.size(), 1);
+        QVERIFY(chat.send("/fake approval"));
+        QTRY_VERIFY(!chat.current().turn.remoteId.isEmpty());
+        const auto session = chat.current().id, turn = chat.current().turn.remoteId;
+        const auto answered = [&](RequestId id) {
+            return std::count_if(backend.answers.cbegin(), backend.answers.cend(),
+                                 [id](const auto &a) { return a.first == id; });
+        };
+        emit backend.reverseRequest(501, HostToolRequest{session, turn, "t1", "browser_open", {}});
+        QCOMPARE(answered(501), 1); // unpublished tool: unsupported
+        emit backend.reverseRequest(502,
+                                    HostToolRequest{session, "old", "t2", "browser_snapshot", {}});
+        QCOMPARE(answered(502), 1); // stale turn
+        emit backend.reverseRequest(503,
+                                    HostToolRequest{session, turn, "t3", "browser_snapshot", {}});
+        QCOMPARE(host.ran, QVector<RequestId>{503});
+        QCOMPARE(answered(503), 0);
+        emit host.finished(503, HostToolResult{{HostToolResult::Text{"page"}}, false, {}, {}, {}});
+        emit host.finished(503, HostToolResult{});
+        QCOMPARE(answered(503), 1); // exactly once
+        emit backend.reverseRequest(504,
+                                    HostToolRequest{session, turn, "t4", "browser_snapshot", {}});
+        emit backend.reverseCancelled(504);
+        QCOMPARE(host.cancelled, QVector<RequestId>{504});
+        emit host.finished(504, HostToolResult{});
+        QCOMPARE(answered(504), 0); // the backend cancelled it
+        emit backend.reverseRequest(505,
+                                    HostToolRequest{session, turn, "t5", "browser_snapshot", {}});
+        chat.stop(); // the turn ends: its running host step is released
+        QVERIFY(host.cancelled.contains(505));
+        QCOMPARE(answered(505), 1);
+        const auto &last = std::get<HostToolResult>(
+            std::find_if(backend.answers.cbegin(), backend.answers.cend(), [](const auto &a) {
+                return a.first == 505;
+            })->second);
+        QCOMPARE(last.status, HostToolResult::Status::Cancelled);
+    }
+    void foldersAndPinsThroughService()
+    {
+        FakeBackend fake(nullptr, 0);
+        MemoryKeyStore store;
+        PreferencesStore prefs({});
+        Library library(&store);
+        ChatService chat(&fake, &prefs, &library);
+        chat.initialize();
+        QTRY_VERIFY(chat.ready());
+        chat.newChat(QStringLiteral("/unknown"));
+        QVERIFY(chat.current().folder.isEmpty()); // unknown folders are not invented
+        QVERIFY(chat.addFolder(QStringLiteral("/work/a")).isEmpty());
+        chat.newChat(QStringLiteral("/work/a"));
+        QCOMPARE(chat.current().folder, QStringLiteral("/work/a"));
+        for (const auto *text : {"first in folder", "second in folder"}) {
+            chat.newChat(QStringLiteral("/work/a"));
+            QVERIFY(chat.send(QString::fromLatin1(text)));
+            QTRY_VERIFY(!chat.pending());
+            settle(fake);
+            QTRY_VERIFY(!chat.busy());
+        }
+        const auto ids = library.inFolder("/work/a");
+        QCOMPARE(ids.size(), 2);
+        QVERIFY(!library.isHome(*library.chat(ids.first())));
+        QVERIFY(chat.setPinned(ids.first(), true));
+        QVERIFY(Library(&store).chat(ids.first())->pinned);
+        QSignalSpy folders(&chat, &ChatService::folderRemoved);
+        chat.removeFolder(QStringLiteral("/work/a"));
+        QTRY_COMPARE(folders.size(), 1);
+        QVERIFY(folders.first().at(1).toBool());
+        QVERIFY(library.chats().isEmpty() && !library.folder("/work/a"));
+        QVERIFY(chat.chats().isEmpty());
+        for (const auto &id : ids) // both backend sessions were deleted
+            QCOMPARE(
+                std::get<SessionRecovery>(std::get<Reply>(ask(fake, GetSession{id, {}}))).index(),
+                0u);
     }
     void metatypeResultCopies()
     {

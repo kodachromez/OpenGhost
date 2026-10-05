@@ -151,6 +151,17 @@ int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
                   "opening reconciles fake session");
             check(controller.session() == first && controller.transcript()->rowCount() == 3,
                   "open restores prior display");
+            controller.sessions()->togglePin(first);
+            check(controller.sessions()->pinnedCount() == 1, "sidebar pin reaches chat index");
+            controller.sessions()->setQuery(QStringLiteral("Second"));
+            controller.sessions()->setQuery(QString()); // two worker answers from the index
+            check(controller.sessions()->pinnedCount() == 1, "saved pin survives a resync");
+            controller.sessions()->togglePin(first);
+            controller.toggleFolder(QStringLiteral("home:"));
+            check(controller.collapsedFolders().value(QStringLiteral("home:")).toBool(),
+                  "home collapse saved in chat index");
+            controller.toggleFolder(QStringLiteral("home:"));
+            check(controller.collapsedFolders().isEmpty(), "home expand saved in chat index");
             controller.newChat();
 
             QTemporaryDir files;

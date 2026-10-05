@@ -41,6 +41,7 @@ int main(int argc, char *argv[])
     selectControlsStyle();
     QString appearancePath;
     QString preferencesPath;
+    QString dataPath;
 #ifdef OPENGHOST_SMOKE_TEST
     QTemporaryDir testSettings;
     if (parser.isSet(QStringLiteral("smoke-test"))) {
@@ -48,18 +49,25 @@ int main(int argc, char *argv[])
             return 1;
         appearancePath = testSettings.path() + QStringLiteral("/appearance.json");
         preferencesPath = testSettings.path() + QStringLiteral("/preferences.json");
+        dataPath = testSettings.path() + QStringLiteral("/library");
     } else
 #endif
     {
         const QString config = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
         appearancePath = config + QStringLiteral("/appearance.json");
         preferencesPath = config + QStringLiteral("/preferences.json");
+        // Display caches, recovery markers, chat index and usage ledger: local
+        // frontend state, never backend history or credentials. The fake's
+        // sessions die with the process, so its chats never enter the profile.
+        if (!parser.isSet(QStringLiteral("fake-backend")))
+            dataPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) +
+                       QStringLiteral("/library");
     }
     keepAppearance(appearancePath);
     std::unique_ptr<openghost::Backend> backend;
     if (parser.isSet(QStringLiteral("fake-backend")))
         backend = std::make_unique<openghost::FakeBackend>();
-    WindowController controller(backend.get(), preferencesPath);
+    WindowController controller(backend.get(), preferencesPath, dataPath);
     QObject::connect(&controller, &WindowController::closeRequested, &app, &QCoreApplication::quit);
     QQmlApplicationEngine engine;
 #ifdef OPENGHOST_SMOKE_TEST

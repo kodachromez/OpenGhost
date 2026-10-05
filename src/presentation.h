@@ -55,6 +55,7 @@ struct Session {
     QString id, title, folder;
     qint64 updated = 0;
     qint64 created = 0;
+    bool pinned = false; // Saved in the frontend's chat index (library.js).
 };
 
 // One catalog model, levels in OpenGhost's advertised order.

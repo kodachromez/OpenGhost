@@ -9,7 +9,9 @@ Default launch is **disconnected**. Use `--fake-backend` to exercise chats,
 streaming, Escape Stop, Retry, steering, approvals, text attachments, model/auth
 states and usage against an explicitly labelled, in-memory C++ fixture. It runs
 no model, real tools, credentials, network or process. General instructions,
-model/effort/mode preferences and appearance save locally. Try `/fake approval`
+model/effort/mode preferences and appearance save locally; a normal launch also
+saves the chat index, display caches, recovery checkpoints and usage ledger
+(the fake keeps its chats in memory, since its sessions do not survive exit). Try `/fake approval`
 or `/fake error`; fixture sign-in accepts only `fixture`, never a real key.
 There is no Rust, RPC or FFI integration yet. See [the port notes](docs/cpp-port.md)
 for end-to-end coverage and deliberately mocked host systems.

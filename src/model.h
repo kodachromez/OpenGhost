@@ -163,8 +163,9 @@ class TranscriptModel final : public KeyedModel
 // worker. The query only records what the reader typed; the worker's answer
 // for it is applied as a keyed diff.
 //
-// Pins are OpenGhost's (library.js): a list preference held only while the
-// window lives, never sent to OpenGhost's backend or written anywhere. Pinned rows lead the
+// Pins are OpenGhost's (library.js): a frontend chat-index annotation, never
+// sent to OpenGhost's backend. Each answer carries the saved pin; a toggle is
+// shown at once and reported (pinToggled) for saving. Pinned rows lead the
 // list, newest first, in their own group ("pinned:"); the others keep the
 // worker's order: chats without a folder (an empty folder path) in OpenGhost
 // 1.3's home group ("home:"), then the rest grouped by folder path.
@@ -225,6 +226,7 @@ class SessionModel final : public KeyedModel
   signals:
     void queryChanged();
     void groupsChanged();
+    void pinToggled(QString id, bool pinned);
 
   private:
     void place();

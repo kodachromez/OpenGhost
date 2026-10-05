@@ -253,7 +253,7 @@ Result FakeBackend::execute(const Command &command)
             return failure(QStringLiteral("invalid_request"),
                            QStringLiteral("Session, client turn and text required."));
         if (!supported(start->input) || !start->params.userContext.files.isEmpty() ||
-            start->params.host.browser || start->params.side)
+            start->params.host.browser)
             return failure(QStringLiteral("unsupported"),
                            QStringLiteral("Fake supports prepared text attachments only; browser, "
                                           "media and pinned files remain mocked."));

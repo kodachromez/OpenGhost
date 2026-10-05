@@ -54,12 +54,23 @@ void selectControlsStyle()
         QQuickStyle::setStyle(QStringLiteral("Fusion"));
 }
 
-WindowController::WindowController(QObject *parent) : WindowController(nullptr, {}, parent) {}
+WindowController::WindowController(QObject *parent) : WindowController(nullptr, {}, {}, parent) {}
+
+namespace
+{
+std::unique_ptr<openghost::KeyStore> keyStore(const QString &path)
+{
+    if (path.isEmpty())
+        return std::make_unique<openghost::MemoryKeyStore>();
+    return std::make_unique<openghost::FileKeyStore>(path);
+}
+} // namespace
 
 WindowController::WindowController(openghost::Backend *backend, QString preferencesPath,
-                                   QObject *parent)
-    : QObject(parent), m_preferences(std::move(preferencesPath)), m_chat(backend, &m_preferences),
-      m_general(&m_preferences)
+                                   QString dataPath, QObject *parent)
+    : QObject(parent), m_preferences(std::move(preferencesPath)), m_store(keyStore(dataPath)),
+      m_library(m_store.get()), m_chat(backend, &m_preferences, &m_library),
+      m_general(&m_preferences), m_usage(m_store.get())
 {
     registerNativeTypes();
     connect(&m_chat, &openghost::ChatService::changed, this, &WindowController::sync);
@@ -99,6 +110,12 @@ WindowController::WindowController(openghost::Backend *backend, QString preferen
     connect(&m_preferences, &openghost::PreferencesStore::changed, this,
             &WindowController::catalog);
     connect(&m_sessions, &SessionModel::queryChanged, this, &WindowController::sync);
+    connect(&m_sessions, &SessionModel::pinToggled, this, [this](const QString &id, bool pinned) {
+        if (!m_chat.setPinned(id, pinned))
+            sync(); // The saved pin stays authoritative.
+    });
+    connect(&m_chat, &openghost::ChatService::folderRemoved, this,
+            &WindowController::folderRemoved);
     m_notice = m_preferences.error();
     catalog();
     sync();
@@ -170,6 +187,9 @@ void WindowController::sync()
     QVector<Entry> rows;
     QHash<QString, Entry> rendered;
     for (const auto &row : chat.rows) {
+        if (row.hidden || row.role == openghost::DisplayRow::Role::Preserved ||
+            row.role == openghost::DisplayRow::Role::Moved)
+            continue; // Pending parts and undrawn saved entries; moved is mini-only.
         Entry entry;
         entry.kind = row.role == openghost::DisplayRow::Role::User        ? Entry::User
                      : row.role == openghost::DisplayRow::Role::Assistant ? Entry::Assistant
@@ -210,15 +230,41 @@ void WindowController::sync()
     m_rendered = std::move(rendered);
     m_transcript.apply(rows);
     QVector<Session> sessions;
-    for (const auto &record : m_chat.chats())
+    QSet<QString> listed;
+    for (const auto &record : m_chat.chats()) {
+        listed.insert(record.folder);
         if (m_sessions.query().isEmpty() ||
-            record.title.contains(m_sessions.query(), Qt::CaseInsensitive))
-            sessions.append({record.id, record.title, {}, record.updated, record.created});
+            (!record.locked && record.title.contains(m_sessions.query(), Qt::CaseInsensitive)))
+            sessions.append({record.id, record.title, record.folder, record.updated, record.created,
+                             record.pinned});
+    }
     m_sessions.apply(sessions);
+    // Kept folders without a chat, by their latest activity.
+    auto folders = m_library.folders();
+    std::sort(folders.begin(), folders.end(), [this](const auto &a, const auto &b) {
+        return m_library.activity(a) > m_library.activity(b);
+    });
+    QStringList empty, order;
+    for (const auto &folder : folders) {
+        order.append(folder.path);
+        if (!listed.contains(folder.path))
+            empty.append(folder.path);
+    }
+    m_sessions.setEmptyFolders(empty, order);
     emit approvalsChanged();
     emit changed();
 }
 
+QVariantMap WindowController::collapsedFolders() const
+{
+    QVariantMap result;
+    if (m_library.homeCollapsed())
+        result.insert(QStringLiteral("home:"), true);
+    for (const auto &folder : m_library.folders())
+        if (folder.collapsed)
+            result.insert(folder.path, true);
+    return result;
+}
 QVariantMap WindowController::modes() const
 {
     return {{"known", true},

@@ -1,21 +1,30 @@
 #pragma once
 #include "backend/types.h"
+#include "store.h"
 #include <QDate>
 #include <QMap>
 #include <QObject>
+#include <QTimer>
 #include <QVariantMap>
 
 namespace openghost
 {
-// Frontend-local, session-lifetime ledger. Only identity-checked live events
-// reach record(); replay updates reply metrics but must not charge this ledger.
+// Frontend-local ledger (usage.js, schema version 2; version 1 upgraded on
+// read). Only identity-checked live events reach record(); replay updates reply
+// metrics but must not charge it. Saves are debounced and flushed on exit. An
+// unreadable/unknown saved ledger is left on disk untouched and not extended.
 class UsageStore final : public QObject
 {
     Q_OBJECT
     Q_PROPERTY(QString thisMonth READ thisMonth NOTIFY changed)
     Q_PROPERTY(double since READ since NOTIFY changed)
   public:
-    using QObject::QObject;
+    explicit UsageStore(QObject *parent = nullptr) : UsageStore(nullptr, parent) {}
+    explicit UsageStore(KeyStore *store, QObject *parent = nullptr);
+    ~UsageStore() override { flush(); }
+    QString error() const { return m_error; }
+    bool flush(); // Writes a pending change now.
+    static constexpr int SaveDelay = 800;
     QString thisMonth() const { return QDate::currentDate().toString("yyyy-MM"); }
     double since() const { return m_since; }
     void record(const Usage &usage);
@@ -24,12 +33,16 @@ class UsageStore final : public QObject
     Q_INVOKABLE QVariantList daily(int count) const;
     Q_INVOKABLE QVariantList month(const QString &key) const;
     Q_INVOKABLE QStringList months() const;
-    Q_INVOKABLE QString nameOf(const QString &id) const { return m_names.value(id, id); }
+    Q_INVOKABLE QString nameOf(const QString &id) const;
   signals:
     void changed();
 
   private:
     QVariantMap day(const QDate &date) const;
+    void save();
+    KeyStore *m_store = nullptr;
+    QTimer m_timer;
+    QString m_error;
     QMap<QString, QMap<QString, Usage>> m_days;
     QMap<QString, QString> m_names;
     qint64 m_since = 0;

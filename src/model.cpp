@@ -254,6 +254,7 @@ void SessionModel::togglePin(const QString &id)
     if (!m_pinned.remove(id))
         m_pinned.insert(id);
     place();
+    emit pinToggled(id, m_pinned.contains(id));
     for (int i = 0; i < m_rows.size(); ++i) {
         if (m_rows.at(i).id == id)
             emit dataChanged(index(i), index(i), {PinnedRole, GroupRole});
@@ -271,6 +272,11 @@ void SessionModel::setQuery(const QString &query)
 void SessionModel::apply(const QVector<Session> &sessions)
 {
     m_source = sessions;
+    for (const auto &session : sessions)
+        if (session.pinned)
+            m_pinned.insert(session.id);
+        else
+            m_pinned.remove(session.id);
     place();
 }
 
