@@ -2,6 +2,7 @@
 'use strict';
 
 const STORAGE = { effort: 'openghost.effort', mode: 'openghost.mode', model: 'openghost.model', catalog: 'openghost.catalog' };
+const CATALOG_VERSION = 4;
 // How long the backend's list of models counts as fresh. Opening the model picker after that reads the list again.
 const FRESH = 10 * 60 * 1000;
 const MODES = ['ask', 'auto', 'full'];
@@ -98,16 +99,20 @@ function providersOf(values) {
  });
 }
 
+// Unknown is distinct from both confirmed support and confirmed lack of support.
+const visionOf = value => typeof value === 'boolean' ? value : null;
+
 // A model as the backend lists it (ABP Model), as the picker and the effort control use it.
+// Context 0 is the UI's unknown sentinel, never a usable token budget. No effort list is inferred.
 const modelOf = model => ({
  id: `${model.provider}:${model.id}`,
  provider: String(model.provider),
  api: String(model.id),
  name: text(model.name) || String(model.id),
  context: Number.isFinite(model.contextWindow) && model.contextWindow > 0 ? model.contextWindow : 0,
- efforts: Array.isArray(model.thinkingLevels) ? model.thinkingLevels.filter(level => typeof level === 'string' && level) : [],
+ efforts: Array.isArray(model.thinkingLevels) ? model.thinkingLevels.filter(level => typeof level === 'string' && level.trim()) : [],
  defaultEffort: model.defaultThinking,
- vision: model.vision === true,
+ vision: visionOf(model.vision),
 });
 
 class Settings {
@@ -244,14 +249,14 @@ class Settings {
  readCatalog() {
   try {
    const saved = JSON.parse(localStorage.getItem(STORAGE.catalog));
-   // Older catalogs contain inferred capabilities, not just backend data.
-   if (saved?.version === 3 && Array.isArray(saved.models)) return saved.models;
+   // Older catalogs inferred capabilities or collapsed unknown vision to false. Re-read the backend.
+   if (saved?.version === CATALOG_VERSION && Array.isArray(saved.models)) return saved.models;
   } catch {}
   return [];
  }
 
  saveCatalog() {
-  try { localStorage.setItem(STORAGE.catalog, JSON.stringify({ version: 3, models: this.models })); } catch {}
+  try { localStorage.setItem(STORAGE.catalog, JSON.stringify({ version: CATALOG_VERSION, models: this.models })); } catch {}
  }
 
  // The eye beside a key shows what was typed for a moment's check; closing the settings hides every key again. A saved
@@ -329,7 +334,7 @@ class Settings {
    ready: !!model,
    effort,
    efforts,
-   vision: model?.vision === true,
+   vision: visionOf(model?.vision),
   };
  }
 

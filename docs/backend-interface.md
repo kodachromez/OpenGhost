@@ -301,9 +301,14 @@ and settings reads, and refreshes stale models when the picker opens (10-minute 
 
 - Requests use the exact `Model.id` and `Model.provider` separately; the local selection key combines them as
   `provider:id`. Removed/unavailable selections are retained rather than silently replaced by another model.
-- Only `vision: true` advertises vision. An absent/nonpositive context window is unknown, not an inferred limit.
-- Missing/empty `thinkingLevels` means no selectable levels. A supported user preference takes precedence over an
-  advertised `defaultThinking` that belongs to those levels; otherwise `thinking` is omitted. No default level is inferred.
+- Only `vision: true` advertises vision; `false` explicitly reports no photo support. Missing/non-boolean vision stays
+  unknown (`null` in the UI catalog), with neither claim shown in the picker. Old caches that lost this distinction are discarded.
+- An absent, nonnumeric, nonfinite or nonpositive context window is unknown (`0` in the UI), not an inferred limit.
+  Unknown windows show no fullness percentage. Catalog windows are display metadata, never outgoing token-budget or
+  compaction overrides; the backend owns budgeting and compaction.
+- Missing/empty/malformed `thinkingLevels` means no selectable levels; non-string and blank entries are ignored. A
+  supported user preference takes precedence over an advertised `defaultThinking` that belongs to those levels;
+  otherwise `thinking` is omitted. No default level or generic effort list is inferred.
 - A canonical `session.configure` result can set or clear thinking independently of the advertised selectable levels.
   Backend defaults are display state, not saved user preferences.
 

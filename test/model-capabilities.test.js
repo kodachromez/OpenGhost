@@ -1,6 +1,6 @@
 'use strict';
 
-// F13: catalog omissions are not capabilities; configuration responses, not requests, are authoritative.
+// Issue #21 / F13: catalog omissions are not capabilities; canonical configuration remains authoritative.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -78,8 +78,10 @@ async function page(models, saved = {}) {
 const model = (id, extra = {}) => ({ id, provider: 'p', name: id, ...extra });
 const thinking = { thinkingLevels: ['none', 'low', 'high'], defaultThinking: 'low' };
 
-test('empty or missing thinkingLevels stays unsupported in settings, slider, and outgoing configuration', async () => {
- for (const capabilities of [{}, { thinkingLevels: [] }, { thinkingLevels: [], defaultThinking: 'high' }]) {
+test('missing, empty or malformed thinkingLevels never invent effort choices or outgoing thinking', async () => {
+ const cases = [{}, { defaultThinking: 'high' }, ...[undefined, null, [], '', 'low,medium,high', true, false, {}, [null, false, 1, '', '  ']]
+  .map(thinkingLevels => ({ thinkingLevels, defaultThinking: 'high' }))];
+ for (const capabilities of cases) {
   const f = await page([model('m', capabilities)], { 'openghost.effort': 'high' });
   assert.deepEqual(plain(f.settings.config.efforts), []);
   assert.equal(f.settings.config.effort, undefined);
@@ -92,14 +94,25 @@ test('empty or missing thinkingLevels stays unsupported in settings, slider, and
  }
 });
 
-test('missing vision is not advertised; explicit true and false retain their picker metadata', async () => {
- const f = await page([model('unknown'), model('text', { vision: false }), model('vision', { vision: true })]);
- f.stage.build();
- for (let i = 0; i < f.settings.models.length; i++) {
-  const entry = f.settings.models[i], supported = i === 2;
-  assert.equal(f.settings.configFor(entry.id).vision, supported);
-  assert.match(f.stage.rows[i].attributes['aria-label'], new RegExp(f.window.I18n.t(supported ? 'model.vision' : 'model.text')));
-  if (!supported) assert.doesNotMatch(f.stage.rows[i].attributes['aria-label'], /Vision/i);
+test('vision retains explicit true/false and distinguishes unknown in settings, cache and picker', async () => {
+ for (const provider of ['openai', 'deepseek', 'other']) {
+  const values = [undefined, null, '', 'true', 'false', 0, 1, [], {}, false, true];
+  const f = await page(values.map((vision, i) => model(`m${i}`, { provider, ...(vision === undefined ? {} : { vision }) })));
+  f.stage.build();
+  const cached = plain(f.settings.readCatalog());
+  for (let i = 0; i < values.length; i++) {
+   const expected = typeof values[i] === 'boolean' ? values[i] : null;
+   const entry = f.settings.models[i], label = f.stage.rows[i].attributes['aria-label'];
+   assert.equal(entry.vision, expected);
+   assert.equal(cached[i].vision, expected);
+   assert.equal(f.settings.configFor(entry.id).vision, expected);
+   if (expected === null) {
+    assert.equal(label, entry.name, 'unknown must claim neither photo support nor no-photo support');
+    assert.doesNotMatch(f.stage.rows[i].innerHTML, /Sees photos|No photos/);
+   } else {
+    assert.equal(label, `${entry.name}, ${f.window.I18n.t(expected ? 'model.vision' : 'model.text')}`);
+   }
+  }
  }
 });
 
@@ -127,6 +140,52 @@ test('missing contextWindow stays unknown in the picker, context hint and stats;
  await f.settings.refresh();
  assert.equal(f.chat.fill, 0.5);
  assert.equal((await f.chat.stats()).context.window, 500);
+});
+
+test('invalid context windows stay unknown and are never forwarded as budgeting overrides', async () => {
+ const values = [undefined, null, 0, -1, NaN, Infinity, -Infinity, '', '1000000', true, false, {}, []];
+ const f = await page(values.map((contextWindow, i) => model(`m${i}`, { contextWindow })));
+ f.stage.build();
+ for (let i = 0; i < values.length; i++) {
+  const entry = f.settings.models[i];
+  f.conv.record.model = entry.id;
+  assert.equal(entry.context, 0);
+  assert.equal(f.settings.windowOf(entry.id), 0);
+  assert.equal(f.chat.fill, null);
+  assert.equal((await f.chat.stats()).context.window, 0);
+  assert.doesNotMatch(f.stage.rows[i].attributes['aria-label'], /context|NaN|Infinity|1M/);
+  const params = plain(await f.chat.sessionParams(f.conv, { config: f.chat.config(f.conv) }));
+  assert.deepEqual(Object.keys(params).sort(), ['cwd', 'host', 'model', 'permissionMode', 'provider', 'title', 'userContext']);
+ }
+});
+
+test('explicit provider capabilities survive normalization without generic reasoning levels or context caps', async () => {
+ for (const provider of ['openai', 'deepseek']) {
+  const f = await page([
+   model('reported', { provider, contextWindow: 128000, vision: true, thinkingLevels: ['medium', 'high'], defaultThinking: 'medium' }),
+   model('custom', { provider, contextWindow: 2000000, vision: false, thinkingLevels: ['brief', 'deep'], defaultThinking: 'deep' }),
+  ]);
+  assert.deepEqual(plain(f.settings.configFor(`${provider}:reported`).efforts), ['medium', 'high']);
+  assert.equal(f.settings.configFor(`${provider}:reported`).effort, 'medium');
+  assert.equal(f.settings.windowOf(`${provider}:reported`), 128000);
+  assert.deepEqual(plain(f.settings.configFor(`${provider}:custom`).efforts), ['brief', 'deep']);
+  assert.equal(f.settings.configFor(`${provider}:custom`).effort, 'deep');
+  assert.equal(f.settings.windowOf(`${provider}:custom`), 2000000);
+  assert.deepEqual(plain(f.settings.readCatalog()), plain(f.settings.models));
+ }
+});
+
+test('a refreshed catalog does not retain capabilities omitted from the new response', async () => {
+ const f = await page([model('m', { ...thinking, vision: true, contextWindow: 128000 })], { 'openghost.effort': 'high' });
+ f.backend.models = [model('m')];
+ await f.settings.refresh();
+ assert.equal(f.settings.config.vision, null);
+ assert.equal(f.settings.config.effort, undefined);
+ assert.deepEqual(plain(f.settings.config.efforts), []);
+ assert.equal(f.slider.button.hidden, true);
+ assert.equal(f.settings.windowOf('p:m'), 0);
+ assert.equal(f.chat.fill, null);
+ assert.deepEqual(plain(f.settings.readCatalog()), plain(f.settings.models));
 });
 
 test('backend defaults drive initial selection and same-level model switches without becoming saved preferences', async () => {
@@ -238,7 +297,7 @@ test('removed selections stay unavailable; picker still supports explicit valid 
  assert.equal(f.chat.model, 'p:a');
  assert.equal(f.settings.resolve(), 'p:a');
  assert.equal(f.settings.config.ready, false);
- assert.equal(f.settings.config.vision, false);
+ assert.equal(f.settings.config.vision, null);
  assert.deepEqual(plain(f.settings.efforts), []);
  assert.equal(f.chat.send('not sent'), false);
  assert.equal(f.calls.some(call => call.method === 'turn.start'), false);
@@ -260,10 +319,12 @@ test('removed selections stay unavailable; picker still supports explicit valid 
  assert.equal(f.settings.config.ready, false);
 });
 
-test('cached catalogs containing old inferred capabilities are not reused', async () => {
+test('cached catalogs with inferred capabilities or conflated unknown/false vision are not reused', async () => {
  const f = await page([model('m')]);
- f.storage.set('openghost.catalog', JSON.stringify({ version: 2, models: [{ id: 'p:old', vision: true, efforts: ['high'] }] }));
- assert.deepEqual(plain(f.settings.readCatalog()), []);
+ for (const version of [undefined, 1, 2, 3]) {
+  f.storage.set('openghost.catalog', JSON.stringify({ version, models: [{ id: 'p:old', vision: true, efforts: ['low', 'medium', 'high'], context: 1000000 }] }));
+  assert.deepEqual(plain(f.settings.readCatalog()), [], `catalog version ${version}`);
+ }
  f.settings.saveCatalog();
  assert.deepEqual(plain(f.settings.readCatalog()), plain(f.settings.models));
 });

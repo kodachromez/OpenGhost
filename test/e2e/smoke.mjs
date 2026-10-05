@@ -179,6 +179,38 @@ fs.mkdirSync(SCRATCH, { recursive: true });
   assert.match(await page.eval("document.querySelector('.settings-providers .provider-name').textContent"), /Test provider/);
   assert.equal(await page.eval("document.querySelector('.settings-key').placeholder"), 'Saved · type to replace');
  });
+ await step('missing model metadata stays unknown while explicit capabilities remain visible', async () => {
+  const metadata = await page.eval(`(async () => {
+   try {
+    await Backend.request('test.models', { models: [
+     { id: 'm1', provider: 'test', name: 'Unknown', thinkingLevels: [], defaultThinking: 'high' },
+     { id: 'text', provider: 'test', name: 'Text', vision: false },
+     { id: 'image', provider: 'test', name: 'Image', vision: true, contextWindow: 128000, thinkingLevels: ['medium', 'high'], defaultThinking: 'medium' },
+    ] });
+    await settings.refresh();
+    modelStage.build();
+    return {
+     labels: modelStage.rows.map(row => row.getAttribute('aria-label')),
+     meta: modelStage.rows.map(row => row.querySelector('.model-meta').textContent),
+     vision: settings.models.map(model => settings.configFor(model.id).vision),
+     efforts: settings.config.efforts, thinkingOmitted: settings.config.effort === undefined,
+     effortHidden: document.querySelector('.composer-effort').hidden,
+     window: settings.windowOf('test:m1'),
+     reported: settings.configFor('test:image').efforts,
+    };
+   } finally {
+    await Backend.request('test.models');
+    await settings.refresh();
+    modelStage.build();
+   }
+  })()`);
+  assert.deepEqual(metadata, {
+   labels: ['Unknown', 'Text, No photos', 'Image, 128K context · Sees photos'],
+   meta: ['', 'No photos', '128K context · Sees photos'],
+   vision: [null, false, true], efforts: [], thinkingOmitted: true, effortHidden: true, window: 0,
+   reported: ['medium', 'high'],
+  });
+ });
  await step('a reply streams in, an approval is answered and the browser host tool runs', async () => {
   await send(page, 'hello approve browser');
   await waitFor('the approval card', () => page.eval("!!document.querySelector('.approval .approval-button.is-allow')"));

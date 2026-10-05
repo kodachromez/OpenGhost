@@ -52,6 +52,8 @@ const CAPABILITIES = {
 };
 
 let hello = null;
+const MODELS = [{ id: 'm1', provider: 'test', name: 'Test model', contextWindow: 1000, vision: true, thinkingLevels: ['none', 'low', 'high'], defaultThinking: 'low' }];
+let models = MODELS;
 
 async function turn(sessionId, turnId, params) {
  const text = String(params.input?.text || '');
@@ -104,13 +106,15 @@ const handlers = {
  },
  // Echoes what the client said at the handshake, so a test can check it.
  'test.hello': () => hello,
+ // Override/reset only the test catalog to exercise metadata omissions over the real ABP boundary.
+ 'test.models': ({ models: next }) => { models = next ?? MODELS; return null; },
  'auth.providers': () => [{
   id: 'test', name: 'Test provider', group: 'Test group', limits: true,
   methods: [{ type: 'apiKey', label: 'Test API key', hint: 'A key for the scripted backend.', url: 'https://example.invalid/keys', placeholder: 'test-…' }],
   status: { connected: true, keySaved: true },
  }],
  'auth.setKey': ({ key }) => ({ connected: !!key, keySaved: !!key }),
- 'models.list': () => [{ id: 'm1', provider: 'test', name: 'Test model', contextWindow: 1000, vision: true, thinkingLevels: ['none', 'low', 'high'], defaultThinking: 'low' }],
+ 'models.list': () => models,
  'account.limits': () => ({ plan: 'test', windows: [{ seconds: 18000, used: 25, resets: Date.now() + 3600000 }], balances: [{ currency: 'USD', total: 4.2 }] }),
  'session.get'({ sessionId, clientTurnId }) {
   const session = sessions.get(sessionId);
