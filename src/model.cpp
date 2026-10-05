@@ -367,27 +367,97 @@ QHash<int, QByteArray> PluginModel::roleNames() const
         {NoteErrorRole, "noteError"}};
 }
 
-void PluginModel::apply(const QVector<Row> &rows)
+PluginModel::Row PluginModel::format(const openghost::PluginEntry &entry)
 {
+    const auto &p = entry.snapshot;
+    QString state =
+        p.state == "enabled"     ? QStringLiteral("Enabled")
+        : p.state == "disabled"  ? QStringLiteral("Disabled")
+        : p.state != "disabling" ? p.state // Future states render as reported.
+        : p.activeCalls == 1 ? QStringLiteral("Disabling — waiting for 1 running call to finish")
+        : p.activeCalls > 1  ? QStringLiteral("Disabling — waiting for %1 running calls to finish")
+                                   .arg(p.activeCalls)
+                             : QStringLiteral("Disabling — shutting down…");
+    if (!p.available)
+        state = QStringLiteral("Unavailable / not configured") +
+                (state.isEmpty() ? QString() : QStringLiteral(" · ") + state);
+    if (!entry.confirmed())
+        state += QStringLiteral(" · State not confirmed");
+    if (entry.pending)
+        state += QStringLiteral(" · Request pending…");
+    // Only the last answer's own persistence outcome; "saved" needs no note.
+    QStringList notes;
+    if (entry.warning.size())
+        notes << entry.warning;
+    if (entry.persisted == "memory")
+        notes << QStringLiteral("Applies until the backend restarts: it has no saved plugin "
+                                "state.");
+    else if (entry.persisted == "ambiguous")
+        notes << QStringLiteral("Applied, but saving was not confirmed: it may not survive a "
+                                "restart.");
+    return {p.id,
+            p.name.isEmpty() ? p.id : p.name,
+            p.description,
+            state,
+            entry.error.isEmpty() ? notes.join(QLatin1Char('\n')) : entry.error,
+            p.enabled,
+            p.available,
+            entry.pending,
+            entry.canToggle(),
+            !entry.error.isEmpty(),
+            entry.revision};
+}
+
+void PluginModel::update(int i, Row &old, const Row &now)
+{
+    if (old.revision == now.revision)
+        return;
+    QList<int> roles;
+    const auto changed = [&](auto field, int role) {
+        if (old.*field != now.*field)
+            roles << role;
+    };
+    changed(&Row::name, NameRole);
+    changed(&Row::description, DescriptionRole);
+    changed(&Row::status, StatusRole);
+    changed(&Row::enabled, EnabledRole);
+    changed(&Row::available, AvailableRole);
+    changed(&Row::pending, PendingRole);
+    changed(&Row::canToggle, CanToggleRole);
+    changed(&Row::note, NoteRole);
+    changed(&Row::noteError, NoteErrorRole);
+    old = now;
+    if (!roles.isEmpty())
+        emit dataChanged(index(i), index(i), roles);
+}
+
+void PluginModel::sync(const QVector<openghost::PluginEntry> &entries)
+{
+    const auto sameKeys = [&] {
+        for (int i = 0; i < m_rows.size(); ++i)
+            if (m_rows.at(i).id != entries.at(i).snapshot.id)
+                return false;
+        return true;
+    };
+    if (entries.size() == m_rows.size() && sameKeys()) {
+        // The usual update (one row's pending flip, event or answer): in place.
+        for (int i = 0; i < m_rows.size(); ++i)
+            if (m_rows.at(i).revision != entries.at(i).revision)
+                update(i, m_rows[i], format(entries.at(i)));
+        return;
+    }
+    QHash<QString, int> at;
+    at.reserve(m_rows.size());
+    for (int i = 0; i < m_rows.size(); ++i)
+        at.insert(m_rows.at(i).id, i);
+    QVector<Row> next;
+    next.reserve(entries.size());
+    for (const auto &entry : entries) {
+        const int i = at.value(entry.snapshot.id, -1);
+        next.append(i >= 0 && m_rows.at(i).revision == entry.revision ? m_rows.at(i)
+                                                                      : format(entry));
+    }
     diff(
-        m_rows, rows, [](const Row &row) -> const QString & { return row.id; },
-        [this](int i, Row &old, const Row &now) {
-            QList<int> roles;
-            const auto changed = [&](auto field, int role) {
-                if (old.*field != now.*field)
-                    roles << role;
-            };
-            changed(&Row::name, NameRole);
-            changed(&Row::description, DescriptionRole);
-            changed(&Row::status, StatusRole);
-            changed(&Row::enabled, EnabledRole);
-            changed(&Row::available, AvailableRole);
-            changed(&Row::pending, PendingRole);
-            changed(&Row::canToggle, CanToggleRole);
-            changed(&Row::note, NoteRole);
-            changed(&Row::noteError, NoteErrorRole);
-            old = now;
-            if (!roles.isEmpty())
-                emit dataChanged(index(i), index(i), roles);
-        });
+        m_rows, next, [](const Row &row) -> const QString & { return row.id; },
+        [this](int i, Row &old, const Row &now) { update(i, old, now); });
 }

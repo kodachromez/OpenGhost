@@ -1,5 +1,6 @@
 #pragma once
 
+#include "frontend/plugins.h"
 #include "presentation.h"
 
 #include <QAbstractListModel>
@@ -247,7 +248,8 @@ class SessionModel final : public KeyedModel
 
 // Settings' runtime plugin rows, formatted from the backend's snapshots. A
 // keyed diff by plugin ID: an update changes roles in place, so a row's
-// delegate (and its keyboard focus) survives pending flips and events.
+// delegate (and its keyboard focus) survives pending flips and events. Only
+// entries whose revision moved are formatted again.
 class PluginModel final : public KeyedModel
 {
     Q_OBJECT
@@ -268,14 +270,17 @@ class PluginModel final : public KeyedModel
         QString id, name, description, status, note;
         bool enabled = false, available = false, pending = false, canToggle = false;
         bool noteError = false;
+        quint64 revision = 0; // PluginEntry::revision it was formatted from.
     };
 
     using KeyedModel::KeyedModel;
     int rowCount(const QModelIndex &parent = {}) const override;
     QVariant data(const QModelIndex &index, int role) const override;
     QHash<int, QByteArray> roleNames() const override;
-    void apply(const QVector<Row> &rows);
+    void sync(const QVector<openghost::PluginEntry> &entries);
 
   private:
+    static Row format(const openghost::PluginEntry &entry);
+    void update(int i, Row &old, const Row &now);
     QVector<Row> m_rows;
 };

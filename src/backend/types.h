@@ -228,6 +228,10 @@ struct PluginUpdated {
 };
 struct PluginChanged { // plugin.changed {plugin}, not session-scoped
     Plugin plugin;
+    // Not a wire field: the port stamps the Initialize.connectionId of the
+    // connection that delivered the event. Events from any other connection
+    // (late or duplicated after a replacement) are ignored, never merged.
+    QString connectionId;
 };
 struct ModelsList {};
 struct ProvidersList {};

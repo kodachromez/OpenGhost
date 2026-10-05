@@ -160,6 +160,17 @@ int pluginSmoke(QQmlApplicationEngine &engine, QQuickWindow *window)
     backend.publish(plugin(future.id, "enabled"));
     QTest::qWait(1);
     check(text() == "On" && enabled(), "external state change updates existing UI");
+    {
+        QSignalSpy rows(controller.plugins(), &QAbstractItemModel::dataChanged);
+        QSignalSpy page(&controller, &WindowController::pluginsChanged);
+        backend.publish(plugin(future.id, "enabled")); // identical to the shown row
+        backend.publishFrom(QStringLiteral("replaced-connection"), plugin("old.connection"));
+        backend.publishFrom(QStringLiteral("replaced-connection"), plugin(future.id));
+        QTest::qWait(1);
+        check(rows.isEmpty() && page.isEmpty() && !find(root, "plugin-old.connection") &&
+                  text() == "On",
+              "identical and other-connection events change nothing shown");
+    }
     backend.publish(plugin("new.plugin.at.runtime"));
     QTest::qWait(1);
     check(find(root, "plugin-new.plugin.at.runtime") != nullptr, "new external ID appears live");

@@ -37,7 +37,7 @@ native_warnings(native_rich)
 # The semantic boundary and frontend state link ONLY QtCore. A future wire
 # adapter will implement Backend over ByteTransport, never inside the window.
 add_library(native_contract STATIC src/backend/types.h src/backend/backend.h
-    src/backend/transport.h src/backend/fake_backend.cpp
+    src/backend/backend.cpp src/backend/transport.h src/backend/fake_backend.cpp
     src/frontend/preferences.cpp src/frontend/chat_service.cpp src/frontend/plugins.cpp
     src/frontend/attachments.cpp src/frontend/usage.cpp src/frontend/store.cpp
     src/frontend/library.cpp src/frontend/host.h)

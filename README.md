@@ -75,8 +75,9 @@ to **OFF** and enables all four checks:
   checkpoint failures, mini-chat/lock state, usage, attachments, approvals/auth
   and host routing. No GUI or real backend.
 - `native_plugins_test`: capability-gated plugin discovery, authoritative toggles,
-  live/external changes, disabling, failures and connection-generation refreshes
-  through a scripted typed backend (not real RPC).
+  live/external changes, disabling, failures, connection-generation refreshes,
+  rejection of stale completions and of events from a replaced connection, and
+  no-op updates, through a scripted typed backend (not real RPC).
 - `native_ui_smoke`: disconnected QML launch, splash handoff, themes/settings,
   refusal paths and Markdown/TeX/diagram rendering.
 - `native_fake_ui_smoke`: the same UI plus production effort-slider visibility,
@@ -238,8 +239,10 @@ as a local preference.
 The typed commands correspond to `plugin.list`, `plugin.enable {pluginId}` and
 `plugin.disable {pluginId}`; `PluginChanged` corresponds to global
 `plugin.changed {plugin}`. The future wire adapter must map
-`initialize.capabilities.plugins.runtime` to `Capabilities::runtimePlugins` and
-preserve snapshots/notifications. **There is no JSON-RPC serialization or live
+`initialize.capabilities.plugins.runtime` to `Capabilities::runtimePlugins`,
+preserve snapshots/notifications in stream order, and stamp each
+`PluginChanged` with the `connectionId` of the connection that delivered it;
+events from any other connection are ignored. **There is no JSON-RPC serialization or live
 connection in this checkout yet.** The shipped disconnected and fake backends
 therefore do not expose this page; the plugin tests inject an advertising backend.
 

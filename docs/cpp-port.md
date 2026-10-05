@@ -175,11 +175,22 @@ changing native rendering. No adapter work was done in this pass.
 ### Plugin state
 
 [`frontend/plugins.*`](../src/frontend/plugins.h) is owned by `ChatService`, uses
-its normal request correlation and has its own change signal/errors. Plugin
-operations do not set chat pending/error flags or refresh the model catalog.
-Initialization explicitly gates discovery on `runtimePlugins`; disconnect clears
-rows/capability and invalidates pending plugin callbacks. A subsequent successful
-initialization reads a fresh list. This does not add a reconnect supervisor.
+its normal request correlation and has its own row/state signals and errors.
+Plugin operations do not set chat pending/error flags or refresh the model
+catalog. Initialization explicitly gates discovery on `runtimePlugins`;
+disconnect clears rows/capability and invalidates pending plugin callbacks. A
+subsequent successful initialization reads a fresh list. This does not add a
+reconnect supervisor.
+
+Each initialization is a generation bound to its `Initialize.connectionId`.
+Completions dispatched under an earlier generation are dropped, and the port
+stamps every `PluginChanged` with the `connectionId` of the connection that
+delivered it (a typed field, not a wire field). `Plugins::observe` accepts only
+the current connection's events; an event from a replaced connection, or with
+no connection, can neither add a row nor regress one, even while the new
+connection's first list is in flight. Within one connection the port must
+deliver events and replies in backend order; the frontend does not reorder
+them.
 
 Rows retain backend snapshots and per-ID pending/error bookkeeping. Toggle
 requests never optimistically alter enabled state; returned snapshots reconcile
@@ -202,6 +213,10 @@ acceptance cancels only the turn's own start/retry request.
 navigation/entrance animations. Rows come from `PluginModel`, a keyed list model
 updated in place, and the page list depends only on `runtimePlugins`' own
 signal, so updates neither recreate row/tab delegates nor drop keyboard focus.
+`Plugins` keeps an ID index, moves (not copies) entries when a list reorders
+them, and signals only real changes: an identical event or list emits nothing.
+Each entry carries a display revision, so `PluginModel::sync` formats status
+text only for rows whose revision moved and updates same-order rows in place.
 A pending or unconfirmed toggle stays focusable but does not act. Unavailable
 and unknown states are not toggleable. All names, IDs and descriptions come from the backend and
 render as plain text. No host-tool registration, plugin code loading, local
