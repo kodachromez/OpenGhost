@@ -71,8 +71,9 @@ to **OFF** and enables all four checks:
   checkpoint failures, mini-chat/lock state, usage, attachments, approvals/auth
   and host routing. No GUI or real backend.
 - `native_media_test`: reply picture/video parsing, trusted-place and redirect
-  rules, video link words, stack shape and the media loader's consent, decode
-  bounds and stale-load handling, with an injected fetch. No network.
+  rules, real loopback byte/deadline bounds, QML network denial, injected video
+  metadata/cache lifecycle, video link words, stack shape and consent/decode
+  bounds and stale-load handling. No external network; transport tests use loopback.
 - `native_ui_smoke`: disconnected QML launch, splash handoff, themes/settings,
   refusal paths and Markdown/TeX/diagram rendering, plus a reply's picture
   stack, click-to-load plate, lost links and video cards from fixture bytes.
@@ -344,12 +345,17 @@ offscreen/software tests and Wayland/OpenGL smokes. Linux selects threaded
 rendering/portal defaults and KDE reduced-motion discovery. The portable override
 `OPENGHOST_REDUCED_MOTION=0/1` is available. QML networking is denied; explicit
 HTTP(S) links (and allowed mail links) open through the OS, so this is not a
-sandbox or a guarantee that external applications stay offline. The one
-exception is a reply's pictures and video previews (`src/medialoader.*`, the
+sandbox or a guarantee that external applications stay offline. Narrow frontend
+resource services load reply pictures and video previews (`src/medialoader.*`, the
 reference's media-embed.js rules): HTTPS from the reference's trusted preview
 hosts loads by itself, any other http(s) picture only after a click on its
 plate; bounded in time and size, re-checked on every redirect, no cookies or
-credentials.
+credentials. A separate injectable frontend service (`src/videoinfo.*`) obtains
+real YouTube titles/authors through bounded HTTPS oEmbed, retaining the original
+link words or no title on failure. It requires no backend, RPC, FFI or browser.
+See [reply media](docs/reply-media.md) for caching, native frosting, safety
+differences and remaining boundaries, and run `python3 tests/parity/run.py --media`
+for the media-only visual audit.
 
 CMake has MSVC UTF-8/warning options, a Windows GUI executable and a macOS bundle,
 but **Windows/macOS have not been built or run in this audit**. Still to validate:

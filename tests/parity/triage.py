@@ -47,7 +47,7 @@ def classify(f):
     if name.startswith('scroll-') or name=='selection':
         return BUG, 'Long-message geometry, lazy positioning and selection/veil/jump presentation diverge; repeat deltas separately flag unstable capture.'
     if name in ['markdown-image','markdown-image-stack','markdown-video-card','markdown-image-held'] or name.startswith('media-'):
-        return NOISE, 'Same reply pictures/videos from the same synthetic bytes (or the same refused request). CSS backdrop-filter frosting on the play mark, dots and arrows is approximated with translucent fills; edge/glyph rasterization and shared shell differences remain.'
+        return NOISE, 'Same reply pictures/videos from the same synthetic bytes (or the same refused request). Native Qt blur/saturation and CSS backdrop-filter have different kernels; media-region metrics separate these and edge/glyph rasterization from the unchanged shell.'
     if name=='markdown-arithmetic':
         return BUG, 'Reference renders a column-arithmetic worksheet; native presents a code block.'
     if name in ['markdown-tex-display','markdown-tex-matrix','markdown-unicode','markdown-quotes','chat-user-quotes','chat-error','chat-auth-error','chat-stopped']:

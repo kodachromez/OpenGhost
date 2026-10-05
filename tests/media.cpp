@@ -1,13 +1,25 @@
 // Reply pictures and videos: markdown's media blocks, the address rules of
 // media-embed.js and MediaLoader's policy. Bytes come from an injected
-// fetch; nothing here touches the network.
+// fetch; transport tests use an owned loopback server, never the Internet.
 #include "media.h"
 #include "markdown.h"
+#include "mediafetch.h"
 #include "medialoader.h"
+#include "video_fixture.h"
+#include "window.h"
 
 #include <QBuffer>
+#include <QFile>
 #include <QImage>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QQmlNetworkAccessManagerFactory>
 #include <QSignalSpy>
+#include <QTcpServer>
+#include <QTcpSocket>
+#include <QTemporaryDir>
 #include <QtTest>
 
 namespace
@@ -49,6 +61,39 @@ struct Fixture {
             else
                 done(bytes.value(url));
         };
+    }
+};
+
+struct LocalHttp {
+    QTcpServer server;
+    QList<QByteArray> requests;
+    std::function<void(QTcpSocket *, const QByteArray &)> respond;
+    LocalHttp()
+    {
+        server.listen(QHostAddress::LocalHost);
+        QObject::connect(&server, &QTcpServer::newConnection, &server, [this] {
+            auto *socket = server.nextPendingConnection();
+            auto input = std::make_shared<QByteArray>();
+            QObject::connect(socket, &QTcpSocket::disconnected, socket, &QObject::deleteLater);
+            QObject::connect(socket, &QTcpSocket::readyRead, socket, [this, socket, input] {
+                input->append(socket->readAll());
+                if (!input->contains("\r\n\r\n"))
+                    return;
+                requests << *input;
+                socket->disconnect(socket, &QTcpSocket::readyRead, nullptr, nullptr);
+                if (respond)
+                    respond(socket, *input);
+            });
+        });
+    }
+    QString url(const QString &path = "/") const
+    {
+        return QStringLiteral("http://127.0.0.1:%1%2").arg(server.serverPort()).arg(path);
+    }
+    static void answer(QTcpSocket *socket, const QByteArray &body, const QByteArray &extra = {})
+    {
+        socket->write("HTTP/1.1 200 OK\r\nConnection: close\r\n" + extra + "\r\n" + body);
+        socket->disconnectFromHost();
     }
 };
 
@@ -107,6 +152,9 @@ class MediaTest : public QObject
         QVERIFY(!media::redirectAllowed(Elsewhere, false));
         QVERIFY(media::redirectAllowed(Elsewhere, true));
         QVERIFY(media::redirectAllowed(QStringLiteral("http://example.com/a.png"), true));
+        QVERIFY(!media::redirectAllowed(QStringLiteral("https://user:password@example.com/a.png"),
+                                        true));
+        QVERIFY(!media::redirectAllowed(QStringLiteral("http://i.ytimg.com/vi/x/a.jpg"), false));
         QVERIFY(!media::redirectAllowed(QStringLiteral("file:///etc/passwd"), true));
         QVERIFY(!media::redirectAllowed(QStringLiteral("ftp://example.com/a.png"), true));
         QVERIFY(!media::redirectAllowed(QStringLiteral("data:image/png;base64,AAAA"), true));
@@ -318,6 +366,202 @@ class MediaTest : public QObject
         late.second(png(20, 20));
         QTest::qWait(100);
         QVERIFY(loader->state(Picture).isEmpty());
+    }
+
+    void metadataServiceAndCache()
+    {
+        QTemporaryDir dir;
+        const QString path = dir.filePath("media-info.json");
+        auto host = std::make_shared<FixtureVideoInfo>();
+        host->hold = true;
+        VideoTitles titles(host, path);
+        titles.request("not-an-id");
+        titles.request("abcdefghij\n");
+        QVERIFY(host->asked.isEmpty());
+        titles.request(QString(11, QChar(0x00e9)));
+        QVERIFY(host->asked.isEmpty());
+        titles.request("abcdefghijk");
+        titles.request("abcdefghijk");
+        QCOMPARE(host->asked.size(), 1);
+        QVERIFY(titles.info("abcdefghijk")["title"].toString().isEmpty());
+        host->pending.takeFirst()({"Actual title", "Actual author"});
+        QTRY_COMPARE(titles.info("abcdefghijk")["title"].toString(), QString("Actual title"));
+        VideoTitles reopened(host, path);
+        reopened.request("abcdefghijk");
+        QCOMPARE(host->asked.size(), 1);
+        QCOMPARE(reopened.info("abcdefghijk")["by"].toString(), QString("Actual author"));
+        titles.request("bbbbbbbbbbb");
+        host->pending.takeFirst()({"", "Not a valid title result"});
+        QTest::qWait(20);
+        QVERIFY(titles.info("bbbbbbbbbbb")["by"].toString().isEmpty());
+        titles.request("bbbbbbbbbbb");
+        QCOMPARE(host->asked.size(), 2); // Failure is shared for the process.
+        VideoTitles again(host, path);
+        again.request("bbbbbbbbbbb");
+        QCOMPARE(host->asked.size(), 3); // But not on disk.
+        const auto stale = host->pending.takeFirst();
+        again.setService({});
+        stale({"Too late", ""});
+        QTest::qWait(20);
+        QVERIFY(again.info("bbbbbbbbbbb")["title"].toString().isEmpty());
+        // Cache failure must not discard genuine host metadata.
+        VideoTitles unwritable(host, dir.path());
+        unwritable.request("ccccccccccc");
+        host->pending.takeFirst()({"Still visible", ""});
+        QTRY_COMPARE(unwritable.info("ccccccccccc")["title"].toString(), QString("Still visible"));
+    }
+
+    void metadataFifoAndMalformedCache()
+    {
+        QTemporaryDir dir;
+        const auto path = dir.filePath("info.json");
+        auto host = std::make_shared<FixtureVideoInfo>();
+        VideoTitles titles(host, path);
+        for (int i = 0; i < 302; ++i) {
+            const QString id = QString::number(i).rightJustified(11, 'a');
+            host->values[id] = {QString::number(i), "Author"};
+            titles.request(id);
+        }
+        QTRY_COMPARE(titles.info("aaaaaaaa301")["title"].toString(), QString("301"));
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        QCOMPARE(QJsonDocument::fromJson(file.readAll()).array().size(), 300);
+        file.close();
+        VideoTitles reopened(host, path);
+        QVERIFY(reopened.info("aaaaaaaaaa0")["title"].toString().isEmpty());
+        QCOMPARE(reopened.info("aaaaaaaaaa2")["title"].toString(), QString("2"));
+        QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        file.write("not JSON");
+        file.close();
+        reopened.setService(host, path);
+        QVERIFY(reopened.info("aaaaaaaaaa2")["title"].toString().isEmpty());
+    }
+
+    void metadataWirePolicy()
+    {
+        const QString id = "abc-efg_ijk";
+        const QUrl url = NetworkVideoInfo::address(id);
+        QCOMPARE(
+            url.toEncoded(),
+            QByteArray(
+                "https://www.youtube.com/"
+                "oembed?url=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3Dabc-efg_ijk&format=json"));
+        QVERIFY(NetworkVideoInfo::address("abcdefghij/").isEmpty());
+        QVERIFY(NetworkVideoInfo::redirectAllowed(url, id));
+        for (const auto &bad :
+             {QString("http://www.youtube.com/oembed"), QString("https://evil.example/oembed"),
+              QString("https://www.youtube.com/watch?v=abc-efg_ijk"),
+              QString("file:///etc/passwd")})
+            QVERIFY(!NetworkVideoInfo::redirectAllowed(QUrl(bad), id));
+        auto changed = url;
+        changed.setUserInfo("secret:password");
+        QVERIFY(!NetworkVideoInfo::redirectAllowed(changed, id));
+        changed = url;
+        changed.setPort(444);
+        QVERIFY(!NetworkVideoInfo::redirectAllowed(changed, id));
+        QVERIFY(!NetworkVideoInfo::redirectAllowed(NetworkVideoInfo::address("aaaaaaaaaaa"), id));
+        QCOMPARE(
+            NetworkVideoInfo::parse(R"({"title":"A <b>title</b>","author_name":"Channel"})").title,
+            QString("A <b>title</b>"));
+        QVERIFY(NetworkVideoInfo::parse("not json").title.isEmpty());
+        QVERIFY(NetworkVideoInfo::parse(R"({"title":{},"author_name":[]})").title.isEmpty());
+        QVERIFY(NetworkVideoInfo::parse(QByteArray(NetworkVideoInfo::MaxBytes + 1, ' '))
+                    .title.isEmpty());
+        QCOMPARE(NetworkVideoInfo::Timeout, 10000);
+        NetworkVideoInfo service;
+        bool refused = false;
+        service.lookup("invalid", [&](VideoInfo info) { refused = info.title.isEmpty(); });
+        QVERIFY(refused); // No request can be constructed for an arbitrary URL.
+    }
+
+    void boundedNetwork()
+    {
+        LocalHttp http;
+        QVERIFY(http.server.isListening());
+        QNetworkAccessManager network;
+        auto get = [&](const QString &path, qint64 cap, bool redirects = true) {
+            bool completed = false;
+            QByteArray result;
+            int calls = 0;
+            media::get(
+                network, QNetworkRequest(QUrl(http.url(path))), cap, 150,
+                [redirects](const QUrl &to) { return redirects && to.scheme() == "http"; },
+                [&](const QByteArray &bytes) {
+                    result = bytes;
+                    completed = true;
+                    ++calls;
+                });
+            if (!QTest::qWaitFor([&] { return completed; }, 2000))
+                qFatal("Bounded frontend request did not complete");
+            QTest::qWait(10);
+            if (calls != 1)
+                qFatal("Frontend GET completed more than once");
+            return result;
+        };
+        http.respond = [](QTcpSocket *s, const QByteArray &request) {
+            if (request.startsWith("GET /redirect ")) {
+                s->write("HTTP/1.1 302 Found\r\nLocation: /ok\r\nContent-Length: 0\r\n\r\n");
+                s->disconnectFromHost();
+            } else if (request.startsWith("GET /loop ")) {
+                s->write("HTTP/1.1 302 Found\r\nLocation: /loop\r\nContent-Length: 0\r\n\r\n");
+                s->disconnectFromHost();
+            } else if (request.startsWith("GET /long "))
+                LocalHttp::answer(s, "x", "Content-Length: 99999\r\n");
+            else if (request.startsWith("GET /unknown "))
+                LocalHttp::answer(s, QByteArray(1025, 'x'));
+            else if (request.startsWith("GET /hang ")) { /* deadline */
+            } else if (request.startsWith("GET /error ")) {
+                s->write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
+                s->disconnectFromHost();
+            } else
+                LocalHttp::answer(s, "okay", "Set-Cookie: secret=value\r\n");
+        };
+        QCOMPARE(get("/ok", 4), QByteArray("okay")); // Exact cap allowed.
+        QCOMPARE(get("/redirect", 4), QByteArray("okay"));
+        int before = http.requests.size();
+        QVERIFY(get("/redirect", 4, false).isEmpty());
+        QCOMPARE(http.requests.size(), before + 1); // Refused before the next hop.
+        before = http.requests.size();
+        QVERIFY(get("/loop", 4).isEmpty());
+        QVERIFY(http.requests.size() - before <= 4);
+        QVERIFY(get("/long", 1024).isEmpty());
+        QVERIFY(get("/unknown", 1024).isEmpty());
+        QVERIFY(get("/hang", 1024).isEmpty());
+        QVERIFY(get("/error", 1024).isEmpty());
+        for (const auto &request : http.requests) {
+            QVERIFY(!request.toLower().contains("cookie:"));
+            QVERIFY(!request.toLower().contains("authorization:"));
+        }
+    }
+
+    void productionImageCapAndGlobalDenial()
+    {
+        LocalHttp http;
+        auto *loader = MediaLoader::instance();
+        loader->setFetch({});
+        QCOMPARE(MediaLoader::MaxBytes, 16 * 1024 * 1024);
+        QCOMPARE(media::LoadTimeout, 9000);
+        http.respond = [](QTcpSocket *s, const QByteArray &request) {
+            if (request.startsWith("GET /large "))
+                LocalHttp::answer(s, QByteArray(MediaLoader::MaxBytes + 1, 'x'));
+            else
+                LocalHttp::answer(s, png(240, 120));
+        };
+        QVERIFY(!loader->load(http.url(), false));
+        QVERIFY(http.requests.isEmpty());
+        QVERIFY(loader->load(http.url(), true));
+        QVERIFY(settle(loader, http.url()));
+        QCOMPARE(loader->state(http.url()), QString("ready"));
+        QVERIFY(loader->load(http.url("/large"), true));
+        QVERIFY(settle(loader, http.url("/large")));
+        QCOMPARE(loader->state(http.url("/large")), QString("failed"));
+        const auto before = http.requests.size();
+        QQmlEngine engine;
+        engine.setNetworkAccessManagerFactory(denyNetwork());
+        auto *reply = engine.networkAccessManager()->get(QNetworkRequest(QUrl(http.url("/qml"))));
+        QSignalSpy finished(reply, &QNetworkReply::finished);
+        QVERIFY(finished.wait(1000));
+        QCOMPARE(http.requests.size(), before); // Media did not open QML networking.
     }
 
     void decodeBounds()

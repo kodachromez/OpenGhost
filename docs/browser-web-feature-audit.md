@@ -18,7 +18,15 @@ RPC or FFI were added, and the reference was not changed.
 reference browser tools.** Browser-shaped C++ values and a scripted contract test
 are not a browser implementation. File support is a real but restricted UTF-8
 text-attachment path. Image previews and pinned-file settings are stubs; reply
-media and the browser download service are absent.
+media was absent at the audit revision, and the browser download service remains absent.
+
+**Reply-media completion update (`reply-media-presentation`, after `dc0a9e04`):**
+M01, M02, M04–M06 now have real frontend implementations; M03 is partial because
+sent-attachment producers remain absent. L04 now documents the narrow image and
+oEmbed services alongside global QML denial. Nothing in the browser/tool or file
+preparation rows is credited as completed. See [reply media](reply-media.md) and
+[measured media parity](visual-parity.md#replymedia-completion-after-dc0a9e04).
+Original audit narrative below is historical except for these scoped updates.
 
 ### Summary counts
 
@@ -28,10 +36,10 @@ Reference absences listed later are not counted as missing features.
 
 | Status | Features |
 | --- | ---: |
-| MATCH | 6 |
-| PARTIAL | 10 |
+| MATCH | 11 |
+| PARTIAL | 11 |
 | MOCK ONLY | 4 |
-| MISSING | 54 |
+| MISSING | 48 |
 | INTENTIONAL DIFFERENCE | 1 |
 | **Total** | **75** |
 
@@ -80,7 +88,8 @@ Reference absences listed later are not counted as missing features.
    supply a null browser. `reverse` refuses unpublished host tools before calling
    `run`. The no-op `NoHost::run` is not an executable browser fallback.
 3. `CMakeLists.txt`, the native source tree and the QML registration list have no
-   browser panel, engine, browser controller, PDF extractor or media service.
+   browser panel, engine, browser controller or PDF extractor. Reply media now
+   has independent `MediaLoader`/`VideoInfoService` frontend services.
    `FakeBackend` explicitly refuses browser context, non-text attachments and
    pinned files. The test-only `ScriptedHost` advertises just `browser_snapshot`,
    records calls, and relies on the test to emit a result.
@@ -91,9 +100,10 @@ Reference absences listed later are not counted as missing features.
 5. `WindowController::sync` reduces every display attachment to name, size and
    `text/plain`. `previewState` always reports unavailable; `previewImage` is
    empty. `GeneralPreview::files` is always empty and `add` always refuses.
-6. `src/markdown.h::Kind` has no media block; `qml/Block.qml` has no remote-media
-   renderer. `src/main.cpp` installs `denyNetwork()`. Ordinary allowed links can
-   still launch the OS application through `platform::openLink`.
+6. `src/markdown.h::Kind::Media` and `qml/Block.qml` now select `MediaBlock` and
+   `MediaStack`. `src/main.cpp` still installs `denyNetwork()`; explicit bounded
+   resource services supply decoded images and oEmbed titles, not general QML
+   network access. Ordinary allowed links launch the OS through `platform::openLink`.
 
 ## Matrix notation and contracts
 
@@ -215,18 +225,18 @@ state/services are needed as described in B/H rows.
 | L01 — Safe assistant Markdown links, bare-URL labels and OS navigation | MATCH | `markdown.js::parseLink/autolink`; `link-chip.js::label/html`; `desktop/main.js::external` | `src/markdown.cpp::safeUrl/InlineParser::link/autolink/chipLabel`, `qml/InlineText.qml`, `qml/SelectArea.qml`, `WindowController::openLink`, `src/platform/desktop.cpp::openLink` form a real click-to-OS path for HTTP(S)/mailto. Unsafe Markdown destinations become plain labels. Favicons are separately L03; user/composer links are L02. OS launch success depends on installed handlers and was not exercised here. | Existing local link values/helper suffice. **No missing work** within this scope. |
 | L02 — Link chips in user bubbles and composer mirror | MISSING | `chat.js::userMessage` → `LinkChip.fill`; `composer-text.js`; `script.js` mirror/watch wiring | `qml/ChatEntry.qml` uses `qml/LiveText.qml` with `TextEdit.PlainText`; composer in `qml/Main.qml` is plain text with no reference mirror. Assistant link support does not make these URLs chips/click targets. | Existing native inline link structures can be reused; no boundary type, local editor/display projection required. **UI-only**. |
 | L03 — Network favicons with fallback and caching | MISSING | `link-chip.js::probe/load/watch/paint` | `qml/InlineText.qml` always draws a local `link-globe`; no DuckDuckGo icon-service requests, host/base-host fallback, 2.5 s probe, shared load cache or arrival animation. B02 separately covers actual page favicons. | No backend types. Local icon resource/cache service needed and subject to L04. **Mixed** UI/host. |
-| L04 — Allow intentional frontend media networking, not provider networking | INTENTIONAL DIFFERENCE | `index.html` CSP; `link-chip.js`; `media-embed.js`; `desktop/main.js::videoInfo`; separate browser guests | Native deliberately installs `src/window.cpp::DenyAll` through `src/main.cpp::denyNetwork`, suppressing QML network resources. Reference blocks renderer connections but permits HTTP(S) images, trusted previews, favicon images and bounded host oEmbed; guests browse separately. Native external-link launches still work. Blanket network denial is stricter, not parity. | No backend type needed. A future explicit frontend-resource policy/host seam would be required; do not globally weaken protections to repair individual cards. **Mixed** host/UI policy. |
+| L04 — Allow intentional frontend media networking, not provider networking | INTENTIONAL DIFFERENCE | `index.html` CSP; `link-chip.js`; `media-embed.js`; `desktop/main.js::videoInfo`; separate browser guests | `denyNetwork()` still refuses QML requests. `src/medialoader.*`, `mediafetch.*`, `videoinfo.*` now provide explicit bounded image/oEmbed networking, with consent/trust, redirect checks, deadlines, incremental byte caps and no cookies/auth reuse. Native redirects/decoding are deliberately narrower. General favicons (L03) and guests remain absent. | Real frontend-only `VideoInfoService` and Qt Network implementation; no backend type or transport. **Mixed** host/UI policy; no global-network relaxation. |
 
 ## F. Reply media and image presentation
 
 | ID / reference feature | Status | Exact reference implementation | Native implementation and absent/different behavior | Contracts / new types; work |
 | --- | --- | --- | --- | --- |
-| M01 — Recognize image/linked-image/YouTube media blocks during streaming | MISSING | `markdown.js::mediaItems/mediaHtml/parse/render`; `stream-view.js::render/paint`; `media-embed.js::mount/arrange` | `src/markdown.h::Kind`, `src/markdown.cpp`, `qml/Block.qml` have no media kind/mount. Image syntax cannot become a media block; YouTube links remain ordinary links. Missing quiet live-image placeholder and stable card reuse while surrounding text streams/restores. | Assistant text already sufficient at boundary. **Local Markdown media item/block type and QML projection required. UI-only**. |
-| M02 — Remote-image loading consent, failure fallback, captions/source links | MISSING | `media-embed.js::TRUSTED/probe/gallery` | No native gallery or policy implementation. Reference auto-probes only named preview/Wikimedia sources, holds other URLs behind a click, times out after 9 s, retains failed images as links and updates caption/source for the active image. Native blanket refusal is not the selective consent behavior. | Local media items/load state and resource service required; no boundary type. **Mixed** UI/host; L04 applies. |
-| M03 — Shared image/video-poster stack interaction | MISSING | `media-slider.js::MediaSlider`; `chat.js::attachmentViews`; `media-embed.js::gallery` | No carousel in QML. Missing fitted single image, layered stack/backdrops, arrows, dots/counter, keyboard/Home/End, drag/fling, horizontal wheel/swipe, active-slide accessibility, notes/duration and reduced-motion behavior. `RichImage` for diagrams/math or a stub preview is not this component. | AT covers sent media semantics; local slide/display model needed, no boundary type. **UI-only**, with image producers elsewhere. |
-| M04 — YouTube cards and thumbnail fallback | MISSING | `media-embed.js::videoId/videoWords/videoCard`; `markdown.js::mediaItems` | No native preview/play card, optional title/channel/duration parsing, hq720→mqdefault thumbnail fallback/missing state or click-through card. Reference opens the link externally; it does not embed a YouTube player in chat. | Local card/presentation type required; existing text input suffices. **Mixed** UI/thumbnail host. |
-| M05 — Validated YouTube metadata host bridge | MISSING | `desktop/preload.js::videoInfo`; `desktop/main.js::videoInfo` and `media:video-info`; `media-embed.js::videoInfo` | No native oEmbed lookup. Reference validates an 11-character ID, fetches only YouTube oEmbed with a 10 s timeout, returns title/by or null, and checks IPC sender. This is not a generic web fetch API. | HS does not provide this service. Local video-info request/result/service needed; no backend DTO. **Host-service-only**. |
-| M06 — Media metadata cache and shared in-flight lookups | MISSING | `media-embed.js::asked/keptInfo/keep/videoInfo`, `openghost.media.info` | No equivalent in `src/frontend/store.cpp`, preferences or media code (absent). Reference caches up to 300 successful metadata entries and shares requested promises so reopening does not re-fetch known metadata. It does not save gallery slide positions or image-consent decisions here. | Local metadata store format required; no boundary type. **Persistence-only** plus runtime cache bookkeeping. |
+| M01 — Recognize image/linked-image/YouTube media blocks during streaming | MATCH | `markdown.js::mediaItems/mediaHtml/parse/render`; `stream-view.js::render/paint`; `media-embed.js::mount/arrange` | `markdown::MediaItem/Kind::Media`, `Block.qml` and `MediaBlock.qml` implement picture-only paragraphs/non-task lists, linked images, YouTube cards, incomplete-live waiting plates and keyed video reconciliation/deduplication. Parser tests and media fixtures cover prose/mixed/task/quoted refusals and streaming. | Existing assistant text; local display types only. **UI-only**, no new backend method. |
+| M02 — Remote-image loading consent, failure fallback, captions/source links | MATCH | `media-embed.js::TRUSTED/probe/gallery` | `MediaLoader` enforces the reference HTTPS preview patterns and explicit consent elsewhere; 9 s deadline, checked redirects and 16 MiB incremental cap. `MediaBlock` keeps failed links and updates active caption/source. Loopback transport, QML-denial and real-control smoke tests cover it. Added native safety/decoder/cache bounds are documented in `docs/reply-media.md`; favicon lookup is separately L03. | Local display/resource implementation, no boundary type. **Mixed** UI/host; L04 remains an intentional policy difference. |
+| M03 — Shared image/video-poster stack interaction | PARTIAL | `media-slider.js::MediaSlider`; `chat.js::attachmentViews`; `media-embed.js::gallery` | Reply `MediaStack.qml` implements fitted/fanned images, blurred backdrops, frosted arrows/dots/counter, keyboard/Home/End, drag/fling, full horizontal swipe/inertia rules, active-slide accessibility and reduced motion. Sent attachment image/video-poster production, notes/duration integration remain absent (F07/F12); this is not a completed shared attachment path. | Reply implementation is **UI-only**. AT remains sufficient for later sent-media work; no invented backend preview API. |
+| M04 — YouTube cards and thumbnail fallback | MATCH | `media-embed.js::videoId/videoWords/videoCard`; `markdown.js::mediaItems` | `media.*` and `MediaBlock.qml` implement title/channel/duration words, frosted play/time controls, hq720→mqdefault on error or ≤120 px placeholder, missing-plate state and external click-through. Metadata only fills missing words. Focused fixtures include each fallback/title state and light/hover/multiple cards; Qt/CSS pixels remain measured differences. | Real native presentation and thumbnail host. **Mixed** UI/host, no player or backend API. |
+| M05 — Validated YouTube metadata host bridge | MATCH | `desktop/preload.js::videoInfo`; `desktop/main.js::videoInfo` and `media:video-info`; `media-embed.js::videoInfo` | `VideoInfoService` is injectable; `NetworkVideoInfo` validates the ID and fetches fixed HTTPS YouTube oEmbed, with 10 s deadline, 64 KiB cap, restricted redirects and title/author or empty failure. `main.cpp` selects the production service; tests use an offline host. No IPC/sender surface exists. Stricter malformed-field/redirect refusals are documented. | New local `VideoInfo`/`VideoInfoService`, independent of HS, Rust, RPC and FFI. **Host-service-only**, implemented without backend integration. |
+| M06 — Media metadata cache and shared in-flight lookups | MATCH | `media-embed.js::asked/keptInfo/keep/videoInfo`, `openghost.media.info` | `VideoTitles` shares pending/completed requests, including process-local failures; atomically persists up to 300 FIFO successful title/author entries in `AppDataLocation/media-info.json`. Corrupt/failed cache I/O and stale host completions are tested. No image consent or slide-position persistence; no browser-localStorage migration claimed. | Implemented local ordered JSON cache, no backend DTO. **Persistence-only** plus runtime bookkeeping. |
 
 ## G. File intake, previews and display persistence
 

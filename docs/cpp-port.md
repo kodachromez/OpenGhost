@@ -74,6 +74,7 @@ for the excluded name, artwork, animations or design.
 | Composer | Existing composer in `Main.qml`, model/effort controls/stages, mode picker/dock, file cards and tooltips |
 | Settings | `SettingsDialog.qml`, General, Providers, Usage, Appearance; `settings.*`, `appearance.*`, `offline_services.h` projections |
 | Markdown/code | `markdown.*`, `highlight.*`, `rich.*`, `cssfont.*`, Markdown/Block/InlineText/CodeBlock/TableBlock QML |
+| Reply media | `media.*`, `medialoader.*`, `mediafetch.*`, `videoinfo.*`; `MediaBlock/MediaStack/MediaGlass.qml`. Native galleries/cards and injectable frontend-only oEmbed host/cache; see [reply media](reply-media.md). No backend/browser dependency. |
 | TeX/diagrams | `tex.*`, `diagram*.cpp/.h`, `diagramview.*`; native painting/selection, the inherited 1.3 43-kind diagram engine |
 | Artwork/motion | Procedural `ghost.*`, 1.3 `Splash.qml`/`mist.frag`, welcome/working ghost, `motion.*`, `wave.*`, `reveal.*`, effects/springs and shaders |
 | Other helpers/assets | Icons/file kinds, shadows, exposure, approval cards, metrics/copy machinery, original OpenGhost icon |
@@ -323,7 +324,9 @@ finished callbacks answer once, reverse cancellation releases without answering,
 and turn end cancels/releases with a cancelled result. Shipped `NoHost` publishes
 no tools and a null browser, so the service refuses calls as unsupported. Tests
 inject a scripted host; browser engine/page identities, hand-back queue, downloads
-and media handling do not exist. Observed browser sign-in is never verified auth.
+and browser media handling do not exist. Reply pictures/YouTube metadata instead
+use the independent frontend resource services described in [reply media](reply-media.md),
+not `HostServices` or a backend command. Observed browser sign-in is never verified auth.
 
 ## Fake-backend limits
 

@@ -54,7 +54,7 @@ bool fetchable(const QString &url)
 {
     const QUrl parsed(url, QUrl::StrictMode);
     const QString scheme = parsed.scheme().toLower();
-    return parsed.isValid() && !parsed.host().isEmpty() &&
+    return parsed.isValid() && !parsed.host().isEmpty() && parsed.userInfo().isEmpty() &&
            (scheme == QLatin1String("https") || scheme == QLatin1String("http"));
 }
 

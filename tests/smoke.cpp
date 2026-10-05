@@ -4,13 +4,17 @@
 #include "rich.h"
 #include "tex.h"
 #include "theme.h"
+#include "video_fixture.h"
 #include "window.h"
 
 #include <QBuffer>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QLineF>
 #include <QPointer>
 #include <QQmlApplicationEngine>
+#include <QQmlContext>
+#include <QQmlExpression>
 #include <QQuickItem>
 #include <QQuickWindow>
 #include <QSignalSpy>
@@ -511,6 +515,9 @@ int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
             {"https://i.ytimg.com/vi/aaaaaaaaaaa/hq720.jpg", fixturePng(480, 270)},
             {"https://i.ytimg.com/vi/bbbbbbbbbbb/hq720.jpg", fixturePng(120, 90)},
             {"https://i.ytimg.com/vi/bbbbbbbbbbb/mqdefault.jpg", fixturePng(320, 180)}};
+        auto titles = std::make_shared<FixtureVideoInfo>();
+        titles->hold = true;
+        VideoTitles::instance()->setService(titles);
         QStringList asked;
         MediaLoader::instance()->setFetch(
             [&bytes, &asked](const QString &url, bool, const MediaLoader::Done &done) {
@@ -566,6 +573,7 @@ int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
             replyItem ? findAll(replyItem, QStringLiteral("mediaAsk")) : QList<QQuickItem *>();
         check(asks.size() == 1, "a picture from elsewhere waits for a click");
         if (asks.size() == 1) {
+            QTest::qWait(200); // Let the preceding slide's spring/layout settle before the pointer.
             const QPointF at = asks.first()->mapToScene(
                 QPointF(asks.first()->width() / 2, asks.first()->height() / 2));
             QTest::mouseClick(window, Qt::LeftButton, {}, at.toPoint());
@@ -575,6 +583,67 @@ int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
                       asked.contains(elsewhere) &&
                       findAll(replyItem, QStringLiteral("mediaAsk")).isEmpty(),
                   "a click on the plate asks for the picture and adds it to the stack");
+        }
+        if (stack) {
+            auto *theme = engine.singletonInstance<Theme *>("OpenGhost.Native", "Theme");
+            const bool wasReduced = theme->reducedMotion();
+            theme->setReducedMotion(
+                true); // Deterministic hit geometry; spring was exercised above.
+            QMetaObject::invokeMethod(stack, "wake");
+            auto click = [&](QQuickItem *item) {
+                if (!item)
+                    return;
+                QTest::mouseClick(
+                    window, Qt::LeftButton, {},
+                    item->mapToScene(QPointF(item->width() / 2, item->height() / 2)).toPoint());
+            };
+            stack->forceActiveFocus();
+            QTest::keyClick(window, Qt::Key_End);
+            check(stack->property("index").toInt() == 2 &&
+                      caption->property("text").toString() == "Elsewhere",
+                  "End reaches the last picture and its caption");
+            auto *source = findVisual(replyItem, "mediaSource");
+            check(source && source->property("link").toString() == "https://example.com/page",
+                  "the active linked picture supplies its source page");
+            QTest::keyClick(window, Qt::Key_Home);
+            QTest::keyClick(window, Qt::Key_Right);
+            check(stack->property("index").toInt() == 1, "Home and arrow keys leaf the stack");
+            click(findVisual(stack, "mediaNext"));
+            check(stack->property("index").toInt() == 2, "next arrow leafs, not opens the picture");
+            auto dots = findAll(stack, "mediaDot");
+            if (!dots.isEmpty())
+                click(dots.first());
+            check(stack->property("index").toInt() == 0, "dots leaf the stack");
+            QTest::qWait(500);
+            auto wheel = [&](double dx, double dy, int now) {
+                QVariant accepted;
+                QMetaObject::invokeMethod(stack, "wheelStep", Q_RETURN_ARG(QVariant, accepted),
+                                          Q_ARG(QVariant, dx), Q_ARG(QVariant, dy),
+                                          Q_ARG(QVariant, now));
+                return accepted.toBool();
+            };
+            check(!wheel(0, 100, 0), "vertical wheel remains transcript scrolling");
+            check(wheel(60, 0, 10) && wheel(25, 0, 20) && stack->property("index").toInt() == 1,
+                  "a fading trackpad nudge commits a page before its inertia tail");
+            wheel(5, 0, 40);
+            check(stack->property("index").toInt() == 1, "inertia tail cannot turn another page");
+            QTest::qWait(600);
+            auto *pointer = findVisual(stack, "mediaPointer");
+            if (pointer) {
+                const QPoint from =
+                    pointer->mapToScene(QPointF(stack->width() * 0.8, stack->height() / 2))
+                        .toPoint();
+                const QPoint to =
+                    pointer->mapToScene(QPointF(stack->width() * 0.2, stack->height() / 2))
+                        .toPoint();
+                QTest::mousePress(window, Qt::LeftButton, {}, from);
+                QTest::mouseMove(window, (from + to) / 2, 30);
+                QTest::mouseMove(window, to, 30);
+                QTest::mouseRelease(window, Qt::LeftButton, {}, to);
+            }
+            check(stack->property("index").toInt() == 2, "drag/fling turns at most one picture");
+            QTest::mouseMove(window, QPoint(window->width() - 2, 2));
+            theme->setReducedMotion(wasReduced);
         }
         // Blocks below the pictures are built over the next frames (Pacer).
         QList<QQuickItem *> videos;
@@ -609,7 +678,53 @@ int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
             auto *thumb = findVisual(videos[2], QStringLiteral("mediaVideoThumb"));
             check(thumb && !thumb->isVisible(), "a video without a preview loses its plate");
         }
+        check(titles->asked.size() == 3, "every valid video asks the frontend metadata host");
+        for (const auto &done : titles->pending)
+            done({"Real host title <b>not markup</b>", "Real host author"});
+        QTest::qWait(50);
+        if (videos.size() == 3) {
+            check(findVisual(videos[0], "mediaVideoTitle")->property("text").toString() ==
+                          "A talk" &&
+                      findVisual(videos[0], "mediaVideoBy")->property("text").toString() ==
+                          "A channel",
+                  "host metadata never overwrites the words of the link");
+            check(findVisual(videos[1], "mediaVideoTitle")->property("text").toString() ==
+                          "Real host title <b>not markup</b>" &&
+                      findVisual(videos[1], "mediaVideoBy")->property("text").toString() ==
+                          "Real host author",
+                  "late real metadata fills the bare card, as plain text");
+            check(findVisual(videos[2], "mediaVideoTitle")->isVisible(),
+                  "a missing thumbnail still gets its real title");
+            check(findVisual(videos[0], "mediaPlayGlass") &&
+                      findVisual(videos[0], "mediaTimeGlass"),
+                  "play and duration have native frosted surfaces");
+            auto *glass = findVisual(videos[0], "mediaPlayGlass");
+            auto *plane = glass ? glass->property("backdrop").value<QQuickItem *>() : nullptr;
+            const auto frostAligned = [&] {
+                return plane && QLineF(glass->property("origin").toPointF(),
+                                       glass->mapToItem(plane, QPointF()))
+                                        .length() < 0.01;
+            };
+            check(frostAligned(), "frost samples the real picture below the control");
+            const auto oldWidth = videos[0]->width();
+            videos[0]->setWidth(250);
+            QTest::qWait(30);
+            check(frostAligned(), "frost sampling follows resize, not a stale initial rectangle");
+            videos[0]->setWidth(oldWidth);
+            QPointer<QQuickItem> original = videos[0];
+            auto *block = videos[0]->parentItem();
+            while (block && block->objectName() != "mediaBlock")
+                block = block->parentItem();
+            if (block) {
+                QQmlExpression append(qmlContext(block), block, "items = items.concat([items[0]])");
+                append.evaluate();
+                QTest::qWait(50);
+                check(!append.hasError() && original && findAll(block, "mediaVideo").size() == 2,
+                      "duplicate video keys collapse and unchanged cards keep their identity");
+            }
+        }
         check(!window->grabWindow().isNull(), "a reply with pictures and videos paints");
+        VideoTitles::instance()->setService({});
         MediaLoader::instance()->setFetch({});
     }
     controller.transcript()->reset({});

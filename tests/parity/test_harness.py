@@ -34,6 +34,20 @@ class HarnessTests(unittest.TestCase):
                 self.assertTrue(f['id'].startswith('manual-visible-'))
                 self.assertIn('reason', f)
 
+    def test_media_inventory(self):
+        media = {f['id']: f for f in fixtures() if f.get('replyMedia')}
+        for name in ['markdown-image', 'markdown-image-stack', 'markdown-video-card',
+                     'media-video-title', 'media-video-title-failed', 'media-video-title-pending',
+                     'media-video-narrow-error', 'media-video-narrow-placeholder',
+                     'media-video-missing-placeholder', 'media-video-missing-title',
+                     'media-gallery-leaf', 'media-gallery-hover', 'media-gallery-counter',
+                     'media-gallery-caption-wrap', 'media-gallery-loading', 'media-streaming',
+                     'media-streaming-video', 'media-detection-task-list']:
+            self.assertIn(name, media)
+        self.assertEqual(media['media-video-title-long']['nativeValues'][0]['value'], 2)
+        self.assertTrue(media['media-gallery-hidpi']['dpr'] == 2)
+        self.assertNotIn('attachment-image', media)  # separate, still-unported boundary
+
     def test_pre_application_visible_refusal(self):
         binary = Path(__file__).resolve().parents[2] / 'build-release/openghost-native'
         for argument in ['--parity-manifest', '--parity-manifest=/nonexistent']:

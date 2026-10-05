@@ -32,7 +32,7 @@ try {
   const pages = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
   ws = new WebSocket(pages.find(p => p.type === 'page').webSocketDebuggerUrl);
   await new Promise((resolve,reject) => { ws.onopen=resolve; ws.onerror=reject; });
-  let next=1, fixtureImage='', served=new Set();
+  let next=1, fixtureImage='', served=new Set(), mediaImages={}, mediaPending=new Set();
   const waiting = new Map(), errors = [];
   ws.onmessage = ({data}) => {
     const msg=JSON.parse(data);
@@ -40,8 +40,10 @@ try {
     if (msg.method === 'Runtime.exceptionThrown') errors.push(msg.params.exceptionDetails);
     if (msg.method === 'Fetch.requestPaused') {
       const p=msg.params;
-      if(served.has(p.request.url) && fixtureImage)
-        void send('Fetch.fulfillRequest',{requestId:p.requestId,responseCode:200,responseHeaders:[{name:'Content-Type',value:'image/png'}],body:fixtureImage});
+      if(mediaPending.has(p.request.url)) return; // bounded fixture wait; navigation cancels
+      const bytes=mediaImages[p.request.url] || (served.has(p.request.url) ? fixtureImage : '');
+      if(bytes)
+        void send('Fetch.fulfillRequest',{requestId:p.requestId,responseCode:200,responseHeaders:[{name:'Content-Type',value:'image/png'}],body:bytes});
       else void send('Fetch.failRequest',{requestId:p.requestId,errorReason:'BlockedByClient'});
     }
   };
@@ -60,7 +62,8 @@ try {
   await send('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:'reduce'},{name:'prefers-color-scheme',value:'dark'}]});
   await send('Page.addScriptToEvaluateOnNewDocument',{source:`
     localStorage.clear();
-    window.openghost={desktop:true, platform:'linux'};
+    window.openghost={desktop:true, platform:'linux', videoInfo: id =>
+      window.__parityInfoPending ? new Promise(()=>{}) : Promise.resolve(window.__parityInfo?.[id] || null)};
     // Stable random colour order, not a replacement renderer.
     let seed=7; Math.random=()=>((seed=Math.imul(seed,1664525)+1013904223>>>0)/4294967296);
   `});
@@ -71,6 +74,7 @@ try {
     if(f.manual) continue;
     fixtureImage=f.imageData||'';
     served=new Set(f.mediaUrls||['https://parity.invalid/image.png']);
+    mediaImages=f.mediaImages||{}; mediaPending=new Set(f.mediaPending||[]);
     await send('Emulation.setDeviceMetricsOverride',{width:f.width||1280,height:f.height||840,deviceScaleFactor:f.dpr||1,mobile:false});
     await send('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:f.motion?'no-preference':'reduce'},{name:'prefers-color-scheme',value:f.systemDark===false?'light':'dark'}]});
     await send('Page.navigate',{url:pathToFileURL(path.join(root,'reference/openghost/index.html')).href});
@@ -83,6 +87,8 @@ try {
       await evaluate("document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));");
       await sleep(1100);
     }
+    await send('Input.dispatchMouseEvent',{type:'mouseMoved',x:(f.width||1280)-2,y:2});
+    await evaluate(`window.__parityInfo=${JSON.stringify(f.videoInfo||{})}; window.__parityInfoPending=${!!f.videoInfoPending}; true`);
     await evaluate(adapter);
     await evaluate(`parityFixture(${JSON.stringify(f)})`);
     if(f.reference) await evaluate(f.reference+'; true');
@@ -90,10 +96,19 @@ try {
     if(!f.keepFocus) await evaluate('document.activeElement?.blur(); true');
     await evaluate(`document.querySelector('.thread').scrollTop=${f.scroll||0};`);
     if(f.referenceAfter) await evaluate(f.referenceAfter+'; true');
+    if(f.mediaIndex !== undefined) await evaluate(`{const el=document.querySelector('.md-gallery .media'); if(!el) throw Error('Missing media stack'); for(let i=0;i<${f.mediaIndex};i++) el.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true}));} true`);
+    if(f.mediaHover) {
+      const selector=f.mediaHover==='mediaStack'?'.md-gallery .media':'.md-video';
+      const at=await evaluate(`{const r=document.querySelector('${selector}').getBoundingClientRect(); [r.x+r.width/2,r.y+r.height/2]}`);
+      await send('Input.dispatchMouseEvent',{type:'mouseMoved',x:at[0],y:at[1]});
+    }
     await sleep(f.afterWait||100);
-    if(f.imageData && (f.mediaUrls||['x']).length && !await evaluate("[...document.querySelectorAll('.md-gallery img, .md-video-img')].some(img=>img.complete && img.naturalWidth===240)"))
+    if(!f.skipImageCheck && f.imageData && (f.mediaUrls||['x']).length && !await evaluate("[...document.querySelectorAll('.md-gallery img, .md-video-img')].some(img=>img.complete && img.naturalWidth===240)"))
       throw Error('Synthetic gallery image did not load: '+f.id);
     const geometry = await evaluate(`Object.fromEntries(['.sidebar','.composer','.thread','.welcome'].map(s=>{const r=document.querySelector(s).getBoundingClientRect();return [s,[r.x,r.y,r.width,r.height]]}))`);
+    geometry.media=await evaluate(`[...document.querySelectorAll('.md-media')].map(el=>{const r=el.getBoundingClientRect(); return [r.x,r.y,r.width,r.height];})`);
+    geometry.mediaDetails=await evaluate(`[...document.querySelectorAll('.md-gallery-caption,.md-gallery-source,.md-gallery-lost,.link-chip,.md-video-title,.md-video-meta')].map(el=>{const r=el.getBoundingClientRect(),s=getComputedStyle(el); return {class:el.className,rect:[r.x,r.y,r.width,r.height],font:s.font,lineHeight:s.lineHeight};})`);
+    if(f.referenceCheck && !await evaluate(f.referenceCheck)) throw Error('Media state assertion: '+f.id);
     const image=await send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
     const base=path.join(output,f.id+(pass?'.repeat':''));
     fs.writeFileSync(base+'.png',Buffer.from(image.data,'base64'));

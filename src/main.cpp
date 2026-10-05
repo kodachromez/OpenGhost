@@ -2,6 +2,7 @@
 #include "backend/fake_backend.h"
 #include "medialoader.h"
 #include "platform/platform.h"
+#include "videoinfo.h"
 #include "window.h"
 #include <cstdio>
 #include <cstring>
@@ -102,6 +103,16 @@ int main(int argc, char *argv[])
         app.setFont(font);
     }
 #endif
+    // Frontend-only metadata host. Test adapters install their own host and
+    // never read the real metadata cache or fall back to live networking.
+#ifdef OPENGHOST_SMOKE_TEST
+    if (!parser.isSet(QStringLiteral("smoke-test")) &&
+        !parser.isSet(QStringLiteral("parity-manifest")))
+#endif
+        VideoTitles::instance()->setService(
+            std::make_shared<NetworkVideoInfo>(),
+            QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) +
+                QStringLiteral("/media-info.json"));
     keepAppearance(appearancePath);
     std::unique_ptr<openghost::Backend> backend;
     if (parser.isSet(QStringLiteral("fake-backend")))

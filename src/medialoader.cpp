@@ -1,13 +1,14 @@
 #include "medialoader.h"
 
 #include "media.h"
+#include "mediafetch.h"
 
 #include <QBuffer>
 #include <QCoreApplication>
 #include <QImageReader>
 #include <QMutexLocker>
 #include <QNetworkAccessManager>
-#include <QNetworkReply>
+#include <QNetworkProxy>
 #include <QNetworkRequest>
 #include <QPointer>
 #include <QThreadPool>
@@ -87,42 +88,14 @@ void MediaLoader::fetchNetwork(const QString &url, bool consented, const Done &d
 {
     if (!m_network) {
         m_network = new QNetworkAccessManager(this);
-        m_network->setAutoDeleteReplies(true);
+        m_network->setProxy(QNetworkProxy::NoProxy);
     }
     QNetworkRequest request{QUrl(url)};
-    // Each hop is checked against the same rule as the first address.
-    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
-                         QNetworkRequest::UserVerifiedRedirectPolicy);
-    request.setMaximumRedirectsAllowed(3);
-    // Nothing of the person goes with it, and nothing comes back to stay.
-    request.setAttribute(QNetworkRequest::CookieLoadControlAttribute, QNetworkRequest::Manual);
-    request.setAttribute(QNetworkRequest::CookieSaveControlAttribute, QNetworkRequest::Manual);
-    request.setAttribute(QNetworkRequest::AuthenticationReuseAttribute, QNetworkRequest::Manual);
-    request.setAttribute(QNetworkRequest::CacheLoadControlAttribute,
-                         QNetworkRequest::AlwaysNetwork);
-    request.setAttribute(QNetworkRequest::CacheSaveControlAttribute, false);
     request.setRawHeader("Accept", "image/webp,image/png,image/jpeg,image/gif;q=0.9,*/*;q=0.5");
-    request.setTransferTimeout(media::LoadTimeout);
-    QNetworkReply *reply = m_network->get(request);
-    // The whole load, not just a stall, is bounded.
-    QTimer::singleShot(media::LoadTimeout, reply, [reply] { reply->abort(); });
-    connect(reply, &QNetworkReply::redirected, reply, [reply, consented](const QUrl &to) {
-        if (media::redirectAllowed(to.toString(), consented))
-            emit reply->redirectAllowed();
-        else
-            reply->abort();
-    });
-    connect(reply, &QNetworkReply::downloadProgress, reply, [reply](qint64 received, qint64 total) {
-        if (received > MaxBytes || total > MaxBytes)
-            reply->abort();
-    });
-    connect(reply, &QNetworkReply::finished, this, [reply, done] {
-        const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-        QByteArray bytes;
-        if (reply->error() == QNetworkReply::NoError && status >= 200 && status < 300)
-            bytes = reply->read(MaxBytes + 1);
-        done(bytes.size() > MaxBytes ? QByteArray() : bytes);
-    });
+    media::get(
+        *m_network, request, MaxBytes, media::LoadTimeout,
+        [consented](const QUrl &to) { return media::redirectAllowed(to.toString(), consented); },
+        done);
 }
 
 void MediaLoader::finish(const QString &url, quint64 generation, const QImage &image)
