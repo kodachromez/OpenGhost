@@ -1,69 +1,340 @@
-# OpenGhost Native — frontend extraction
+# OpenGhost Native
 
-Standalone C++17 / Qt Quick frontend targeting the **dissected OpenGhost 1.3
-frontend**. It reuses the existing native Qt implementation without the source
-port's custom appearance or extra features; this is not a UI rewrite.
-See [NOTICE.md](NOTICE.md) for attribution.
+A standalone **native Qt 6 / QML / C++17 implementation of the OpenGhost
+frontend**, targeting the dissected OpenGhost 1.3 presentation and behavior.
+The window, chat, sidebar, settings, Markdown, code, TeX, diagrams, ghost and
+animations are native Qt Quick/C++ — not an embedded website.
 
-Default launch is **disconnected**. Use `--fake-backend` to exercise chats,
-streaming, Escape Stop, Retry, steering, approvals, text attachments, model/auth
-states and usage against an explicitly labelled, in-memory C++ fixture. It runs
-no model, real tools, credentials, network or process. General instructions,
-model/effort/mode preferences and appearance save locally; a normal launch also
-saves the chat index, display caches, recovery checkpoints and usage ledger
-(the fake keeps its chats in memory, since its sessions do not survive exit). Try `/fake approval`
-or `/fake error`; fixture sign-in accepts only `fixture`, never a real key.
-There is no Rust, RPC or FFI integration yet. See [the port notes](docs/cpp-port.md)
-for end-to-end coverage and deliberately mocked host systems.
+**No real backend is connected.** The normal application starts disconnected.
+It cannot call a model, run agent tools, sign into a provider or resume a real
+backend session. `--fake-backend` explicitly selects an in-memory development
+fixture. The native target has no Rust/RPC/FFI integration, backend process
+launcher or implemented transport.
 
-## Build and launch
+This is an independent, incomplete port, **not official OpenGhost** and not a
+claim of full functional or pixel-exact parity. Before publishing or distributing
+it, read [Licensing and attribution](#licensing-and-attribution): the retained
+name, artwork, animations and visual design are **not covered by the source-code
+MIT grant**.
 
-Requires CMake 3.21+, a C++17 compiler and **Qt 6.11+** development packages:
-Core, Gui, Network, Qml, Quick, QuickControls2, QuickDialogs2, ShaderTools and
-the Qt Quick Layouts, Shapes and Effects QML modules. Qt Test is optional.
-No Cargo, Node, Electron, Chromium, WebEngine or React is used by the native build.
+## Build and run
+
+Requirements:
+
+- CMake 3.21+ and a C++17 compiler.
+- **Qt 6.11+** development packages: Core, Gui, Network, Qml, Quick,
+  QuickControls2, QuickDialogs2 and ShaderTools; the Qt Quick Layouts, Shapes
+  and Effects QML modules must also be available.
+- Qt Test when enabling the optional tests below.
+
+Qt must be discoverable through CMake (for example,
+`-DCMAKE_PREFIX_PATH=/path/to/Qt/6.11.x/gcc_64`). There is no Cargo, Node,
+Electron, Chromium, WebEngine, React or provider SDK build dependency. The
+JavaScript expressions in QML are part of Qt, not a browser/Node runtime.
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel 4
 ./build/openghost-native                 # disconnected
-./build/openghost-native --fake-backend  # explicit in-memory demo
+./build/openghost-native --fake-backend  # explicit simulation
+./build/openghost-native --help
 ```
 
-On multi-configuration generators use `--config Release`; on macOS the target
-is an app bundle. Windows/macOS build wiring exists but is not yet qualified.
-Qt must be discoverable through its normal CMake prefix/toolchain configuration.
+For multi-configuration generators, build with `--config Release`; the executable
+is in the configuration's output directory. macOS uses an `.app` bundle. Those
+platforms are not yet qualified; see [Portability](#portability).
+
+For a local install (not a self-contained Qt deployment):
 
 ```sh
-# Focused contract tests plus disconnected/fake UI smoke checks.
-cmake -S . -B build -DOPENGHOST_BUILD_SMOKE_TEST=ON
-cmake --build build --parallel 4
-ctest --test-dir build -R '^(native_contract_test|native_ui_smoke|native_fake_ui_smoke)$' --output-on-failure
+cmake --install build --prefix "$HOME/.local"
 ```
 
-Smoke checks isolate appearance and preferences in temporary directories. The
-normal app keeps `appearance.json` and `preferences.json` under Qt's
-`AppConfigLocation` for `openghost-native`; it reads no previous profile. Fake
-chats disappear on exit. Unimplemented capabilities explicitly refuse; the fake
-is not a durable or production-conforming backend.
+CMake installs the executable, notices/licenses, icon and, on Linux, desktop
+entry. It does not install the reference tree or bundle the Qt runtime/plugins.
 
-## Layout
+### Focused tests and smokes
 
-- `qml/`, `src/`, `shaders/`, `resources/`: copied native presentation and its
-  small presentation adapter.
-- `src/backend/`: typed semantic contract, explicit fake, and transport interface
-  (no wire/process implementation).
-- `src/frontend/`: frontend-owned chat state, local preferences, bounded text
-  attachment preparation and session-lifetime usage ledger.
-- `src/platform/`: OS integration, selected by CMake.
-- [`reference/openghost/`](reference/openghost/): the **unchanged dissected 1.3
-  frontend**, retained for visual/behavior comparison only. Its Electron/JS
-  files are never built, loaded or installed by the Qt application.
-- [`docs/cpp-port.md`](docs/cpp-port.md): copy inventory, exclusions, limitations,
-  platform work and next migration step.
-- [`docs/native-import.json`](docs/native-import.json): source commits and hashes.
+```sh
+cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release \
+  -DOPENGHOST_BUILD_SMOKE_TEST=ON
+cmake --build build-release --parallel 4
+ctest --test-dir build-release \
+  -R '^(native_contract_test|native_ui_smoke|native_fake_ui_smoke)$' \
+  --output-on-failure
+```
 
-This is an independent local port, not official OpenGhost or a completed
-feature-for-feature clone. Keep the original frontend as the authority for
-remaining work. Upstream restricts its name, artwork, animations and visual
-design separately from source code: see [LICENSE](LICENSE) and [NOTICE.md](NOTICE.md).
+Use `ctest -C Release` with multi-configuration generators. The option defaults
+to **OFF** and enables all three checks:
+
+- `native_contract_test`: typed contract, identity/cancellation/recovery, store,
+  checkpoint failures, mini-chat/lock state, usage, attachments, approvals/auth
+  and host routing. No GUI or real backend.
+- `native_ui_smoke`: disconnected QML launch, splash handoff, themes/settings,
+  refusal paths and Markdown/TeX/diagram rendering.
+- `native_fake_ui_smoke`: the same UI plus actual composer submission, streaming,
+  Escape, steering, Retry, attachment/approval cards, deletion and fixture auth.
+
+CTest uses offscreen/software rendering. Smokes isolate appearance, preferences
+and the library in temporary directories (even the fake smoke uses a temporary
+file-backed library); contract tests use temporary or memory stores. No real
+credentials or live model calls are needed. They are focused regressions, not
+full visual parity, real crash recovery or cross-platform qualification.
+
+With a working Linux Wayland desktop, the same test-enabled binary can exercise
+the GPU path without CTest's offscreen override:
+
+```sh
+QT_QPA_PLATFORM=wayland QSG_RHI_BACKEND=opengl QT_QUICK_BACKEND=rhi \
+  QT_FORCE_STDERR_LOGGING=1 OPENGHOST_REDUCED_MOTION=0 \
+  ./build-release/openghost-native --smoke-test --fake-backend
+```
+
+An uninstalled Linux development binary can emit a nonfatal portal app-ID
+registration warning. **Two GCC Release metatype warnings also remain**; see
+[the warning analysis](docs/cpp-port.md#known-gcc-metatype-warnings). Do not
+interpret a successful build as warning-free.
+
+## What works, and what does not
+
+“Implemented” below describes frontend behavior within the stated limits, not
+successful integration with a real backend.
+
+| Area | Current status |
+| --- | --- |
+| Native presentation | Implemented window/sidebar/composer, four settings pages, themes, splash/motion, selection/copy, Markdown/code/TeX/diagram rendering. Full visual parity is unqualified. |
+| Local preferences | Implemented appearance, standing instructions, explicit model/effort and Ask/Auto/Full preference persistence. Pinned-file preparation is unsupported. |
+| Chat flow in the existing UI | Implemented draft/open/search/local rename, pins/collapse, streaming, Escape Stop, Retry, steering, deletion, approval cards and text attachment cards. Turn-dependent behavior is exercised only with the fake. |
+| Local state/recovery | Implemented index/display-cache/checkpoint/reconciliation logic, tested with stores and scripted backends. Caches are not backend history; persistence caveats are below. |
+| Mini chat, locks, folder creation | State/service APIs and tests exist. **No mini-chat dialog, lock/unlock screen or add-folder picker is exposed in the UI.** Production encryption is absent. Existing folder groups can be displayed/collapsed and their chats managed. |
+| Models/auth/usage | Frontend selectors, status, login controls and usage views exist. Catalog, sign-in, approval effects and token counts are **simulated** in fake mode. No provider credentials are saved. |
+| Real generation, tools, durable backend recovery | **Backend-dependent and unavailable.** No backend is bundled or contacted. |
+| Host browser/media tools | Typed requests and tested dispatch/cancellation bookkeeping exist; shipped `NoHost` publishes no tools or browser and requests refuse. No browser engine, downloads or media preparation. |
+| Compaction/account limits | Contract types exist; fake refuses them, no operational compaction UI or live billing/limits. Saved compact/stats rows are retained as cache data, not rendered as cards. |
+| Other intentionally absent UI | No tool/subagent/reasoning transcript panels, source-port service/workspace picker, voice controls, extra settings tabs or visual diagram form editor. Reasoning/tool activity is not assistant text. |
+
+The composer **+ file picker** handles text attachments; the reference's broader
+plus-menu operations are not implemented. No new controls were invented to
+expose the unported state.
+
+## Using `--fake-backend`
+
+The fake exists to develop/test frontend state and presentation without installing
+an agent backend or risking provider charges. It uses Qt timers (deterministic
+`advance()` in tests), two labelled models — **Fake Echo** and **Fake Brief** —
+and process-local sessions. It uses no model, real tools, network requests,
+credentials or subprocesses. Text attachment preparation is a separate, real
+local file read by the frontend.
+
+Send a normal message, press **Escape** to stop, or Send again while the reply
+runs to steer. Submit these exact whole-message fixture selectors:
+
+| Message | Scenario |
+| --- | --- |
+| `/fake tools` | Simulated tool activity/working ghost; no host effect or tool transcript panel. |
+| `/fake approval` | Approval card in Ask/Auto; Full skips the prompt. Allow/Deny only affects the simulation. |
+| `/fake error` | Terminal error with Retry; retry targets that failed turn without another user bubble. |
+| `/fake empty` | Empty final reply notice. |
+| `/fake length` | Output-limit finish notice. |
+
+These are not production slash commands. At the end of its scripted reply, the
+fake emits fixed 100 input / 20 cached / 30 output tokens, not estimates or a bill. Providers →
+Add API key accepts **only `fixture`**; Sign in is a cancellable timer. **Never
+enter real credentials.**
+
+Fake chats, sessions, pins and usage are in memory and disappear on exit.
+However, **normal fake launches share the app's saved appearance and preferences**
+(including instructions/model/mode) with disconnected launches. `--fake-backend`
+is not an isolated profile flag; `--smoke-test` is isolated. The fake's recovery
+capability applies only while that fake instance survives — it is not a durable
+or production-conforming backend.
+
+## Architecture and backend boundary
+
+```text
+QML (OpenGhost.Ui)
+  -> WindowController / display models
+     -> ChatService + Library / PreferencesStore / UsageStore
+        -> Backend (typed asynchronous semantic interface)
+           -> FakeBackend, only when explicitly selected
+           -> future adapter -> ByteTransport implementation (both absent)
+```
+
+- [`src/backend/types.h`](src/backend/types.h) defines commands/replies, session
+  and global events, errors, model/auth metadata, approvals, host-tool calls,
+  usage and separate full-input vs display-preview values. These are **QtCore
+  C++ values, not JSON-RPC serializers**. JSON objects are used for extensible
+  tool arguments/schemas/details, not as the UI's protocol.
+- [`Backend`](src/backend/backend.h) is an asynchronous, same-owner-thread
+  interface. Local request IDs correlate replies; session/version/client-turn/
+  remote-turn/message IDs have separate meanings. Replies never arrive inline;
+  events can precede acceptance. Request cancellation is not turn Stop or rollback.
+- [`ByteTransport`](src/backend/transport.h) only declares bounded ordered byte
+  writes, received bytes and lifecycle/error signals. A queued write is **not**
+  backend acceptance. No socket, process, framing, parser or reconnection exists.
+- [`ChatService`](src/frontend/chat_service.h) owns frontend projection and
+  lifecycle, not agent execution. [`presentation.h`](src/presentation.h), list
+  models and `WindowController` adapt it for QML. `native_contract` links only
+  QtCore; rendering and platform integrations are separate targets/layers.
+
+The frontend is **backend-agnostic at this semantic seam**. A later adapter and
+transport could connect the Rust harness, Pi, or another compatible backend.
+None is currently integrated or claimed wire-compatible. An adapter must map
+capabilities and preserve acceptance, identity, event ordering, recovery,
+cancellation, approval and error semantics — or explicitly refuse unsupported
+operations. Merely forwarding text is insufficient. The current service requires
+session recovery during initialization. Details and the ABP-oriented future
+wire responsibilities are in [the port notes](docs/cpp-port.md#typed-boundary-and-future-adapters).
+
+## Local persistence and recovery
+
+Qt selects the app-specific locations for application name `openghost-native`:
+
+| Location | Contents |
+| --- | --- |
+| `AppConfigLocation/appearance.json` | Theme choice. |
+| `AppConfigLocation/preferences.json` | Versioned instructions, preferred provider/model/effort and permission mode. |
+| `AppDataLocation/library/index.json` | Chat/folder index, titles/rename metadata, pins/collapse, model selection, lock metadata. |
+| `…/library/chats/<id>.json` | Allowlisted display messages, per-reply usage and pending-turn/steering checkpoints. |
+| `…/library/mini/<parent-id>.json` | Separate mini-chat display cache, pending markers and parent `seen` timestamp. |
+| `…/library/usage.json` | Local usage ledger, schema v2 (v1 keys upgraded on read); see the known save defect below. |
+
+On Linux the defaults are normally `~/.config/openghost-native` and
+`~/.local/share/openghost-native`, respecting Qt/XDG overrides. Windows/macOS use
+Qt's platform locations. No previous Electron/native profile is read or migrated.
+Normal disconnected mode selects the file-backed library, but cannot create a
+backend chat; New Chat is only a draft until a first send is admitted.
+
+The key store uses one JSON object per validated key (64 MiB maximum) and
+`QSaveFile` replacement. Unknown/unreadable **index** makes the library read-only;
+unreadable cache reads fail instead of becoming an empty chat. Preferences and
+usage also refuse to overwrite unreadable/unknown-version state. Appearance has
+a different, simpler policy: invalid input is ignored and a later theme choice
+can replace it. These are not universal filesystem-safety or transaction guarantees.
+
+### Sessions, checkpoints, Retry and steering
+
+- Frontend chat identity/index/annotations are local; backend session incarnation,
+  revision and canonical conversation history belong to the backend. A new start
+  is create-only; a later start names the known incarnation.
+- Start, Retry and steering must first save the index and display checkpoint.
+  Failure means **nothing is dispatched**. Ordinary subsequent cache saves are
+  best effort, not a durable backend journal or multi-file transaction.
+- Reopening a saved chat loads display data, then uses `session.get`, naming the
+  saved pending client turn when present. Matching journal events rebuild that
+  turn; raced events are bounded/buffered and replay is not charged as new usage.
+  Remote IDs/version/sequence are reacquired, not reconstructed from text.
+- Missing sessions stay display-only; a missing pending turn is not resent.
+  Full attachment input and unsent composer drafts are **not persisted** (the
+  QML draft cache holds at most 32 inactive drafts in memory).
+- A failed accepted turn uses `RetryTurn` with its exact failed remote ID and a
+  new client ID, **no input**. In-process uncertain acceptance is reconciled
+  first; only a positively missing new session with retained exact prepared
+  input can restart that request. This is not an automatic crash/reconnect retry.
+- Escape freezes local output immediately; remote cancellation is separate and
+  does not undo effects. Local Stop alone does not clear pending checkpoints.
+  Send while busy steers: queued, applied, notApplied and unconfirmed remain
+  distinct; command acceptance alone is not application to the conversation.
+- Deletion waits for backend acknowledgements for the main and `<id>:mini`
+  sessions before removing local state. Folder deletion proceeds chat by chat,
+  not atomically. Local cleanup failures still need better reporting.
+
+### Mini chat and password locks
+
+Mini-chat service methods maintain `<parent-id>:mini`, independent messages and
+turn state, `side.parent`/`parentBusy`/`moved`, and a *Caught up with the main chat*
+marker when the parent moves on. Close stops and retains it; Clear deletes only
+the mini session/cache. **This is tested state, not a shipped mini-chat UI.**
+
+The lock state machine supports protect, relock-on-leaving, unlock and unprotect
+through an injected `ChatSealer`. **The application supplies no sealer and has no
+password UI: it does not currently encrypt chats.** Existing protected records
+remain locked and cannot be opened or overwritten as empty. Protect/unlock refuse
+without a sealer. Tests use an HMAC-authenticated XOR fixture, **not production
+cryptography**. The reference uses PBKDF2-SHA256 (600,000 iterations) and AES-GCM;
+a vetted implementation and compatibility/security tests remain work to do.
+Even that design protects local display bodies/titles, not backend history or all
+index metadata (folder/space names remain visible).
+
+### Usage, attachments, approvals and host state
+
+Usage views aggregate correlated live usage by provider/model/day/month and keep
+per-reply metrics. Duplicate/replayed events do not charge again; unknown timing
+is not guessed. **Known defect:** the intended 800 ms single-shot usage save can
+expire before `flush()` checks `isActive()`, so it skips the write; shutdown after
+that timeout also skips it. Explicit/destructor flush while the timer is still
+active works. Do not rely on ledger durability yet. See the
+[verified preparation findings](docs/repository-readiness.md).
+
+Attachments are local regular UTF-8 text only: 20/message, 256 KiB/file,
+64 retained draft tokens and 8 MiB total retained text. Preparation is synchronous
+and byte-bounded, not deadline-bounded; a failed selection adds nothing. Symlink,
+nonlocal, PDF and invalid/binary text inputs refuse. Tokens own full prepared
+payloads separately from cached metadata; previews are never resent as input.
+Images/media/office extraction and pinned-file storage are absent.
+
+Approval requests are bound to session/turn/request identities, answered once,
+and dismissed on resolution, Stop, cancellation or superseding steering. Auth
+and model notifications trigger fresh reads. Pending auth/approvals are memory
+state, not persisted consent or credentials. Ask/Auto/Full is a requested backend
+policy, not frontend sandboxing or local tool enforcement.
+
+`HostServices` publishes tool schemas at initialization and routes only named,
+live-turn calls, tracking duplicate in-flight calls, cancellation and turn-end
+release. The default `NoHost` exposes no browser/tools, so `ChatService` returns
+`unsupported`. A scripted test host exercises routing, not a working browser.
+
+## Repository map
+
+| Path | Purpose |
+| --- | --- |
+| `src/main.cpp` | App identity, command-line selection, store paths, composition and QML engine. |
+| `src/backend/` | Semantic types/interface, explicit fake and transport interface only. |
+| `src/frontend/` | Chat lifecycle/projection, library/store, preferences, attachment preparation, usage and host-service seam. |
+| `src/window.*`, `model.*`, `settings.*`, `presentation.*` | C++ → QML presentation adapters and display models. |
+| Remaining `src/` | Native rich text/highlighting/TeX/diagram renderers, theme, ghost, motion and drawing helpers. |
+| `src/platform/` | CMake-selected Linux or portable host integration and external-link dispatch. |
+| `qml/` | Qt Quick window, sidebar, composer, settings, delegates and visual components. |
+| `shaders/`, `resources/` | Qt-compiled shaders, icon and Linux desktop entry. |
+| `tests/` | Qt contract suite and application UI smokes. |
+| `docs/cpp-port.md` | Engineering inventory, contracts, exclusions, warnings and portability detail. |
+| `docs/native-import.json` | Historical import commits and source hashes, not hashes of today's edited files. |
+| `LICENSE`, `NOTICE.md`, `licenses/` | Current terms and preserved historical attribution. |
+| `reference/openghost/` | **Frozen dissected 1.3 reference**, including legacy JS/Electron files; never built, loaded or installed by the native target. Do not edit it. |
+
+## Portability
+
+**Linux is the exercised platform:** Qt 6.11.2 / GCC 16.2.1, Release build,
+offscreen/software tests and Wayland/OpenGL smokes. Linux selects threaded
+rendering/portal defaults and KDE reduced-motion discovery. The portable override
+`OPENGHOST_REDUCED_MOTION=0/1` is available. QML networking is denied; explicit
+HTTP(S) links (and allowed mail links) open through the OS, so this is not a
+sandbox or a guarantee that external applications stay offline.
+
+CMake has MSVC UTF-8/warning options, a Windows GUI executable and a macOS bundle,
+but **Windows/macOS have not been built or run in this audit**. Still to validate:
+Qt/SDK/compiler builds, runtime/QML plugin deployment, signing/icons, graphics
+backends, fonts/DPI, native dialogs/clipboard/links, keyboard/IME/accessibility and
+system reduced-motion discovery. Path comparison lowercases outside Linux;
+case-sensitive macOS volumes, Windows case/path aliases and long paths need
+review. Store replacement under antivirus/indexer locks and macOS sandbox paths
+are unqualified.
+
+Library/preferences storage has no explicit private-permission/ACL policy,
+interprocess locking or multi-file transaction. Appearance separately requests
+owner-only permissions. Use a private profile and one application instance; do
+not treat these files as a secure vault. See [repository readiness](docs/repository-readiness.md)
+for issues to carry into a standalone repository.
+
+## Licensing and attribution
+
+OpenGhost is by **Andrew, Copyright © 2026 Andrew**. This port retains the native
+implementation's historical attribution and import record; historical product
+names/paths in those records are provenance, not current build instructions.
+
+Read [LICENSE](LICENSE), [NOTICE.md](NOTICE.md) and the retained [notices](licenses/).
+The MIT source-code terms explicitly exclude the OpenGhost name, logo, animations
+and visual design. Publishing/distributing this modified UI with those materials
+requires resolving the upstream restrictions, not merely retaining notices.
+Moving it into a private repo does not create additional rights or permit
+commercial use. No license or artwork permission is changed by this documentation.

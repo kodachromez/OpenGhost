@@ -14,4 +14,7 @@
   results, credentials or session state when disconnected.
 - Platform-specific work belongs in `src/platform/`, selected by CMake.
 - Read `docs/cpp-port.md` before migrating dependencies. Preserve attribution.
-- Focused checks: build, optional `native_ui_smoke`, and `git diff --check`.
+- Focused checks: Release build with `OPENGHOST_BUILD_SMOKE_TEST=ON`, then
+  `native_contract_test`, `native_ui_smoke`, `native_fake_ui_smoke`, and
+  `git diff --check`. See README.md for commands and docs/repository-readiness.md
+  for known limitations; passing fake tests do not qualify a real backend.

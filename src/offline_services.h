@@ -11,7 +11,7 @@
 
 // Small QML settings projections. Instructions use the frontend preference
 // store; pinned-file preparation remains explicitly absent. Usage has a separate
-// frontend-owned, session-lifetime ledger.
+// frontend-owned ledger, backed by the selected file or memory store.
 inline QString backendUnavailable()
 {
     return QStringLiteral("This operation is not connected in the native frontend yet.");
