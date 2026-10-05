@@ -1,13 +1,16 @@
 #pragma once
+#include "browser_automation.h"
 #include "host.h"
 #include <QAbstractListModel>
 #include <QHash>
 #include <QSet>
 #include <functional>
+#include <memory>
 
 namespace openghost
 {
 class Browser;
+class BrowserTools;
 
 // The panel's tabs (browser-panel.js `tabs`), in strip order. One row per tab
 // for the strip and for the guest views: a row keeps its delegate while the
@@ -42,16 +45,16 @@ class BrowserTabs final : public QAbstractListModel
 // browser-panel.js's BrowserPanel for the desktop build: the panel's open
 // state and width, its tabs and their guests' lifecycle, the agent's driving
 // and the user's Take Control / Hand Back, its saved layout, and the
-// `host.browser` snapshot. It owns no engine: the panel's guest views (Qt
-// WebEngine, built with OPENGHOST_BROWSER) execute `act` and report what their
-// pages do through the guest methods below, as webview events do.
+// `host.browser` snapshot. It owns the automation seam and serial tool owner;
+// the panel's guest views (Qt WebEngine, only with OPENGHOST_BROWSER) execute
+// native navigation and report page lifecycle through the methods below.
 //
-// No browser host tool is published yet, so `available` stays false and
-// `run` refuses: the snapshot reports what the user's browser holds, never an
-// operation the agent could execute.
+// A BrowserAutomation implementation is owned by this host when composed by
+// the desktop application. Without one, no tools are advertised.
 class Browser final : public HostServices
 {
     Q_OBJECT
+    Q_PROPERTY(QObject *automation READ automation CONSTANT)
     Q_PROPERTY(bool open READ isOpen NOTIFY changed)
     Q_PROPERTY(int savedWidth READ savedWidth NOTIFY changed)
     Q_PROPERTY(QAbstractItemModel *tabs READ tabs CONSTANT)
@@ -81,6 +84,7 @@ class Browser final : public HostServices
         QString source;
         QString state = QStringLiteral("lazy");
         Sequence revision = 0;
+        QString pageId, document;
         bool back = false, forward = false;
     };
     // `statePath`: the saved layout (openghost.browser), empty for none.
@@ -88,12 +92,17 @@ class Browser final : public HostServices
     explicit Browser(QString statePath = {}, QString storagePath = {}, QObject *parent = nullptr);
     ~Browser() override;
 
-    // HostServices: the snapshot, no tools yet, and turn-end release.
+    // Set once, before publishing the host or constructing the guest QML.
+    void setAutomation(std::unique_ptr<BrowserAutomation> automation);
+    QObject *automation() const { return m_automation.get(); }
+    BrowserTools *toolOwner() const { return m_tools.get(); }
+    Q_INVOKABLE void attachGuest(const QString &handle, int incarnation, QObject *view);
     std::optional<BrowserState> browser() const override { return snapshot(); }
-    QVector<HostToolSchema> tools() const override { return {}; }
+    QVector<HostToolSchema> tools() const override;
     void run(RequestId id, const HostToolRequest &request) override;
-    void cancel(RequestId id) override { m_runs.remove(id); }
-    void turnEnded(const QString &sessionId) override { drive(sessionId, false); }
+    void cancel(RequestId id) override;
+    void turnEnded(const QString &sessionId) override;
+    void inputQueued(const QString &sessionId) override;
 
     BrowserState snapshot() const;
     static QString normalize(const QString &text);
@@ -145,6 +154,8 @@ class Browser final : public HostServices
 
     // What a guest's page did (webview events). `incarnation` names the guest;
     // a report from a guest that has since been replaced is ignored.
+    Q_INVOKABLE void documentState(const QString &handle, int incarnation, const QString &document,
+                                   bool ready);
     Q_INVOKABLE void domReady(const QString &handle, int incarnation);
     Q_INVOKABLE void loadStarted(const QString &handle, int incarnation);
     Q_INVOKABLE void loadStopped(const QString &handle, int incarnation, const QString &url,
@@ -181,6 +192,9 @@ class Browser final : public HostServices
 
   private:
     friend class BrowserTabs;
+    friend class BrowserTools;
+    void revise(Tab &tab);
+    void invalidatePage(Tab &tab);
     static int fit(qreal room, int wanted);
     int indexOf(const QString &handle) const;
     Tab *find(const QString &handle, int incarnation = -1);
@@ -200,6 +214,7 @@ class Browser final : public HostServices
     QVector<Tab> m_tabs;
     BrowserTabs m_model;
     QString m_active;
+    quint64 m_selectionRevision = 0;
     bool m_open = false, m_user = false;
     int m_width = 0;
     QSet<QString> m_drivers;
@@ -210,5 +225,7 @@ class Browser final : public HostServices
     QString m_reported;
     int m_guests = 0;
     int m_readyMs = ReadyMs;
+    std::unique_ptr<BrowserAutomation> m_automation;
+    std::unique_ptr<BrowserTools> m_tools;
 };
 } // namespace openghost

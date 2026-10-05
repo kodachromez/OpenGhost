@@ -45,7 +45,18 @@ target_include_directories(native_contract PUBLIC src)
 target_link_libraries(native_contract PUBLIC Qt6::Core)
 native_warnings(native_contract)
 # The browser panel's state and host.browser snapshot; no engine, QtCore only.
-target_sources(native_contract PRIVATE src/frontend/browser.h src/frontend/browser.cpp)
+target_sources(native_contract PRIVATE src/frontend/browser.h src/frontend/browser.cpp
+    src/frontend/browser_automation.h src/frontend/browser_tools.h src/frontend/browser_tools.cpp)
+qt_add_resources(native_contract browser_contract PREFIX /browser BASE src/browser
+    FILES src/browser/schemas.json)
+if(OPENGHOST_BROWSER)
+    add_library(native_browser_automation STATIC src/browser/qt_browser_automation.cpp
+        src/browser/qt_browser_automation.h)
+    target_link_libraries(native_browser_automation PUBLIC native_contract Qt6::Quick Qt6::WebEngineQuick)
+    qt_add_resources(native_browser_automation browser_observe PREFIX /browser BASE src/browser
+        FILES src/browser/observe.js)
+    native_warnings(native_browser_automation)
+endif()
 
 add_library(native_window STATIC src/model.cpp src/settings.cpp src/window.cpp src/motion.cpp
     src/appearance.cpp src/presentation.cpp src/offline_services.h src/platform/desktop.cpp)
@@ -88,7 +99,7 @@ if(OPENGHOST_BROWSER)
         set_source_files_properties(qml/${name}.qml PROPERTIES QT_RESOURCE_ALIAS ${name}.qml)
         list(APPEND qml_files qml/${name}.qml)
     endforeach()
-    target_link_libraries(openghost-native PRIVATE Qt6::WebEngineQuick)
+    target_link_libraries(openghost-native PRIVATE native_browser_automation)
     target_compile_definitions(openghost-native PRIVATE OPENGHOST_BROWSER)
 endif()
 qt_add_qml_module(openghost-native URI OpenGhost.Ui VERSION 1.0 RESOURCE_PREFIX /
@@ -117,6 +128,19 @@ if(OPENGHOST_BUILD_SMOKE_TEST)
     target_link_libraries(native_browser_test PRIVATE native_contract Qt6::Test)
     native_warnings(native_browser_test)
     add_test(NAME native_browser_test COMMAND native_browser_test)
+    add_executable(native_browser_operations_test tests/browser_operations.cpp)
+    target_link_libraries(native_browser_operations_test PRIVATE native_contract Qt6::Test)
+    native_warnings(native_browser_operations_test)
+    add_test(NAME native_browser_operations_test COMMAND native_browser_operations_test)
+    set_tests_properties(native_browser_operations_test PROPERTIES TIMEOUT 20)
+    if(OPENGHOST_BROWSER)
+        add_executable(native_browser_automation_test tests/browser_automation.cpp)
+        target_link_libraries(native_browser_automation_test PRIVATE native_browser_automation Qt6::Test)
+        native_warnings(native_browser_automation_test)
+        add_test(NAME native_browser_automation_test COMMAND native_browser_automation_test)
+        set_tests_properties(native_browser_automation_test PROPERTIES TIMEOUT 150
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_QPA_PLATFORMTHEME=generic;QT_FORCE_STDERR_LOGGING=1")
+    endif()
     set_tests_properties(native_browser_test PROPERTIES TIMEOUT 15)
     target_sources(openghost-native PRIVATE tests/browser_smoke.cpp)
     set_tests_properties(native_ui_smoke native_fake_ui_smoke PROPERTIES TIMEOUT 60)

@@ -103,9 +103,12 @@ class BrowserTest final : public QObject
         QCOMPARE(acts.count(), 0); // created on its page, not told to load it
         const int guest = tab->incarnation;
 
+        const auto createdRevision = active(browser).revision;
+        const auto createdPage = active(browser).pageId;
         browser.loadStarted(first, guest);
         QVERIFY(browser.loading());
-        QCOMPARE(active(browser).revision, 1);
+        QCOMPARE(active(browser).revision, createdRevision + 1);
+        QVERIFY(active(browser).pageId != createdPage);
         browser.domReady(first, guest);
         QCOMPARE(active(browser).state, QString("ready"));
         QVERIFY(browser.ready());

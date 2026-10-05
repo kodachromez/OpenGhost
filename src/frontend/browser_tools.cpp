@@ -1,0 +1,828 @@
+#include "browser_tools.h"
+#include "browser.h"
+#include <QDateTime>
+#include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QRegularExpression>
+#include <QTimer>
+#include <QUrl>
+#include <QUuid>
+#include <algorithm>
+#include <cmath>
+
+// The resource is also used from a static QtCore-only library.
+static void browserResources() { Q_INIT_RESOURCE(browser_contract); }
+namespace openghost
+{
+namespace
+{
+qint64 now() { return QDateTime::currentMSecsSinceEpoch(); }
+QString uuid() { return QUuid::createUuid().toString(QUuid::WithoutBraces); }
+QString quoted(const QString &s)
+{
+    auto json = QJsonDocument(QJsonArray{s}).toJson(QJsonDocument::Compact);
+    return QString::fromUtf8(json.mid(1, json.size() - 2));
+}
+QString key(const HostToolRequest &r)
+{
+    return QString::fromUtf8(QJsonDocument(QJsonArray{r.sessionId, r.turnId, r.toolCallId})
+                                 .toJson(QJsonDocument::Compact));
+}
+const QSet<QString> supported = {"browser_snapshot", "browser_tabs", "browser_navigate",
+                                 "browser_wait",     "browser_read", "browser_screenshot",
+                                 "browser_scroll"};
+} // namespace
+struct BrowserTools::Job {
+    RequestId id;
+    HostToolRequest request;
+    QString tab, page, document;
+    Sequence receiptRevision = 0;
+    quint64 lease = 0, call = 0, generation = 0;
+    int incarnation = 0;
+    QElapsedTimer elapsed;
+    qint64 deadline = 0, loadDeadline = 0;
+    bool explicitTab = false, done = false, started = false, navigating = false;
+    bool dirty = false, handed = false, held = false, addTabs = false;
+};
+BrowserTools::BrowserTools(Browser &browser, BrowserAutomation &engine)
+    : QObject(nullptr), m_browser(browser), m_engine(engine)
+{
+    browserResources();
+    // Prompt loss/cancellation detection even while waiting on an engine callback.
+    auto *timer = new QTimer(this);
+    timer->setInterval(20);
+    connect(timer, &QTimer::timeout, this, [this] {
+        if (m_active && !m_active->held)
+            check(m_active);
+        const auto queued = m_queue;
+        for (const auto &job : queued)
+            if (!job->done && !job->held && job->elapsed.elapsed() >= m_limits.queue)
+                fail(job, "timeout", "Browser queue timed out");
+        pump();
+    });
+    timer->start();
+    connect(&browser, &Browser::changed, this, [this] {
+        for (auto it = m_reads.begin(); it != m_reads.end();) {
+            const auto *tab = m_browser.tab(it.key());
+            if (!tab || tab->pageId != it->page)
+                it = m_reads.erase(it);
+            else
+                ++it;
+        }
+    });
+}
+BrowserTools::~BrowserTools()
+{
+    const auto jobs = m_jobs.values();
+    for (const auto &job : jobs)
+        abandon(job);
+}
+QVector<HostToolSchema> BrowserTools::schemas() const
+{
+    QFile file(":/browser/schemas.json");
+    if (!file.open(QIODevice::ReadOnly))
+        qFatal("Missing browser schemas");
+    QVector<HostToolSchema> out;
+    for (const auto &value : QJsonDocument::fromJson(file.readAll()).array()) {
+        const auto row = value.toObject();
+        if (supported.contains(row["name"].toString()))
+            out.append({row["name"].toString(), row["description"].toString(),
+                        row["parameters"].toObject()});
+    }
+    return out;
+}
+HostToolResult BrowserTools::format(const QJsonValue &value)
+{
+    const QJsonObject answer =
+        value.isObject() ? value.toObject() : QJsonObject{{"error", "the browser did not answer"}};
+    HostToolResult result;
+    QJsonObject data;
+    for (const auto *name :
+         {"code", "tabId", "pageId", "readId", "refs", "tabs", "truncated", "coverage", "scroll",
+          "width", "height", "scale", "pageWidth", "pageHeight", "downloads"})
+        if (answer.contains(name))
+            data[name] = answer[name];
+    if (answer.contains("pagination")) {
+        const auto pagination = answer["pagination"].toObject();
+        for (auto it = pagination.begin(); it != pagination.end(); ++it)
+            data[it.key()] = it.value();
+    }
+    result.isError = !answer["error"].toString().isEmpty();
+    result.status = result.isError ? HostToolResult::Status::Error : HostToolResult::Status::Ok;
+    if (result.isError) {
+        if (data["code"].toString().isEmpty())
+            data["code"] = "browser_error";
+        result.content.append(HostToolResult::Text{"Error: " + answer["error"].toString()});
+    } else {
+        result.content.append(HostToolResult::Text{answer["text"].toString()});
+        if (!answer["image"].toString().isEmpty())
+            result.content.append(HostToolResult::Image{
+                answer["image"].toString(), QStringLiteral("Screenshot of the built-in browser")});
+    }
+    result.data = data;
+    return result;
+}
+void BrowserTools::run(RequestId id, const HostToolRequest &request)
+{
+    if (m_jobs.contains(id))
+        return; // never replace an owned reverse request
+    auto job = std::make_shared<Job>();
+    m_jobs.insert(id, job);
+    job->id = id;
+    job->request = request;
+    job->elapsed.start();
+    job->explicitTab = !request.args["tabId"].toString().isEmpty();
+    job->tab = job->explicitTab                 ? request.args["tabId"].toString()
+               : request.name == "browser_tabs" ? QString()
+                                                : m_browser.activeHandle();
+    if (const auto *tab = m_browser.tab(job->tab))
+        job->receiptRevision = tab->revision;
+    job->lease = m_browser.m_selectionRevision;
+    // ChatService admits live turns. This owner also refuses conflicting/reused
+    // identities so a queued step can never silently acquire another turn.
+    QString error;
+    if (request.sessionId.isEmpty() || request.turnId.isEmpty() || request.toolCallId.isEmpty())
+        error = "A browser step needs an owned session, turn and tool call";
+    else if ((m_turns.contains(request.sessionId) &&
+              m_turns[request.sessionId] != request.turnId) ||
+             m_seen.contains(key(request)))
+        error = "The browser turn or tool call is stale";
+    else if (!supported.contains(request.name))
+        error = "Unsupported browser tool";
+    if (!error.isEmpty()) {
+        QTimer::singleShot(0, this, [this, job, error] { fail(job, "invalid_request", error); });
+        return;
+    }
+    m_turns[request.sessionId] = request.turnId;
+    m_seen.insert(key(request));
+    m_browser.drive(request.sessionId, true);
+    job->held = m_browser.userHas();
+    job->handed = job->held;
+    m_queue.enqueue(job);
+    QTimer::singleShot(0, this, [this] { pump(); });
+}
+void BrowserTools::abandon(const Work &job)
+{
+    if (!job || job->done)
+        return;
+    job->done = true;
+    m_jobs.remove(job->id);
+    ++job->generation;
+    m_engine.cancel(job->call);
+    if (job->navigating)
+        m_engine.navigate(target(job), "stop", {});
+    if (job->dirty) {
+        if (auto *tab = m_browser.find(job->tab, job->incarnation)) {
+            m_browser.invalidatePage(*tab);
+            m_browser.update(tab->handle);
+        }
+        m_reads.remove(job->tab);
+    }
+}
+void BrowserTools::cancel(RequestId id)
+{
+    abandon(m_jobs.value(id));
+    QTimer::singleShot(0, this, [this] { pump(); });
+}
+void BrowserTools::turnEnded(const QString &session)
+{
+    const auto jobs = m_jobs.values();
+    for (const auto &job : jobs)
+        if (job->request.sessionId == session)
+            abandon(job);
+    m_turns.remove(session);
+    for (auto it = m_seen.begin(); it != m_seen.end();) {
+        if (QJsonDocument::fromJson(it->toUtf8()).array().first().toString() == session)
+            it = m_seen.erase(it);
+        else
+            ++it;
+    }
+    QTimer::singleShot(0, this, [this] { pump(); });
+}
+void BrowserTools::inputQueued(const QString &session)
+{
+    const auto jobs = m_jobs.values();
+    for (const auto &job : jobs) {
+        if (!job->held || job->request.sessionId != session)
+            continue;
+        abandon(job);
+        HostToolResult result;
+        result.status = HostToolResult::Status::Cancelled;
+        result.reason = "message";
+        emit m_browser.finished(job->id, result);
+    }
+    QTimer::singleShot(0, this, [this] { pump(); });
+}
+void BrowserTools::controlChanged()
+{
+    QList<Work> jobs = m_queue;
+    if (m_active)
+        jobs.prepend(m_active);
+    for (const auto &job : jobs) {
+        if (job->done)
+            continue;
+        if (m_browser.userHas()) {
+            m_engine.cancel(job->call);
+            ++job->generation;
+            if (job->navigating)
+                m_engine.navigate(target(job), "stop", {});
+            if (job->dirty) {
+                if (auto *tab = m_browser.find(job->tab, job->incarnation)) {
+                    m_browser.invalidatePage(*tab);
+                    m_browser.update(tab->handle);
+                }
+            }
+            job->dirty = job->navigating = false;
+            job->held = job->handed = true;
+        } else if (job->held) {
+            job->held = false;
+            job->started = false;
+            job->page.clear();
+            job->incarnation = 0;
+            job->addTabs = false;
+            job->elapsed.restart();
+            job->request.name = "browser_snapshot";
+            job->request.args = {};
+            job->explicitTab = false;
+            job->tab = m_browser.activeHandle();
+            job->lease = m_browser.m_selectionRevision;
+            if (const auto *tab = m_browser.tab(job->tab))
+                job->receiptRevision = tab->revision;
+        }
+    }
+    // The interrupted step keeps its place ahead of every queued step.
+    if (m_active && !m_active->held) {
+        m_queue.prepend(m_active);
+        m_active.reset();
+    }
+    QTimer::singleShot(0, this, [this] { pump(); });
+}
+void BrowserTools::pump()
+{
+    if (m_pumping)
+        return;
+    m_pumping = true;
+    if (m_active && m_active->done)
+        m_active.reset();
+    while (!m_active && !m_queue.isEmpty()) {
+        auto job = m_queue.dequeue();
+        if (job->done)
+            continue;
+        m_active = job;
+        if (job->held)
+            break;
+        if (job->elapsed.elapsed() >= m_limits.queue) {
+            fail(job, "timeout", "Browser queue timed out");
+            break;
+        }
+        job->deadline = m_limits.queue; // renderer budget includes queue + readiness
+        if (!job->tab.isEmpty()) {
+            const auto *tab = m_browser.tab(job->tab);
+            if (!tab) {
+                fail(job, "tab_gone", "This browser tab was closed");
+                break;
+            }
+            if (tab->revision != job->receiptRevision) {
+                fail(job, "stale_page",
+                     "The page changed while the step was queued. Take a new snapshot.");
+                break;
+            }
+        }
+        if (job->request.name != "browser_tabs" && !job->explicitTab &&
+            job->lease != m_browser.m_selectionRevision) {
+            fail(job, "stale_tab", "The active browser target changed. Take a new snapshot.");
+            break;
+        }
+        job->started = true;
+        if (job->request.name == "browser_tabs")
+            tabs(job);
+        else {
+            if (job->tab.isEmpty())
+                job->tab = m_browser.newTab({}, false, false);
+            m_browser.select(job->tab);
+            job->lease = m_browser.m_selectionRevision;
+            ensure(job);
+        }
+    }
+    m_pumping = false;
+}
+BrowserAutomation::Target BrowserTools::target(const Work &job) const
+{
+    return {job->tab, job->page, job->incarnation, job->document};
+}
+bool BrowserTools::check(const Work &job, bool page)
+{
+    if (job->done || job->held || m_active != job)
+        return false;
+    if (job->elapsed.elapsed() >= std::min<qint64>(job->deadline, m_limits.queue)) {
+        fail(job, "timeout", "Browser operation timed out");
+        return false;
+    }
+    if (!job->started || job->tab.isEmpty())
+        return true;
+    const auto *tab = m_browser.tab(job->tab);
+    if (!tab) {
+        fail(job, "tab_gone", "This browser tab was closed");
+        return false;
+    }
+    if (tab->state == "gone" && job->incarnation) {
+        fail(job, "guest_crashed", "The browser page crashed. Open it again.");
+        return false;
+    }
+    if (job->lease != m_browser.m_selectionRevision) {
+        fail(job, "stale_tab", "The active browser target changed. Take a new snapshot.");
+        return false;
+    }
+    if (page && !job->page.isEmpty() && !job->navigating && tab->pageId != job->page) {
+        fail(job, "stale_page", "The page changed. Take a new snapshot.");
+        return false;
+    }
+    return true;
+}
+void BrowserTools::finish(const Work &job, QJsonObject answer)
+{
+    if (job->done || job->held)
+        return;
+    if (job->addTabs)
+        answer["tabs"] = tabData();
+    auto result = format(answer);
+    if (job->handed)
+        result.status = HostToolResult::Status::HandedBack;
+    abandon(job);
+    emit m_browser.finished(job->id, result);
+    QTimer::singleShot(0, this, [this] { pump(); });
+}
+void BrowserTools::fail(const Work &job, const QString &code, const QString &message)
+{
+    QJsonObject answer{{"error", message}, {"code", code}};
+    if (!job->page.isEmpty())
+        answer["tabId"] = job->tab;
+    finish(job, answer);
+}
+void BrowserTools::later(const Work &job, int ms, std::function<void()> action)
+{
+    const auto generation = job->generation;
+    QTimer::singleShot(ms, this, [this, job, generation, action = std::move(action)] {
+        if (generation == job->generation && check(job))
+            action();
+    });
+}
+void BrowserTools::ensure(const Work &job)
+{
+    if (!check(job, false))
+        return;
+    auto *tab = m_browser.find(job->tab);
+    if (!tab)
+        return;
+    if (!job->incarnation && (!tab->view || tab->state == "failed")) {
+        tab->error.clear();
+        m_browser.createView(*tab, Browser::isBlank(tab->url) ? "about:blank" : tab->url);
+    }
+    job->incarnation = tab->incarnation;
+    if (tab->pending) {
+        later(job, 20, [this, job] { ensure(job); });
+        return;
+    }
+    if (!tab->guest || tab->state == "failed") {
+        fail(job, tab->error.isEmpty() ? "timeout" : "navigation_failed",
+             tab->error.isEmpty() ? "The browser did not become ready in time" : tab->error);
+        return;
+    }
+    job->deadline = job->elapsed.elapsed() + m_limits.operation;
+    job->page = tab->pageId;
+    job->document = tab->document;
+    const auto supplied = job->request.args["pageId"].toString();
+    if (!supplied.isEmpty() && supplied != job->page) {
+        fail(job, "stale_page", "The page changed. Take a new snapshot.");
+        return;
+    }
+    dispatch(job);
+}
+void BrowserTools::dispatch(const Work &job)
+{
+    if (!check(job))
+        return;
+    const auto name = job->request.name;
+    if (name == "browser_snapshot")
+        observe(job);
+    else if (name == "browser_navigate")
+        navigate(job);
+    else if (name == "browser_read")
+        read(job);
+    else if (name == "browser_screenshot")
+        screenshot(job);
+    else if (name == "browser_scroll")
+        scroll(job);
+    else if (name == "browser_wait") {
+        double seconds = job->request.args["seconds"].toDouble();
+        if (!seconds)
+            seconds = job->request.args["text"].toString().isEmpty() ? 2 : 15;
+        seconds = std::clamp(seconds, 0.5, 60.0);
+        wait(job, job->elapsed.elapsed() + qint64(seconds * 1000), seconds);
+    }
+}
+void BrowserTools::query(const Work &job, BrowserAutomation::Query kind, QJsonObject args,
+                         std::function<void(QJsonObject)> next)
+{
+    if (!check(job))
+        return;
+    job->call = ++m_serial;
+    const auto call = job->call, generation = job->generation;
+    QTimer::singleShot(m_limits.call, this, [this, job, call, generation] {
+        if (!job->done && !job->held && job->call == call && job->generation == generation)
+            fail(job, "timeout", "The page is not responding");
+    });
+    auto queryTarget = target(job);
+    // Navigation deliberately follows the replacement document while settling.
+    // All non-navigation steps retain the exact document they admitted.
+    if (job->navigating)
+        queryTarget.document = m_browser.tab(job->tab)->document;
+    m_engine.query(call, queryTarget, kind, args,
+                   now() + std::min<qint64>(m_limits.call, job->deadline - job->elapsed.elapsed()),
+                   [this, job, call, generation, next = std::move(next)](QJsonObject answer) {
+                       if (job->generation != generation || job->call != call || !check(job))
+                           return;
+                       job->call = 0;
+                       if (!answer["error"].toString().isEmpty())
+                           fail(job, answer["code"].toString("browser_error"),
+                                answer["error"].toString());
+                       else
+                           next(answer);
+                   });
+}
+void BrowserTools::observe(const Work &job, const QString &note)
+{
+    if (!check(job))
+        return;
+    if (job->dirty) {
+        auto *tab = m_browser.find(job->tab);
+        m_browser.invalidatePage(*tab);
+        job->page = tab->pageId;
+        job->dirty = false;
+        m_browser.update(tab->handle);
+        m_reads.remove(job->tab);
+    }
+    const bool full = job->request.args["full"].toBool();
+    query(job, BrowserAutomation::Query::Snapshot, {{"full", full}},
+          [this, job, note, full](QJsonObject snap) {
+              const auto *tab = m_browser.tab(job->tab);
+              const auto scroll = snap["scroll"].toObject();
+              const double height = scroll["height"].toDouble(), vh = scroll["vh"].toDouble();
+              const double screens = height / std::max(1.0, vh);
+              QStringList head;
+              if (!note.isEmpty())
+                  head << note;
+              head << "Page: " + (tab->title.isEmpty() ? "(no title)" : tab->title)
+                   << "URL: " + (tab->url.isEmpty() ? "about:blank" : tab->url);
+              if (tab->loading)
+                  head << "The page is still loading.";
+              const QString viewport =
+                  QStringLiteral("Viewport %1×%2").arg(scroll["vw"].toInt()).arg(vh);
+              head << (screens > 1.05
+                           ? viewport + QString(", scrolled %1% of a page %2 screens tall.")
+                                            .arg(height - vh > 4
+                                                     ? int(std::round(scroll["top"].toDouble() /
+                                                                      (height - vh) * 100))
+                                                     : 0)
+                                            .arg(screens, 0, 'f', 1)
+                           : viewport + ", the whole page fits on screen.");
+              QStringList lines;
+              for (const auto &line : snap["lines"].toArray())
+                  lines << line.toString();
+              QString text = head.join('\n') + "\n\n" +
+                             (lines.isEmpty() ? "(nothing readable on screen)" : lines.join('\n'));
+              const int skipped = snap["skipped"].toInt();
+              if (skipped)
+                  text += QString("\n[… %1 more lines not shown. %2.]")
+                              .arg(skipped)
+                              .arg(full ? "Scroll to them and take a snapshot"
+                                        : "Call browser_snapshot with full true or scroll");
+              else if (!full && scroll["below"].toDouble() > 8)
+                  text += "\n[More content below: scroll down to see it.]";
+              finish(job, {{"text", text},
+                           {"tabId", job->tab},
+                           {"pageId", job->page},
+                           {"refs", snap["refs"]},
+                           {"truncated", snap["truncated"]},
+                           {"coverage", full ? "full-dom-heuristic" : "viewport-dom-heuristic"},
+                           {"scroll", scroll},
+                           {"downloads", QJsonArray{}}});
+          });
+}
+QJsonArray BrowserTools::tabData() const
+{
+    QJsonArray out;
+    for (const auto &tab : m_browser.snapshot().tabs)
+        out.append(QJsonObject{{"n", tab.n},
+                               {"tabId", tab.tabId},
+                               {"state", tab.state},
+                               {"loading", tab.loading},
+                               {"revision", double(tab.revision)},
+                               {"title", tab.title},
+                               {"url", tab.url},
+                               {"active", tab.active}});
+    return out;
+}
+QString BrowserTools::tabText() const
+{
+    QStringList lines;
+    for (const auto &tab : m_browser.snapshot().tabs) {
+        QString label = tab.title;
+        if (label.isEmpty())
+            label = Browser::isBlank(tab.url) ? "New tab" : Browser::hostOf(tab.url);
+        if (label.isEmpty())
+            label = tab.url;
+        lines << QString::number(tab.n) + ". " + label +
+                     (tab.url.isEmpty() ? "" : " (" + tab.url + ")") +
+                     (tab.active ? " active" : "");
+    }
+    return lines.isEmpty() ? "No tabs are open." : lines.join('\n');
+}
+void BrowserTools::tabs(const Work &job)
+{
+    const auto action = job->request.args["action"].toString("list");
+    if (action == "list") {
+        finish(job, {{"text", "Tabs:\n" + tabText()}, {"tabs", tabData()}});
+        return;
+    }
+    if (action == "new") {
+        if (m_browser.tabList().size() >= Browser::TabsMax) {
+            fail(job, "tab_limit", "The browser already has 12 tabs. Close one first.");
+            return;
+        }
+        job->tab = m_browser.newTab({}, false, false);
+        if (job->request.args["url"].toString().isEmpty()) {
+            finish(job, {{"text", "Opened a new empty tab.\n\nTabs:\n" + tabText()},
+                         {"tabs", tabData()},
+                         {"tabId", job->tab}});
+            return;
+        }
+        job->addTabs = true;
+        job->request.name = "browser_navigate";
+    } else if (action == "switch" || action == "close") {
+        if (!job->explicitTab) {
+            fail(job, "invalid_request", "Pass a stable tabId, not a display position");
+            return;
+        }
+        if (action == "close") {
+            m_browser.close(job->tab);
+            job->tab.clear();
+            finish(job, {{"text", "Closed. Tabs:\n" + tabText()}, {"tabs", tabData()}});
+            return;
+        }
+        m_browser.select(job->tab);
+        job->request.name = "browser_snapshot";
+    } else {
+        fail(job, "invalid_request", "Unknown browser tab action");
+        return;
+    }
+    job->request.args.remove("pageId"); // tabs deliberately ignore page preconditions
+    job->lease = m_browser.m_selectionRevision;
+    ensure(job);
+}
+void BrowserTools::settle(const Work &job, std::function<void()> next, bool history)
+{
+    later(job, history ? 250 : 120, [this, job, next = std::move(next)] {
+        job->loadDeadline = job->elapsed.elapsed() + 15000;
+        auto poll = std::make_shared<std::function<void()>>();
+        // Capture a weak self: timers own continuations, never a callback cycle.
+        std::weak_ptr<std::function<void()>> weak = poll;
+        *poll = [this, job, next, weak] {
+            if (m_browser.tab(job->tab)->loading) {
+                if (job->elapsed.elapsed() >= job->loadDeadline) {
+                    fail(job, "timeout", "The page did not finish loading");
+                    return;
+                }
+                if (auto keep = weak.lock())
+                    later(job, 40, [keep] { (*keep)(); });
+            } else
+                quiet(job, job->elapsed.elapsed() + 2000, next);
+        };
+        (*poll)();
+    });
+}
+void BrowserTools::quiet(const Work &job, qint64 until, std::function<void()> next)
+{
+    query(job, BrowserAutomation::Query::Quiet, {}, [this, job, until, next](QJsonObject answer) {
+        if (answer["quiet"].toBool() || job->elapsed.elapsed() >= until)
+            next();
+        else
+            later(job, 50, [this, job, until, next] { quiet(job, until, next); });
+    });
+}
+void BrowserTools::navigate(const Work &job)
+{
+    QString raw = job->request.args["url"].toString().trimmed(), verb = raw.toLower();
+    if (raw.isEmpty()) {
+        fail(job, "browser_error", "url is empty");
+        return;
+    }
+    const auto *tab = m_browser.tab(job->tab);
+    const bool history = verb == "back" || verb == "forward" || verb == "reload";
+    if ((verb == "back" && !tab->back) || (verb == "forward" && !tab->forward)) {
+        fail(job, "browser_error", "There is no page to go " + verb + " to");
+        return;
+    }
+    QString url;
+    if (!history) {
+        // The host normalizer, unlike the toolbar, also accepts IPv6 loopback.
+        static const QRegularExpression ipv6(QStringLiteral("^\\[::1\\](:\\d+)?(/|$)"));
+        url = ipv6.match(raw).hasMatch() ? "http://" + raw : Browser::normalize(raw);
+        verb = "load";
+    }
+    job->navigating = true;
+    m_browser.find(job->tab)->error.clear();
+    const auto before = tab->revision;
+    m_engine.navigate(target(job), verb, url);
+    job->loadDeadline = job->elapsed.elapsed() + m_limits.load;
+    auto poll = std::make_shared<std::function<void()>>();
+    std::weak_ptr<std::function<void()>> weak = poll;
+    *poll = [this, job, before, weak, history] {
+        const auto *t = m_browser.tab(job->tab);
+        if (!t->error.isEmpty()) {
+            fail(job, "navigation_failed", "The page could not be opened: " + t->error);
+            return;
+        }
+        if (t->loading || t->revision == before) {
+            if (job->elapsed.elapsed() >= job->loadDeadline) {
+                fail(job, "timeout", "The page did not load in time");
+                return;
+            }
+            if (auto keep = weak.lock())
+                later(job, 25, [keep] { (*keep)(); });
+            return;
+        }
+        settle(
+            job,
+            [this, job] {
+                const auto *current = m_browser.tab(job->tab);
+                if (!current->error.isEmpty()) {
+                    fail(job, "navigation_failed",
+                         "The page could not be opened: " + current->error);
+                    return;
+                }
+                job->page = current->pageId;
+                job->document = current->document;
+                job->navigating = false;
+                observe(job);
+            },
+            history);
+    };
+    later(job, 25, [poll] { (*poll)(); });
+}
+void BrowserTools::wait(const Work &job, qint64 until, double seconds)
+{
+    const auto text = job->request.args["text"].toString();
+    if (job->elapsed.elapsed() >= until) {
+        if (!text.isEmpty())
+            fail(job, "wait_timeout",
+                 QString("\"%1\" did not appear within %2 s.")
+                     .arg(text, QString::number(seconds, 'g', 16)));
+        else
+            settle(job, [this, job] { observe(job); });
+        return;
+    }
+    if (text.isEmpty()) {
+        later(job, int(std::min<qint64>(250, until - job->elapsed.elapsed())),
+              [this, job, until, seconds] { wait(job, until, seconds); });
+        return;
+    }
+    query(job, BrowserAutomation::Query::Has, {{"text", text}},
+          [this, job, until, seconds, text](QJsonObject answer) {
+              if (answer["found"].toBool())
+                  settle(job,
+                         [this, job, text] { observe(job, "\"" + text + "\" is on the page."); });
+              else
+                  later(job, 400, [this, job, until, seconds] { wait(job, until, seconds); });
+          });
+}
+void BrowserTools::read(const Work &job)
+{
+    const auto args = job->request.args;
+    if (args["start"].toDouble() > 0 || !args["readId"].toString().isEmpty()) {
+        const auto saved = m_reads.value(job->tab);
+        if (saved.id.isEmpty() || saved.id != args["readId"].toString() || saved.page != job->page)
+            fail(job, "stale_read", "The read snapshot expired. Read again from start=0.");
+        else
+            readResult(job, saved);
+        return;
+    }
+    query(job, BrowserAutomation::Query::Read, {}, [this, job](QJsonObject answer) {
+        Read saved{job->page, uuid(), answer["text"].toString(), answer["url"].toString(),
+                   answer["sourceTruncated"].toBool()};
+        m_reads[job->tab] = saved;
+        readResult(job, saved);
+    });
+}
+void BrowserTools::readResult(const Work &job, const Read &saved)
+{
+    // QString offsets are UTF-16, including intentionally split surrogate pairs.
+    const double from = std::max(0.0, std::floor(job->request.args["start"].toDouble()));
+    const QString part =
+        from < saved.text.size() ? saved.text.mid(qsizetype(from), 40000) : QString();
+    const double end = from + part.size();
+    const bool more = end < saved.text.size();
+    QString text = saved.url + "\n\n" + (part.isEmpty() ? "(empty page)" : part);
+    if (more)
+        text += QString("\n\n[Characters %1–%2 of %3. Call browser_read with tabId=%4, readId=%5, "
+                        "start=%2 to read further.]")
+                    .arg(from, 0, 'f', 0)
+                    .arg(end, 0, 'f', 0)
+                    .arg(saved.text.size())
+                    .arg(quoted(job->tab), quoted(saved.id));
+    if (saved.truncated)
+        text += "\n\n[Source HTML truncated at 4 Mi UTF-16 code units.]";
+    finish(job, {{"text", text},
+                 {"tabId", job->tab},
+                 {"pageId", job->page},
+                 {"readId", saved.id},
+                 {"pagination",
+                  QJsonObject{{"start", from},
+                              {"end", end},
+                              {"total", double(saved.text.size())},
+                              {"hasMore", more},
+                              {"offsetUnit", "utf16"},
+                              {"sourceTruncated", saved.truncated},
+                              {"truncated", saved.truncated || more},
+                              {"coverage", "html-derived; excludes form controls, shadow roots and "
+                                           "iframe content; may include hidden text"}}}});
+}
+void BrowserTools::screenshot(const Work &job)
+{
+    query(job, BrowserAutomation::Query::Metrics, {}, [this, job](QJsonObject metrics) {
+        job->call = ++m_serial;
+        const auto call = job->call, generation = job->generation;
+        QTimer::singleShot(m_limits.call, this, [this, job, call, generation] {
+            if (!job->done && job->generation == generation && job->call == call)
+                fail(job, "timeout", "The page did not draw a screenshot");
+        });
+        const bool full = job->request.args["full_page"].toBool();
+        m_engine.capture(
+            call, target(job), metrics, full,
+            [this, job, call, generation, full](QJsonObject shot) {
+                if (job->generation != generation || job->call != call || !check(job))
+                    return;
+                job->call = 0;
+                if (shot.contains("error")) {
+                    fail(job, shot["code"].toString("browser_error"), shot["error"].toString());
+                    return;
+                }
+                const auto *tab = m_browser.tab(job->tab);
+                const double scale = shot["scale"].toDouble();
+                const QString guidance =
+                    std::abs(scale - 1) < 0.01
+                        ? "one screenshot pixel is one page pixel, so x and y for browser_click "
+                          "can be read from it"
+                        : "to click by coordinates divide screenshot pixels by " +
+                              QString::number(scale, 'f', 3);
+                shot["text"] = QStringLiteral("Screenshot of %1: %2, %3×%4; %5.")
+                                   .arg(full ? "the page from the top" : "the viewport",
+                                        tab->title.isEmpty() ? tab->url : tab->title,
+                                        QString::number(shot["width"].toInt()),
+                                        QString::number(shot["height"].toInt()), guidance);
+                shot["tabId"] = job->tab;
+                shot["pageId"] = job->page;
+                // A native grab has no document token. Revalidate in the isolated
+                // world after capture as well, before publishing its pixels.
+                query(job, BrowserAutomation::Query::Metrics, {},
+                      [this, job, shot](QJsonObject) { finish(job, shot); });
+            });
+    });
+}
+void BrowserTools::scroll(const Work &job)
+{
+    if (job->request.args["pageId"].toString().isEmpty()) {
+        fail(job, "stale_page", "Pass pageId from a fresh snapshot with browser input.");
+        return;
+    }
+    const auto after = [this, job] {
+        later(job, 250, [this, job] { settle(job, [this, job] { observe(job); }); });
+    };
+    const auto ref = job->request.args["ref"];
+    if (!ref.isUndefined() && !ref.isNull() && ref != QJsonValue("")) {
+        job->dirty = true;
+        query(job, BrowserAutomation::Query::Reveal, {{"ref", ref}},
+              [after](QJsonObject) { after(); });
+        return;
+    }
+    double amount = job->request.args["amount"].toDouble();
+    amount = std::clamp(amount ? amount : 0.8, 0.1, 10.0);
+    if (job->request.args["direction"].toString().toLower() == "up")
+        amount = -amount;
+    job->call = ++m_serial;
+    const auto call = job->call, generation = job->generation;
+    m_engine.wheel(
+        call, target(job), amount, [this, job, call, generation, after](QJsonObject answer) {
+            if (job->generation != generation || job->call != call || !check(job))
+                return;
+            job->call = 0;
+            if (answer.contains("error"))
+                fail(job, answer["code"].toString("browser_error"), answer["error"].toString());
+            else {
+                job->dirty = true;
+                after();
+            }
+        });
+}
+} // namespace openghost

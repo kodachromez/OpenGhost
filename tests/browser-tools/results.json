@@ -1,0 +1,99 @@
+[
+  {
+    "id": "viewport-snapshot",
+    "args": {},
+    "answer": {
+      "text": "Page: Fixture\nURL: about:blank\nViewport 800×600, the whole page fits on screen.\n\n[1] button \"Save\"",
+      "tabId": "tab-A", "pageId": "page-A", "refs": {"1": "button \"Save\""},
+      "truncated": false, "coverage": "viewport-dom-heuristic",
+      "scroll": {"top": 0, "height": 600, "vh": 600, "vw": 800, "below": 0},
+      "downloads": [{"file": "/fixture/download.txt", "at": 1234, "operationId": "step-A"}],
+      "ignored": "must not escape formatter"
+    },
+    "expected": {
+      "content": [{"type": "text", "text": "Page: Fixture\nURL: about:blank\nViewport 800×600, the whole page fits on screen.\n\n[1] button \"Save\""}],
+      "data": {
+        "tabId": "tab-A", "pageId": "page-A", "refs": {"1": "button \"Save\""},
+        "truncated": false, "coverage": "viewport-dom-heuristic",
+        "scroll": {"top": 0, "height": 600, "vh": 600, "vw": 800, "below": 0},
+        "downloads": [{"file": "/fixture/download.txt", "at": 1234, "operationId": "step-A"}]
+      }
+    }
+  },
+  {
+    "id": "screenshot-opaque-payload-not-an-image-decoder-test",
+    "args": {"full_page": true},
+    "answer": {
+      "text": "Screenshot of the page from the top: Fixture, 1280×1920; to click by coordinates divide screenshot pixels by 0.800.",
+      "image": "data:image/jpeg;base64,Zml4dHVyZQ==",
+      "tabId": "tab-A", "pageId": "page-B", "width": 1280, "height": 1920,
+      "scale": 0.8, "pageWidth": 1600, "pageHeight": 2400, "truncated": true,
+      "url": "not separately forwarded", "title": "not separately forwarded"
+    },
+    "expected": {
+      "content": [
+        {"type": "text", "text": "Screenshot of the page from the top: Fixture, 1280×1920; to click by coordinates divide screenshot pixels by 0.800."},
+        {"type": "image", "dataUrl": "data:image/jpeg;base64,Zml4dHVyZQ==", "label": "Screenshot of the built-in browser"}
+      ],
+      "data": {"tabId": "tab-A", "pageId": "page-B", "width": 1280, "height": 1920, "scale": 0.8, "pageWidth": 1600, "pageHeight": 2400, "truncated": true}
+    }
+  },
+  {
+    "id": "tabs-list-empty",
+    "args": {"action": "list"},
+    "answer": {"text": "Tabs:\nNo tabs are open.", "tabs": []},
+    "expected": {"content": [{"type": "text", "text": "Tabs:\nNo tabs are open."}], "data": {"tabs": []}}
+  },
+  {
+    "id": "tabs-new-empty-no-page-id",
+    "args": {"action": "new"},
+    "answer": {
+      "text": "Opened a new empty tab.\n\nTabs:\n1. New tab active", "tabId": "tab-new",
+      "tabs": [{"n": 1, "tabId": "tab-new", "state": "lazy", "loading": false, "revision": 0, "title": "", "url": "", "active": true}]
+    },
+    "expected": {
+      "content": [{"type": "text", "text": "Opened a new empty tab.\n\nTabs:\n1. New tab active"}],
+      "data": {"tabId": "tab-new", "tabs": [{"n": 1, "tabId": "tab-new", "state": "lazy", "loading": false, "revision": 0, "title": "", "url": "", "active": true}]}
+    }
+  },
+  {
+    "id": "tabs-close-no-closed-id",
+    "args": {"action": "close", "tabId": "tab-A"},
+    "answer": {"text": "Closed. Tabs:\nNo tabs are open.", "tabs": []},
+    "expected": {"content": [{"type": "text", "text": "Closed. Tabs:\nNo tabs are open."}], "data": {"tabs": []}}
+  },
+  {
+    "id": "tool-error-preserves-only-present-metadata",
+    "args": {},
+    "answer": {"error": "The page changed. Take a new snapshot.", "code": "stale_page", "tabId": "tab-A", "stopped": false},
+    "expected": {"isError": true, "content": [{"type": "text", "text": "Error: The page changed. Take a new snapshot."}], "data": {"code": "stale_page", "tabId": "tab-A"}}
+  },
+  {
+    "id": "missing-answer",
+    "args": {},
+    "answer": null,
+    "expected": {"isError": true, "content": [{"type": "text", "text": "Error: the browser did not answer"}], "data": {"code": "browser_error"}}
+  },
+  {
+    "id": "cancelled-service-answer-is-not-chat-cancellation",
+    "args": {},
+    "answer": {"error": "Stopped by the user", "code": "cancelled", "stopped": true},
+    "expected": {"isError": true, "content": [{"type": "text", "text": "Error: Stopped by the user"}], "data": {"code": "cancelled"}}
+  },
+  {
+    "id": "read-utf16",
+    "args": {"start": 1, "readId": "read-A", "tabId": "tab-A"},
+    "domText": "A😀B",
+    "answer": {"html": "<p>A😀B</p>", "url": "about:blank", "title": "not separately forwarded", "tabId": "tab-A", "pageId": "page-A", "readId": "read-A", "sourceTruncated": true},
+    "expected": {
+      "content": [{"type": "text", "text": "about:blank\n\n😀B\n\n[Source HTML truncated at 4 Mi UTF-16 code units.]"}],
+      "data": {"tabId": "tab-A", "pageId": "page-A", "readId": "read-A", "start": 1, "end": 4, "total": 4, "hasMore": false, "offsetUnit": "utf16", "sourceTruncated": true, "truncated": true, "coverage": "html-derived; excludes form controls, shadow roots and iframe content; may include hidden text"}
+    }
+  },
+  {
+    "id": "empty-answer-is-empty-text-not-missing-answer",
+    "args": {},
+    "answer": {},
+    "expected": {"content": [{"type": "text", "text": ""}], "data": {}}
+  }
+]
