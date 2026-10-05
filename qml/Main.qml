@@ -49,10 +49,10 @@ ApplicationWindow {
     palette.link: Theme.link
 
     // The run's working Ghost follows what the run does (chat.js): shown
-    // while Ghosty works, dismissed while the answer streams, and back after
+    // while OpenGhost works, dismissed while the answer streams, and back after
     // 1.5 s of quiet text, when the model is likely writing a tool call.
     property bool working: false
-    // The shown conversation's approvals as cards: Ghosty's list
+    // The shown conversation's approvals as cards: OpenGhost's list
     // (WindowController::approvals) plus those folding away after it
     // resolved them. Opening the details once keeps them open on the next
     // cards, for this window only.
@@ -124,29 +124,7 @@ ApplicationWindow {
     }
     Component.onCompleted: {
         Selection.watch(window) // Presses elsewhere end a reply's selection.
-        if (!window.frontend.needsWorkspace) composer.forceActiveFocus()
-    }
-    // Qt's portal theme learns the FileChooser portal's version from an
-    // asynchronous D-Bus reply. A dialog made before it arrives (while Main.qml
-    // loads) falls back to the desktop theme's own, which on Plasma is a widgets
-    // dialog that aborts this QGuiApplication: a launch without --workspace (the
-    // menu entry) died before showing anything. So the picker opens once the
-    // window has shown its first frame, from the event loop.
-    Connections {
-        id: pickerOpener
-        target: window
-        enabled: window.frontend.needsWorkspace
-        function onFrameSwapped() {
-            pickerOpener.enabled = false
-            Qt.callLater(workspacePicker.open)
-        }
-    }
-    FolderDialog {
-        id: workspacePicker
-        objectName: "workspacePicker"
-        title: "Choose OpenGhost's workspace"
-        onAccepted: window.frontend.chooseWorkspace(selectedFolder)
-        onRejected: window.frontend.close()
+        composer.forceActiveFocus()
     }
     // The file chooser exists only while open. Its selection (local URLs, the
     // one place QML sees file paths) goes straight to the facade, which keeps
@@ -172,44 +150,12 @@ ApplicationWindow {
         function finish() { Qt.callLater(() => { filePicker.active = false }) }
     }
 
-    // One choice offered for a chat with unfinished work.
-    component UnfinishedChoice: AbstractButton {
-        id: choice
-        property bool danger: false
-        height: 30
-        implicitWidth: choiceLabel.implicitWidth + 24
-        hoverEnabled: true
-        focusPolicy: Qt.StrongFocus
-        background: Rectangle {
-            radius: 15
-            color: choice.hovered || choice.visualFocus ? Theme.hover : "transparent"
-            border.color: Theme.composerBorder
-        }
-        contentItem: Label {
-            id: choiceLabel
-            text: choice.text
-            horizontalAlignment: Text.AlignHCenter
-            verticalAlignment: Text.AlignVCenter
-            color: choice.danger ? Theme.danger : Theme.text
-            font.pixelSize: 13
-        }
-    }
-
     // A local refusal (a pick, paste or drop); cleared by the next action.
     property string notice
-    // A chat whose delete Ghosty kept for unfinished work, offered Recover or
-    // Abandon & Delete; one choice is sent, then the offer goes.
-    property string unfinishedId
-    function settleUnfinished(recover) {
-        const sessionId = unfinishedId
-        unfinishedId = ""
-        if (sessionId)
-            window.frontend.resolve(sessionId, recover)
-    }
     readonly property string fileRefusal: "Pasted and dropped files cannot be attached. Use "
         + "+ to choose files; nothing was attached."
     // The composer's chosen files, in order: token, name, size and whether
-    // it is a picture, never a path. They leave only when Ghosty accepts the
+    // it is a picture, never a path. They leave only when OpenGhost accepts the
     // message that sent them.
     ListModel { id: composerFiles; objectName: "composerFiles" }
     function fileTokens() {
@@ -253,7 +199,7 @@ ApplicationWindow {
         return (value < 10 ? value.toFixed(1).replace(/\.0$/, "") : Math.round(value)) + " " + units[unit]
     }
 
-    // The admitted submission and the draft it sent. Only Ghosty's acceptance of
+    // The admitted submission and the draft it sent. Only OpenGhost's acceptance of
     // that submission removes the draft; edits inside it meanwhile (even back
     // to the same text) keep the whole composer. A gesture that is not
     // admitted changes none of this, and a refusal leaves the composer alone.
@@ -282,7 +228,7 @@ ApplicationWindow {
     // The opened conversation's draft leaves the cache first, so reopening
     // the oldest never counts it against that bound.
     readonly property var drafts: new Map()
-    // Sessions Ghosty deleted: their drafts go with them, files released.
+    // Sessions OpenGhost deleted: their drafts go with them, files released.
     readonly property var deleted: new Set()
     function forgetDraft(sessionId) {
         deleted.add(sessionId)
@@ -383,11 +329,6 @@ ApplicationWindow {
         function onSessionRemoved(sessionId, deleted) {
             if (deleted)
                 window.forgetDraft(sessionId)
-            if (deleted && sessionId === window.unfinishedId)
-                window.unfinishedId = ""
-        }
-        function onSessionUnfinished(sessionId) {
-            window.unfinishedId = sessionId
         }
         // The composer changes owner only once the conversation has.
         function onConversationReplaced(left) {
@@ -1061,7 +1002,7 @@ ApplicationWindow {
                     readonly property alias slot: workingGhost
                     // The operations waiting for an answer, at the end of
                     // the reply as OpenGhost appends them to its message
-                    // (ApprovalCard); each folds away once Ghosty resolves it.
+                    // (ApprovalCard); each folds away once OpenGhost resolves it.
                     Column {
                         objectName: "approvals"
                         x: (transcript.width - width) / 2
@@ -1202,7 +1143,7 @@ ApplicationWindow {
                 progress: window.jumpVeil
             }
         }
-        // A local refusal, then a status Ghosty's client needs seen (routine
+        // A local refusal, then a status OpenGhost needs seen (routine
         // progress is not shown: OpenGhost has no status line), in
         // .message-error's type, over the composer.
         Column {
@@ -1214,51 +1155,6 @@ ApplicationWindow {
             z: 2
             width: composerFrame.width
             spacing: 8
-            Rectangle {
-                objectName: "unfinished"
-                visible: window.unfinishedId.length > 0
-                width: parent.width
-                height: unfinishedRow.implicitHeight + 20
-                radius: 16
-                color: Theme.composerBg
-                border.color: Theme.composerBorder
-                Row {
-                    id: unfinishedRow
-                    x: 14
-                    y: 10
-                    width: parent.width - 28
-                    spacing: 8
-                    Label {
-                        width: parent.width - choices.width - 8
-                        height: choices.height
-                        verticalAlignment: Text.AlignVCenter
-                        text: "This chat has unfinished work."
-                        elide: Text.ElideRight
-                        color: Theme.text
-                        font.pixelSize: 14
-                    }
-                    Row {
-                        id: choices
-                        spacing: 6
-                        UnfinishedChoice {
-                            objectName: "unfinishedRecover"
-                            text: "Recover"
-                            onClicked: window.settleUnfinished(true)
-                        }
-                        UnfinishedChoice {
-                            objectName: "unfinishedAbandon"
-                            text: "Abandon & Delete"
-                            danger: true
-                            onClicked: window.settleUnfinished(false)
-                        }
-                        UnfinishedChoice {
-                            objectName: "unfinishedCancel"
-                            text: "Cancel"
-                            onClicked: window.unfinishedId = ""
-                        }
-                    }
-                }
-            }
             Label {
                 objectName: "notice"
                 width: parent.width
@@ -1469,7 +1365,7 @@ ApplicationWindow {
                                 width: 18
                                 height: 18
                                 hoverEnabled: true
-                                // A file being sent stays until Ghosty answers.
+                                // A file being sent stays until OpenGhost answers.
                                 enabled: !window.frontend.admitting && card.upload !== "waiting"
                                          && card.upload !== "uploading" && card.upload !== "uploaded"
                                 onClicked: window.removeFile(card.index)
@@ -1686,7 +1582,7 @@ ApplicationWindow {
                     ButtonTip { text: parent.text }
                 }
                 // .composer-mode, 4 px right of Add: the agent mode, shown
-                // once Ghosty reports its modes.
+                // once OpenGhost reports its modes.
                 ModePicker {
                     id: modePicker
                     x: 34 + 4
@@ -1815,7 +1711,7 @@ ApplicationWindow {
         parent: window.Overlay.overlay
         anchors.fill: parent
         z: 1000
-        active: !Theme.reducedMotion && !window.frontend.needsWorkspace
+        active: !Theme.reducedMotion
         sourceComponent: Splash {
             objectName: "splash"
             welcome: welcomeGhost

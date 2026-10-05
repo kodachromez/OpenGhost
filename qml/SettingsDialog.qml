@@ -26,7 +26,7 @@ Popup {
     property real shown: 0
     property real lift: 0
     property real backdropShown: 0
-    // Ghosty's thinking levels as its client names them (effort.*).
+    // OpenGhost's thinking levels as the presentation model names them (effort.*).
     readonly property var levelNames: ({
         off: "None", minimal: "Minimal", low: "Low", medium: "Medium",
         high: "High", xhigh: "XHigh", max: "Max"
@@ -782,7 +782,7 @@ Popup {
         }
     }
 
-    // A provider's row (Ghosty's settings.js providerRow): its name, how it
+    // A provider's row (OpenGhost's settings.js providerRow): its name, how it
     // signs in and whether it is connected; Log out, Sign in or Add API key,
     // or the login step's controls, then its note or the step's progress.
     component ProviderRow: SettingsRow {

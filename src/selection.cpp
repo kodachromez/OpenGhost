@@ -3,7 +3,6 @@
 #include "diagram.h"
 #include "icon.h"
 #include "tex.h"
-#include "toolcard.h"
 
 #include <QAbstractTextDocumentLayout>
 #include <QDrag>
@@ -258,18 +257,10 @@ QVariant ReplySelection::field(int index, const char *role) const
 
 QString ReplySelection::extraOf(int index) const
 {
-    // What a row shows besides its body: a tool card's call, state and
-    // disclosure; thinking's; a user message's receipt.
+    // What a row shows besides its body: a user message's receipt.
     const QString kind = field(index, "kind").toString();
     QStringList parts{kind};
-    if (kind == QLatin1String("tool"))
-        for (const char *role : {"toolName", "arguments", "argumentsKnown", "toolState", "ending",
-                                 "expanded", "omittedLines", "omittedCharacters",
-                                 "activityRevision", "activityNote"})
-            parts << field(index, role).toString();
-    else if (kind == QLatin1String("thinking"))
-        parts << field(index, "toolState").toString() << field(index, "expanded").toString();
-    else if (kind == QLatin1String("user")) {
+    if (kind == QLatin1String("user")) {
         parts << field(index, "preview").toString();
         const auto notes = m_notes.value(field(index, "key").toString());
         for (auto it = notes.cbegin(); it != notes.cend(); ++it)
@@ -352,7 +343,9 @@ ReplySelection::Row ReplySelection::build(const QString &key) const
                 return;
             SelectionUnit unit;
             unit.path = path;
-            unit.text.text = toolcard::plain(text);
+            unit.text.text = text;
+            unit.text.text.replace(QStringLiteral("\r\n"), QStringLiteral("\n"));
+            unit.text.text.replace(QLatin1Char('\r'), QLatin1Char('\n'));
             unit.after = after;
             r.units << std::move(unit);
         };
@@ -363,30 +356,6 @@ ReplySelection::Row ReplySelection::build(const QString &key) const
             r.units = userUnits(r.source, field(index, "attachments").toList(), m_notes.value(key));
             // A steering receipt under the bubble, the message's last text.
             add(QStringLiteral("u:r"), field(index, "preview").toString(), 'p');
-        } else if (kind == QLatin1String("tool")) {
-            toolcard::Row tool;
-            tool.name = field(index, "toolName").toString();
-            tool.arguments = field(index, "arguments").toString();
-            tool.known = field(index, "argumentsKnown").toBool();
-            tool.state = field(index, "toolState").toString();
-            tool.body = r.source;
-            tool.ending = field(index, "ending").toString();
-            tool.expanded = field(index, "expanded").toBool();
-            tool.omittedLines = field(index, "omittedLines").toDouble();
-            tool.omittedCharacters = field(index, "omittedCharacters").toDouble();
-            if (tool.name == QLatin1String("subagent") && tool.expanded) {
-                tool.steps = field(index, "activity").toList();
-                tool.note = field(index, "activityNote").toString();
-            }
-            r.units = toolcard::units(tool);
-        } else if (kind == QLatin1String("thinking")) {
-            // The summary, then the text. Live thinking's newest item beside
-            // the summary only shows that text, so it is not a unit.
-            const bool live = field(index, "toolState").toString() == QLatin1String("live");
-            add(QStringLiteral("k:s"), live ? QStringLiteral("Thinking…") : QStringLiteral("Thinking"),
-                'l');
-            if (field(index, "expanded").toBool())
-                add(QStringLiteral("k:t"), r.source, 'l');
         } else if (kind == QLatin1String("note")) {
             add(QStringLiteral("n:t"), r.source, 'l');
         }
@@ -1034,7 +1003,7 @@ QString ReplySelection::copied(const At &from, const At &to) const
         const QString key = r == from.row ? from.key : r == to.row ? to.key : keyAt(r);
         const Row *row = rowOf(key);
         if (!row || row->units.isEmpty())
-            continue; // A shut tool card: no text (its head is user-select: none).
+            continue; // No selectable text in this row.
         const int first = r == from.row ? from.unit : 0;
         const int last = r == to.row ? to.unit : int(row->units.size()) - 1;
         for (int k = first; k <= last; ++k) {

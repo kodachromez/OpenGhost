@@ -7,8 +7,8 @@ import OpenGhost.Native
 // written back today, over 7 and 30 days and all the time, each split by
 // provider; a column for each of the last 30 days (or a month, turned back
 // with the arrows) with a highlight and tip on the sidebar's springs; then a
-// section for every provider in use. Ghosty keeps the count itself (the
-// usage store); it has no plan limits or account balance to show.
+// section for every provider in use. OpenGhost's disconnected usage preview
+// has no stored usage, plan limits or account balance to show.
 Column {
     id: page
     required property var frontend
@@ -53,11 +53,11 @@ Column {
         duration: 700
     }
 
-    // The providers' order: Ghosty's list, then any others that were used.
+    // The providers' order: OpenGhost's known providers, catalog, then other usage.
     readonly property var model: {
         revision
         const all = usage.totals(0)
-        // 1.2's own providers in its order, then Ghosty's list, then the rest.
+        // Known providers in reference order, then the catalog, then the rest.
         const first = ["openai-codex", "chatgpt", "openai", "anthropic", "deepseek"]
         const listed = settings.providers.map(p => p.id).filter(id => !first.includes(id))
         const known = first.filter(id => all[id] || connected(id))

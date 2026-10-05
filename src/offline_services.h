@@ -8,7 +8,7 @@
 #include <QVariantMap>
 
 // Explicit absent services for the copied settings pages. These are not a
-// backend, do not read Ghosty's stores, and never report an operation as saved.
+// backend, do not read any existing stores, and never report an operation as saved.
 inline QString backendUnavailable()
 {
     return QStringLiteral("Backend not connected — this build is a standalone UI shell.");

@@ -17,10 +17,8 @@
 // from an anchor to a focus, each a text of a transcript row
 // (SelectionUnit) and an offset into what it shows, so it crosses
 // paragraphs, headings, lists, quotes, code, tables, formulas and diagrams,
-// and the replies, user messages, thinking, tool cards (their details,
-// output, errors and endings: toolcard.h) and notes around them, as one
-// range. Each text is
-// its own item, so Qt's per-item selection stops at its edges; here the
+// and the replies, user messages and notes around them, as one range. Each
+// text is its own item, so Qt's per-item selection stops at its edges; here the
 // range is data, kept by row keys and text paths rather than by items. Items
 // come and go as the transcript builds blocks near the view (Block.qml) and
 // rows near it (ListView), and a streaming reply grows; the range survives
@@ -124,11 +122,11 @@ class ReplySelection final : public QObject
     // Where a point of `view` (the transcript) falls across its rows:
     // {row, unit, offset, line}. Over a row's surface, hit() there; above a
     // row (the gap between messages), that row's start; past the last row,
-    // its end. Rows that show no text (a shut tool card) are passed over.
+    // its end. Rows that show no text are passed over.
     // `inside`: only inside a text.
     Q_INVOKABLE QVariantMap hitView(QQuickItem *view, qreal x, qreal y, bool inside = false) const;
-    // The innermost scrolling box (an interactive Flickable: a tool card's
-    // well) under a point of `view`, inside it; null if none. A range dragged
+    // The innermost scrolling box (an interactive Flickable) under a point
+    // of `view`, inside it; null if none. A range dragged
     // past its edge scrolls it (SelectDriver), as Chromium autoscrolls the
     // scroller a selection started in.
     Q_INVOKABLE QQuickItem *scrollerAt(QQuickItem *view, qreal x, qreal y) const;

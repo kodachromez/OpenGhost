@@ -23,7 +23,7 @@ Item {
     objectName: "modeDock"
     required property Item button // ModePicker
     required property Item backdrop // The window content the patch frosts.
-    // A mode was picked here: asks Ghosty for it (setPermissionMode).
+    // A mode was picked here: asks OpenGhost for it (setPermissionMode).
     signal picked(string id)
 
     anchors.fill: parent

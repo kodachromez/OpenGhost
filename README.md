@@ -1,8 +1,9 @@
 # OpenGhost Native — frontend extraction
 
 Standalone C++17 / Qt Quick frontend targeting the **dissected OpenGhost 1.3
-frontend**, not Ghosty's custom appearance or features. The existing native Qt
-implementation was copied from Ghosty; this is not a UI rewrite.
+frontend**. It reuses the existing native Qt implementation without the source
+port's custom appearance or extra features; this is not a UI rewrite.
+See [NOTICE.md](NOTICE.md) for attribution.
 
 This first pass launches independently, with **no backend connected**. It does
 not start a process, authenticate, send messages, or fabricate responses.
@@ -34,7 +35,7 @@ ctest --test-dir build --output-on-failure
 
 The smoke check uses a temporary appearance store. The normal app keeps only
 `appearance.json` under Qt's `AppConfigLocation` for `openghost-native`; it does
-not read Ghosty's credentials, conversations or preferences.
+not read credentials, conversations or preferences from any previous profile.
 
 ## Layout
 
@@ -46,7 +47,7 @@ not read Ghosty's credentials, conversations or preferences.
   files are never built, loaded or installed by the Qt application.
 - [`docs/cpp-port.md`](docs/cpp-port.md): copy inventory, exclusions, limitations,
   platform work and next migration step.
-- [`docs/ghosty-import.json`](docs/ghosty-import.json): source commits and hashes.
+- [`docs/native-import.json`](docs/native-import.json): source commits and hashes.
 
 This is an independent local port, not official OpenGhost or a completed
 feature-for-feature clone. Keep the original frontend as the authority for

@@ -2,9 +2,9 @@
 
 #include "presentation.h"
 
-// The next run's model choice over Ghosty's catalog. Explicit choices also request
+// The next run's model choice over OpenGhost's catalog. Explicit choices also request
 // saved defaults through the client; adopting session metadata never does.
-// Ghosty owns persistence. The selection never changes an already running turn.
+// OpenGhost's backend owns persistence. The selection never changes a running turn.
 class Settings final : public QObject
 {
     Q_OBJECT
@@ -33,9 +33,9 @@ class Settings final : public QObject
   public:
     using QObject::QObject;
 
-    // Ghosty's latest catalog, defaults and provider state.
+    // OpenGhost's latest catalog, defaults and provider state.
     void apply(const Account &account);
-    // A conversation's or Ghosty's model: selected as given, thinking resolved.
+    // A conversation's or OpenGhost's default model: selected as given, thinking resolved.
     void use(const Selection &selection);
     Selection selection() const;
 

@@ -188,11 +188,6 @@
       "source_sha256": "da6a03e8494c6e00e1a0cf7db38bfd17003521428d6d237fa4cd9dd94efe7be4"
     },
     {
-      "source": "native-ghosty/qml/ToolCard.qml",
-      "destination": "qml/ToolCard.qml",
-      "source_sha256": "63afe96ff49e927aefb6bfbdcfc51fbaa5025bcddb35c522fe429c828f89247a"
-    },
-    {
       "source": "native-ghosty/qml/UsagePage.qml",
       "destination": "qml/UsagePage.qml",
       "source_sha256": "d1bc86a77b89ca11b2aab278b0835961c00eacb6522a440a9ff436195cdf6b39"
@@ -443,16 +438,6 @@
       "source_sha256": "d11e23e4382acf9d6efe8ac3eca38d8780e066201f4b9c224128eed29bac79a2"
     },
     {
-      "source": "native-ghosty/src/toolcard.cpp",
-      "destination": "src/toolcard.cpp",
-      "source_sha256": "62ff5e81dcf8c2e13466445c5051a3e31497fa7be8a14893cc0af53ab8ec6ce6"
-    },
-    {
-      "source": "native-ghosty/src/toolcard.h",
-      "destination": "src/toolcard.h",
-      "source_sha256": "9c499ce8e463051f13451ecd64f2f003481c6246cb7ba066d6dbdc3034740891"
-    },
-    {
       "source": "native-ghosty/src/wave.cpp",
       "destination": "src/wave.cpp",
       "source_sha256": "8254b1fbb7e00dff5002b6873344c5c8b420e3e883f98bedd2296185a995dfc6"
@@ -461,12 +446,6 @@
       "source": "native-ghosty/src/wave.h",
       "destination": "src/wave.h",
       "source_sha256": "48973f5b15f75a240aa75b807b18bd79ec626603ac11f3c9a5b30feaf7dd335f"
-    },
-    {
-      "source": "native-ghosty/src/activity.h",
-      "destination": "src/presentation.h",
-      "source_sha256": "6cc8ad1db78543ad90c5637a2657aeb5bf761b0246d15dc7b36122c3a088f891",
-      "scope": "display value declarations only"
     },
     {
       "source": "native-ghosty/src/transcript.h",

@@ -9,7 +9,7 @@ The copied material includes OpenGhost's procedural ghost, original 1.3 splash,
 UI motion, layout, icons and native Markdown/highlighting/TeX/diagram rendering
 rules. `resources/openghost.png` is the unchanged upstream icon (also present
 in `reference/openghost/desktop/icon.png`). Source revisions are recorded in
-`docs/ghosty-import.json`.
+`docs/native-import.json`.
 
 **Ghosty's custom mascot splash, its assets/font, alternate/ripple animations,
 and custom appearance choices are not included.** This fork is not official

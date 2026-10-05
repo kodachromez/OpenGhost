@@ -5,12 +5,9 @@ import QtQuick.Effects
 import QtQuick.Shapes
 import OpenGhost.Native
 
-// Settings → General (OpenGhost 1.2's settings-general.js): the reader's
-// standing instructions and the files kept at hand, both given to every new
-// chat (GeneralStore). Everything saves as it changes. Ghosty keeps a new chat's
-// instructions with its session, in its system prompt, so a long chat keeps
-// them after compaction; the files are attached to its first message. Chats
-// that already exist keep what they started with.
+// Settings → General (OpenGhost's settings-general.js): standing instructions
+// and files kept at hand for new chats. The disconnected preview is read-only;
+// storage and application to future chats require a separate integration.
 Column {
     id: page
     required property var store

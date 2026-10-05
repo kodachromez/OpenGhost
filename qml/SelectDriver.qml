@@ -8,7 +8,7 @@ import OpenGhost.Native
 // past its bottom less scroll-padding-bottom (OpenGhost's composer space +
 // 16 px), the transcript scrolls each frame by the pointer's distance past
 // that edge, as Chromium autoscrolls a selection, through every row to the
-// conversation's ends, and the focus follows; a tool card's well the press
+// conversation's ends, and the focus follows; a scrolling box the press
 // was in scrolls the same way past its own edges. Let go, the range settles (a
 // reply's menu, or none: Selection.release()) and is copied, as OpenGhost's
 // port copies a finished selection.
@@ -19,7 +19,7 @@ Item {
     property var frontend: null
     // The pointer in the transcript's coordinates, which stay put while it scrolls.
     property point pointer: Qt.point(0, 0)
-    // The scrolling box the press was in (a tool card's well), if any: held
+    // The scrolling box the press was in, if any: held
     // past its top or bottom, it scrolls the same way, and the focus follows
     // through its text.
     property Flickable inner: null

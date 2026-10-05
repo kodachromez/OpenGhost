@@ -2,7 +2,7 @@ import QtQuick
 import OpenGhost.Native
 
 // The run's working Ghost (chat.js's .message-status), after the newest row
-// while Ghosty works. It enters with ghost-in (450 ms); it collapses away while
+// while OpenGhost works. It enters with ghost-in (450 ms); it collapses away while
 // the answer streams (260 ms) and turns back where it is if work resumes
 // before its exit ends; rows moving it glide it (320 ms). All on
 // --motion-easing; with reduced motion it just appears and leaves, and reduced

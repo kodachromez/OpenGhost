@@ -2336,7 +2336,7 @@ void decodePreviewAsync(QObject *receiver, const QByteArray &bytes,
                         std::shared_ptr<const std::atomic_bool> dropped)
 {
     // Never coalesced: each request is answered. The window keeps one
-    // preview at a time between Ghosty's reply and this answer.
+    // preview at a time between OpenGhost's reply and this answer.
     work().want(
         receiver,
         [bytes, done = std::move(done), dropped](const std::shared_ptr<std::atomic_bool> &cancel) {

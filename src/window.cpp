@@ -12,7 +12,7 @@
 #include <QQuickTextDocument>
 #include <algorithm>
 
-// Retained from Ghosty's native window: no QML image/font/style networking.
+// OpenGhost's native window allows no QML image/font/style networking.
 namespace
 {
 class DenyAll final : public QQmlNetworkAccessManagerFactory

@@ -41,12 +41,24 @@ int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
     check(window->title() == QStringLiteral("OpenGhost"), "OpenGhost title");
     check(QFile::exists(QStringLiteral(":/shaders/mist.frag.qsb")), "original 1.3 mist packaged");
     check(!QFile::exists(QStringLiteral(":/splash/mascot-down.png")), "no custom mascot assets");
-    check(!window->findChild<QObject *>(QStringLiteral("transcribe")), "no Ghosty voice buttons");
-    check(!window->findChild<QObject *>(QStringLiteral("voiceChat")), "no Ghosty voice chat");
+    check(!window->findChild<QObject *>(QStringLiteral("transcribe")), "no extra voice buttons");
+    check(!window->findChild<QObject *>(QStringLiteral("voiceChat")), "no extra voice chat");
     check(!window->findChild<QObject *>(QStringLiteral("appearanceSplash")),
           "no custom splash picker");
     check(!window->findChild<QObject *>(QStringLiteral("generalExecution")),
-          "no Ghosty execution UI");
+          "no execution-backend UI");
+    check(!window->findChild<QObject *>(QStringLiteral("workspacePicker")),
+          "no startup workspace picker");
+    check(!window->findChild<QObject *>(QStringLiteral("unfinished")),
+          "no inherited recovery banner");
+    check(!QFile::exists(QStringLiteral(":/OpenGhost/Ui/ToolCard.qml")),
+          "no tool-result panel packaged");
+    check(qmlTypeId("OpenGhost.Native", 1, 0, "ToolText") == -1,
+          "no tool/subagent display helper registered");
+    const auto roles = controller.transcript()->roleNames().values();
+    check(roles.contains("messageState") && !roles.contains("toolName") &&
+              !roles.contains("activity") && !roles.contains("expanded"),
+          "transcript exposes only retained message roles");
 
     QSignalSpy accepted(&controller, &WindowController::accepted);
     check(!controller.property("ready").toBool(), "backend is unavailable");
@@ -72,6 +84,28 @@ int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
     check(math.ok && !math.image.isNull(), "copied TeX painter");
     const auto drawing = diagram::render(QStringLiteral("flowchart LR\nA --> B"), {}, {});
     check(drawing.ok && !drawing.image.isNull(), "copied 1.3 diagram painter");
+    Entry user;
+    user.kind = Entry::User;
+    user.key = QStringLiteral("smoke-user");
+    user.text = QStringLiteral("Display-only smoke input");
+    user.preview = QStringLiteral("Not sent");
+    user.state = QStringLiteral("refused");
+    Entry note;
+    note.key = QStringLiteral("smoke-note");
+    note.text = QStringLiteral("Display-only notice");
+    controller.transcript()->apply({user, note});
+    QTest::qWait(150);
+    check(findVisual(window->contentItem(), QStringLiteral("entry-user")) &&
+              findVisual(window->contentItem(), QStringLiteral("entry-note")),
+          "retained user and notice delegates load");
+    user.state = QStringLiteral("unconfirmed");
+    ++user.revision;
+    controller.transcript()->apply({user, note});
+    QTest::qWait(50);
+    const auto *userItem = findVisual(window->contentItem(), QStringLiteral("entry-user"));
+    check(userItem && userItem->property("messageState").toString() == user.state,
+          "message-state updates reach the delegate");
+
     Entry reply;
     reply.kind = Entry::Assistant;
     reply.key = QStringLiteral("smoke-only");
@@ -79,6 +113,8 @@ int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
     reply.state = QStringLiteral("done");
     controller.transcript()->apply({reply});
     QTest::qWait(500);
+    check(findVisual(window->contentItem(), QStringLiteral("entry-assistant")),
+          "retained Markdown delegate loads");
     controller.transcript()->reset({});
 
     auto *dialog = window->findChild<QObject *>(QStringLiteral("settingsDialog"));
@@ -93,9 +129,9 @@ int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
             QTest::qWait(60);
         }
         check(!findVisual(window->contentItem(), QStringLiteral("settingsTab-model")),
-              "no Ghosty Model tab");
+              "no extra Model tab");
         check(!findVisual(window->contentItem(), QStringLiteral("settingsTab-notifications")),
-              "no Ghosty Notifications tab or bell animation");
+              "no extra Notifications tab or bell animation");
         check(QMetaObject::invokeMethod(dialog, "close"), "settings closes");
     }
     Theme::choose(QStringLiteral("light"));

@@ -1,7 +1,5 @@
 #include "model.h"
 
-#include "toolcard.h"
-
 namespace
 {
 constexpr int SessionBlocks = 32;
@@ -15,22 +13,8 @@ QList<int> changedRoles(const Entry &a, const Entry &b)
         roles << TranscriptModel::BodyRole;
     if (a.preview != b.preview)
         roles << TranscriptModel::PreviewRole;
-    if (a.ending != b.ending)
-        roles << TranscriptModel::EndingRole;
-    if (a.name != b.name)
-        roles << TranscriptModel::ToolNameRole;
-    if (a.arguments != b.arguments)
-        roles << TranscriptModel::ArgumentsRole;
     if (a.state != b.state)
-        roles << TranscriptModel::ToolStateRole;
-    if (a.argumentsKnown != b.argumentsKnown)
-        roles << TranscriptModel::ArgumentsKnownRole;
-    if (a.omittedLines != b.omittedLines)
-        roles << TranscriptModel::OmittedLinesRole;
-    if (a.trimmed != b.trimmed)
-        roles << TranscriptModel::TrimmedRole;
-    if (a.omittedCharacters != b.omittedCharacters)
-        roles << TranscriptModel::OmittedCharactersRole;
+        roles << TranscriptModel::MessageStateRole;
     if (a.copyable != b.copyable)
         roles << TranscriptModel::CopyableRole;
     if (a.attachments != b.attachments)
@@ -43,12 +27,6 @@ QList<int> changedRoles(const Entry &a, const Entry &b)
         roles << TranscriptModel::CompletedRole;
     if (a.join != b.join)
         roles << TranscriptModel::JoinRole;
-    // A subagent card without a job shows its result as its one step.
-    if (a.activityRevision != b.activityRevision || a.activity.size() != b.activity.size() ||
-        (b.name == QLatin1String("subagent") && b.activityRevision == 0 && a.text != b.text))
-        roles << TranscriptModel::ActivityRole << TranscriptModel::ActivityRevisionRole;
-    if (a.activityNote != b.activityNote)
-        roles << TranscriptModel::ActivityNoteRole;
     return roles;
 }
 } // namespace
@@ -88,7 +66,7 @@ QVariant TranscriptModel::data(const QModelIndex &index, int role) const
     const Entry &entry = m_rows.at(index.row());
     switch (role) {
     case KindRole: {
-        static const char *const kinds[] = {"user", "assistant", "thinking", "tool", "note"};
+        static const char *const kinds[] = {"user", "assistant", "note"};
         return QString::fromLatin1(kinds[entry.kind]);
     }
     case KeyRole:
@@ -97,22 +75,8 @@ QVariant TranscriptModel::data(const QModelIndex &index, int role) const
         return entry.text;
     case PreviewRole:
         return entry.preview;
-    case ToolNameRole:
-        return entry.name;
-    case ArgumentsRole:
-        return entry.arguments;
-    case ToolStateRole:
+    case MessageStateRole:
         return entry.state;
-    case ArgumentsKnownRole:
-        return entry.argumentsKnown;
-    case ExpandedRole:
-        return m_expanded.contains(entry.key);
-    case OmittedLinesRole:
-        return entry.omittedLines;
-    case TrimmedRole:
-        return entry.trimmed;
-    case OmittedCharactersRole:
-        return entry.omittedCharacters;
     case CopyableRole:
         return entry.copyable;
     case MetricsRole:
@@ -123,14 +87,6 @@ QVariant TranscriptModel::data(const QModelIndex &index, int role) const
         return double(entry.completed);
     case JoinRole:
         return int(entry.join);
-    case ActivityRole:
-        return toolcard::steps(entry.activity);
-    case ActivityNoteRole:
-        return entry.activityNote;
-    case ActivityRevisionRole:
-        return double(entry.activityRevision);
-    case EndingRole:
-        return entry.ending;
     case AttachmentsRole: {
         QVariantList cards;
         for (const auto &card : entry.attachments)
@@ -144,25 +100,16 @@ QVariant TranscriptModel::data(const QModelIndex &index, int role) const
 
 QHash<int, QByteArray> TranscriptModel::roleNames() const
 {
-    return {{KindRole, "kind"},           {KeyRole, "key"},
-            {BodyRole, "body"},           {PreviewRole, "preview"},
-            {ToolNameRole, "toolName"},   {ArgumentsRole, "arguments"},
-            {ToolStateRole, "toolState"}, {ArgumentsKnownRole, "argumentsKnown"},
-            {ExpandedRole, "expanded"},   {OmittedLinesRole, "omittedLines"},
-            {TrimmedRole, "trimmed"},     {OmittedCharactersRole, "omittedCharacters"},
-            {CopyableRole, "copyable"},   {AttachmentsRole, "attachments"},
-            {MetricsRole, "metrics"},     {StartedRole, "started"},
-            {CompletedRole, "completed"}, {JoinRole, "join"},
-            {EndingRole, "ending"},       {ActivityRole, "activity"},
-            {ActivityNoteRole, "activityNote"}, {ActivityRevisionRole, "activityRevision"}};
+    return {{KindRole, "kind"},                 {KeyRole, "key"},
+            {BodyRole, "body"},                 {PreviewRole, "preview"},
+            {MessageStateRole, "messageState"}, {CopyableRole, "copyable"},
+            {AttachmentsRole, "attachments"},   {MetricsRole, "metrics"},
+            {StartedRole, "started"},           {CompletedRole, "completed"},
+            {JoinRole, "join"}};
 }
 
-void TranscriptModel::apply(const QVector<Entry> &rows, bool running)
+void TranscriptModel::apply(const QVector<Entry> &rows)
 {
-    // Thinking arrives shut, live or saved: its header shows the newest item
-    // and only the reader's toggles open it.
-    // Settlement can put an exchange's live rows into canonical part order;
-    // expansion is keyed and returns with a moved row.
     diff(
         m_rows, rows, [](const Entry &entry) -> const QString & { return entry.key; },
         [this](int i, Entry &old, const Entry &next) {
@@ -173,21 +120,12 @@ void TranscriptModel::apply(const QVector<Entry> &rows, bool running)
             if (!roles.isEmpty())
                 emit dataChanged(index(i), index(i), roles);
         });
-    // Only toggles add keys, so what a run keeps stays small.
-    if (running || m_expanded.isEmpty())
-        return;
-    QSet<QString> present;
-    present.reserve(m_rows.size());
-    for (const auto &entry : m_rows)
-        present.insert(entry.key);
-    m_expanded.intersect(present);
 }
 
 void TranscriptModel::reset(const QVector<Entry> &rows)
 {
     beginResetModel();
     m_rows = rows;
-    m_expanded.clear();
     m_edits.clear();
     endResetModel();
 }
@@ -204,16 +142,6 @@ void TranscriptModel::setEdit(const QString &key, const QVariant &source)
         m_edits.insert(key, source.toString());
     else
         m_edits.remove(key);
-}
-
-void TranscriptModel::toggle(int row)
-{
-    if (row < 0 || row >= m_rows.size())
-        return;
-    const QString &key = m_rows.at(row).key;
-    if (!m_expanded.remove(key))
-        m_expanded.insert(key);
-    emit dataChanged(index(row), index(row), {ExpandedRole});
 }
 
 int TranscriptModel::indexOf(const QString &key) const

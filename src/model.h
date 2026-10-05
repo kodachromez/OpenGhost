@@ -128,24 +128,13 @@ class TranscriptModel final : public KeyedModel
         KeyRole,
         BodyRole,
         PreviewRole,
-        ToolNameRole,
-        ArgumentsRole,
-        ToolStateRole,
-        ArgumentsKnownRole,
-        ExpandedRole,
-        OmittedLinesRole,
-        TrimmedRole,
-        OmittedCharactersRole,
+        MessageStateRole,
         CopyableRole,
         AttachmentsRole,
         MetricsRole,
         StartedRole,
         CompletedRole,
         JoinRole,
-        EndingRole,
-        ActivityRole,         // A subagent card's steps (toolcard::steps()).
-        ActivityNoteRole,     // Its activity panel's line.
-        ActivityRevisionRole, // Changes when its steps do.
     };
 
     using KeyedModel::KeyedModel;
@@ -153,13 +142,9 @@ class TranscriptModel final : public KeyedModel
     QVariant data(const QModelIndex &index, int role) const override;
     QHash<int, QByteArray> roleNames() const override;
 
-    // While a run is active, a row that briefly leaves (a retried exchange's
-    // thinking) keeps its expansion; the run's end forgets absent rows.
-    // Thinking always arrives shut.
-    void apply(const QVector<Entry> &rows, bool running = false);
-    // Another conversation: every delegate and expansion is replaced.
+    void apply(const QVector<Entry> &rows);
+    // Another conversation: every delegate and presentation edit is replaced.
     void reset(const QVector<Entry> &rows);
-    Q_INVOKABLE void toggle(int row);
     Q_INVOKABLE int indexOf(const QString &key) const;
     // A diagram's edited source by row key and block path: presentation
     // only (never sent), kept while the conversation is shown. An edit may
@@ -171,16 +156,15 @@ class TranscriptModel final : public KeyedModel
   private:
     friend class ModelTest;
     QVector<Entry> m_rows;
-    QSet<QString> m_expanded;
     QHash<QString, QString> m_edits;
 };
 
-// The saved-session sidebar: Ghosty's list, sorted and filtered by title on the
+// The saved-session sidebar: OpenGhost's list, sorted and filtered by title on the
 // worker. The query only records what the reader typed; the worker's answer
 // for it is applied as a keyed diff.
 //
 // Pins are OpenGhost's (library.js): a list preference held only while the
-// window lives, never sent to Ghosty or written anywhere. Pinned rows lead the
+// window lives, never sent to OpenGhost's backend or written anywhere. Pinned rows lead the
 // list, newest first, in their own group ("pinned:"); the others keep the
 // worker's order: chats without a folder (an empty folder path) in OpenGhost
 // 1.3's home group ("home:"), then the rest grouped by folder path.

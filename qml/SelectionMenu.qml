@@ -13,7 +13,7 @@ import OpenGhost.Native
 // OpenGhost), so it lies outside the transcript, at a place in the
 // transcript's content. "Ask frontend" puts the selection, trimmed, in
 // the composer as a quote and lets it go. 1.2's other action, Mini chat,
-// opens a side conversation with a second agent, which Ghosty does not
+// opens a side conversation with a second agent, which this OpenGhost port does not
 // start (the Electron client says so), so the toolbar holds Ask alone, as
 // 1.2's does inside a dialog. Its button takes no Tab stop (1.2's Tab goes
 // to the text's links and the message's Copy) and lights in 0.15 s (ease)

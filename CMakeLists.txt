@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_FIND_PACKAGE_RESOLVE_SYMLINKS ON)
-# Keep Ghosty's qualified Qt baseline: the copied QML uses recent Qt APIs.
+# OpenGhost's native QML uses recent Qt APIs.
 find_package(Qt6 6.11 REQUIRED COMPONENTS Core Gui Network Qml Quick QuickControls2
     QuickDialogs2 ShaderTools)
 qt_policy(SET QTP0001 NEW)
@@ -39,7 +39,7 @@ qt_add_qml_module(native_window URI OpenGhost.Native VERSION 1.0 NO_PLUGIN RESOU
     SOURCES src/rich.h src/rich.cpp src/ghost.h src/ghost.cpp src/icon.h src/icon.cpp
         src/shadow.h src/shadow.cpp src/reveal.h src/reveal.cpp
         src/exposure.h src/exposure.cpp src/wave.h src/wave.cpp
-        src/selection.h src/selection.cpp src/toolcard.h src/toolcard.cpp
+        src/selection.h src/selection.cpp
         src/diagramview.h src/diagramview.cpp)
 target_link_libraries(native_window PUBLIC native_rich Qt6::Gui Qt6::Network
     Qt6::Quick Qt6::QuickControls2)
@@ -55,7 +55,7 @@ target_link_libraries(openghost-native PRIVATE native_window Qt6::Qml Qt6::Quick
 native_warnings(openghost-native)
 foreach(name Main ChatEntry LiveText Sidebar SettingsDialog Markdown Block InlineText CodeBlock
         TableBlock DiagramBlock WorkingGhost WelcomeGhost Splash EffortControl Metrics
-        IconButton Spring ToolCard ModelGlyph ModelButton ModelStage EffortStage Feather UsagePage
+        IconButton Spring ModelGlyph ModelButton ModelStage EffortStage Feather UsagePage
         AppearancePage GeneralPage OverlayScrollBar JumpButton CopyButton Entrance SelectArea
         SelectDriver SelectableLabel SelectionMenu SelectionVeil VeilFilter TitleTip ButtonTip
         Backdrop RowLift TextGlow ApprovalCard ModePicker ModeDock)

@@ -8,9 +8,9 @@ import OpenGhost.Native
 // to a dock of the modes grown out of it (ModeDock); as the dock closes the
 // current mode's icon goes home and the button comes back around it.
 //
-// The modes are Ghosty's (WindowController::modes): the button shows the
-// permission mode Ghosty confirmed, the dock offers the modes Ghosty lists
-// that it can draw, and a pick asks Ghosty to change only the permission
+// The modes are OpenGhost's (WindowController::modes): the button shows the
+// permission mode OpenGhost confirmed, the dock offers the modes OpenGhost lists
+// that it can draw, and a pick asks OpenGhost to change only the permission
 // mode. Nothing here decides what a mode allows.
 AbstractButton {
     id: picker
@@ -23,13 +23,13 @@ AbstractButton {
     property bool away: false
 
     // mode-picker.js MODES with i18n.js's names and hints. Full's hint
-    // says what Ghosty's Full does: it never asks, within what Ghosty may do.
+    // says what OpenGhost's Full does: it never asks, within its backend authority.
     readonly property var known: ({
         ask: {icon: "lock", name: "Ask", hint: "Asks before running commands, changing files or going online", tone: ""},
         auto: {icon: "shield", name: "Auto", hint: "Works in the project folder on its own, asks before risky steps", tone: ""},
         full: {icon: "shield-alert", name: "Full access", hint: "Never asks. Can do anything OpenGhost is allowed to", tone: "warn"}
     })
-    // The modes to offer: those Ghosty lists, in its order, that are drawn here.
+    // The modes to offer: those OpenGhost lists, in its order, that are drawn here.
     readonly property var choices: (modes.permissions ?? []).filter(id => known[id] !== undefined)
                                        .map(id => Object.assign({id: id}, known[id]))
     readonly property string mode: modes.permission ?? ""

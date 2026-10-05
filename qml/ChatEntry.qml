@@ -4,28 +4,17 @@ import QtQuick.Layouts
 import QtQuick.Window
 import OpenGhost.Native
 
-// One transcript row. User text, thinking, tool output and notes are plain
-// text; an assistant's text is Markdown shown through the allowlisted
-// components in Markdown.qml, parsed off the GUI thread. Hidden sections hold
-// no text, so collapsed thinking and tool output cost no layout. Streamed
-// plain bodies are LiveText, which edits its document instead of replacing it.
+// One OpenGhost transcript row. User text and notes are plain text; an
+// assistant's text is Markdown shown through the allowlisted components in
+// Markdown.qml, parsed off the GUI thread. Plain bodies use LiveText.
 Item {
     id: entry
     required property int index
     required property string key
     required property string kind
     required property string body
-    // A Bash result's settlement and any failure or uncertainty, one per line.
-    required property string ending
     required property string preview
-    required property string toolName
-    required property string arguments
-    required property string toolState
-    required property bool argumentsKnown
-    required property bool expanded
-    required property double omittedLines
-    required property double omittedCharacters
-    required property double trimmed
+    required property string messageState
     required property bool copyable
     required property var attachments // User rows: {name, mime, size} cards.
     // A run's last reply row: its reply metrics and saved bounds (Metrics.qml).
@@ -33,20 +22,14 @@ Item {
     required property double started
     required property double completed
     // How it follows the row before (Entry::Join): messages are 28 px apart
-    // (.thread-list); within one exchange's message, 12 px after its
-    // thinking and 14 px otherwise.
+    // (.thread-list); parts of one reply are 14 px apart.
     required property int join
-    // A subagent card's steps (toolcard::steps()), its panel's line and
-    // the steps' revision.
-    required property var activity
-    required property string activityNote
-    required property double activityRevision
 
     width: ListView.view ? ListView.view.width : 0
     // The reading column (.thread-list): at most 680 px, 24 px from the edges.
     readonly property real column: Math.min(680, width - 48)
     readonly property real columnX: (width - column) / 2
-    readonly property real gap: index === 0 ? 0 : join === 2 ? 12 : join === 1 ? 14 : 28
+    readonly property real gap: index === 0 ? 0 : join === 1 ? 14 : 28
     height: gap + (content.item ? content.item.implicitHeight : 0)
     // Its full height when the list places it: a row that grows after it
     // appears makes following the end rebuild the rows around it, and one
@@ -101,9 +84,6 @@ Item {
         function onHeightChanged() { Qt.callLater(entry.near) }
     }
 
-    function toggle() {
-        entry.ListView.view.model.toggle(entry.index)
-    }
     function menu(area) {
         entry.ListView.view.showMenu(area)
     }
@@ -126,7 +106,7 @@ Item {
     RichDocument {
         id: rich
         source: entry.kind === "assistant" ? entry.body : ""
-        live: entry.toolState === "live"
+        live: entry.messageState === "live"
         seed: entry.key
         hold: true // Until onCompleted knows whether the row is paced.
         reducedMotion: Theme.reducedMotion
@@ -134,16 +114,15 @@ Item {
     }
     readonly property alias rich: rich
     ListView.onAdd: {
-        if (entry.kind === "assistant" && entry.toolState === "live")
+        if (entry.kind === "assistant" && entry.messageState === "live")
             rich.revealFromStart()
         entry.arrive()
     }
 
     // Entry motion, for a row added while its conversation is shown or shown
     // as it opens, never one built by scrolling: a message rises 8 px in
-    // 0.35 s (message-in), a tool card rises 8 px from .98 in 0.5 s
-    // (approval-in), and a reply's tools come down 4 px in 0.45 s as they
-    // appear (message-tools-in). None with reduced motion.
+    // 0.35 s (message-in), and a reply's copy control comes down 4 px in
+    // 0.45 s as it appears (message-tools-in). None with reduced motion.
     property real arrival: 1
     property real toolsArrival: 1
     // A Markdown block's own entry motion (md-rise, md-pop, md-bar, …) plays
@@ -160,7 +139,7 @@ Item {
         arrivedAt = Date.now()
         if (Theme.reducedMotion)
             return
-        if (kind === "user" || kind === "tool")
+        if (kind === "user")
             arriving.restart()
         if (copyable)
             toolsArriving.restart()
@@ -172,7 +151,7 @@ Item {
         property: "arrival"
         from: 0
         to: 1
-        duration: entry.kind === "tool" ? 500 : 350
+        duration: 350
         easing.type: Easing.Bezier
         easing.bezierCurve: Theme.motion
     }
@@ -195,28 +174,14 @@ Item {
         }
     }
 
-    // Whole lines dropped, then the dropped start of a partial first line.
-    readonly property string omission: ToolText.omission(omittedLines, omittedCharacters)
-
     Loader {
         id: content
         x: entry.columnX
         y: entry.gap
         width: entry.column
         opacity: entry.arrival
-        transform: [
-            Scale {
-                readonly property real at: entry.kind === "tool" ? 0.98 + 0.02 * entry.arrival : 1
-                origin.x: content.width / 2
-                origin.y: content.height / 2
-                xScale: at
-                yScale: at
-            },
-            Translate { y: 8 * (1 - entry.arrival) }
-        ]
-        sourceComponent: entry.kind === "tool" ? toolCard
-                       : entry.kind === "thinking" ? thinking
-                       : entry.kind === "note" ? note
+        transform: Translate { y: 8 * (1 - entry.arrival) }
+        sourceComponent: entry.kind === "note" ? note
                        : entry.kind === "user" ? userMessage : assistantMessage
     }
 
@@ -297,7 +262,7 @@ Item {
                     function onBodyChanged() { user.measure() }
                     function onColumnChanged() { user.measure() }
                 }
-                // Ghosty's attachment metadata (name, type, size); never a path.
+                // OpenGhost's attachment metadata (name, type, size); never a path.
                 // .message-files: cards 8 px apart, wrapping within 80% of the
                 // column, each line against the right edge.
                 Item {
@@ -348,8 +313,8 @@ Item {
                             id: attachment
                             required property var modelData
                             required property int index
-                            // Ghosty validated PNG, JPEG and WebP images: a saved
-                            // one previews on request, when Ghosty is idle.
+                            // OpenGhost-validated PNG, JPEG and WebP images: a saved
+                            // one previews on request, when OpenGhost is idle.
                             readonly property bool picture: ["image/png", "image/jpeg", "image/webp"]
                                                             .indexOf(modelData.mime) >= 0
                             // The facade's preview state and image for this card.
@@ -553,7 +518,7 @@ Item {
                         }
                     }
                 }
-                // A steering input's receipt, as Ghosty reports it: a text of
+                // A steering input's receipt, as OpenGhost reports it: a text of
                 // the selection after the bubble's.
                 Label {
                     id: receipt
@@ -574,8 +539,8 @@ Item {
                     textFormat: Text.PlainText
                     elide: Text.ElideRight
                     font.pixelSize: 13
-                    color: entry.toolState === "refused" || entry.toolState === "unconfirmed"
-                           || entry.toolState === "notApplied" ? Theme.danger : Theme.secondary
+                    color: entry.messageState === "refused" || entry.messageState === "unconfirmed"
+                           || entry.messageState === "notApplied" ? Theme.danger : Theme.secondary
                 }
             }
         }
@@ -623,7 +588,7 @@ Item {
                 }
                 // Past markdown's render bound (OpenGhost's too-large preview) or
                 // its bound of formatted pieces, the text is plain; Copy still
-                // takes it whole from Ghosty. The note is one of the reply's
+                // takes it whole from OpenGhost. The note is one of the reply's
                 // selectable texts, as 1.2's .message-note is.
                 SelectableLabel {
                     objectName: "plainNote"
@@ -682,140 +647,6 @@ Item {
                     }
                 }
             }
-        }
-    }
-
-    Component {
-        id: thinking
-        // The summary and, open, the text: texts of the conversation's
-        // selection, the pointer over them the SelectArea's (the summary
-        // itself toggles, as a <summary> does).
-        Item {
-            width: entry.column
-            implicitHeight: thought.implicitHeight
-            SelectArea {
-                objectName: "selectArea"
-                anchors.fill: parent
-                z: 1
-                host: entry
-                content: thought
-                view: entry.ListView.view
-            }
-            Column {
-                id: thought
-                width: entry.column
-                spacing: 6
-                // .message-thinking > summary: Chromium's disclosure triangle
-                // and "Thinking"; while it streams, "Thinking…" and its newest
-                // item, which only shows the text below and is not selectable.
-                AbstractButton {
-                    id: summary
-                    objectName: "toggle"
-                    readonly property bool live: entry.toolState === "live"
-                    width: latestLabel.x + latestLabel.width
-                    height: 23.1
-                    focusPolicy: Qt.TabFocus
-                    Accessible.name: summaryLabel.text + (latestLabel.text.length > 0 ? " " + latestLabel.text : "")
-                    onClicked: entry.toggle()
-                    background: Rectangle {
-                        x: -5
-                        y: -5
-                        width: summary.width + 10
-                        height: summary.height + 10
-                        radius: 8
-                        visible: summary.visualFocus
-                        color: "transparent"
-                        border.width: 2
-                        border.color: Theme.alpha(Theme.strong, 0.35)
-                    }
-                    contentItem: Item {
-                        PathIcon {
-                            y: 8
-                            width: 9.25
-                            height: 9.25
-                            name: entry.expanded ? "disclosure-open" : "disclosure-closed"
-                            color: Theme.secondary
-                        }
-                        Label {
-                            id: summaryLabel
-                            objectName: "thinkingSummary"
-                            x: 15 // After the marker's box and a space: 14.4, which Qt rounds down.
-                            height: 23.1
-                            text: summary.live ? "Thinking…" : "Thinking"
-                            color: Theme.secondary
-                            font.pixelSize: 14
-                            lineHeightMode: Text.FixedHeight
-                            lineHeight: 23.1
-                            topPadding: Theme.halfLeading(font, lineHeight)
-                            bottomPadding: -topPadding
-                            readonly property string unit: "k:s"
-                            Component.onCompleted: Selection.enroll(summaryLabel, entry.key, unit)
-                            SelectionWash {
-                                z: -1
-                                anchors.fill: parent
-                                target: summaryLabel
-                                range: { void Selection.revision; return Selection.range(entry.key, "k:s") }
-                                color: Qt.rgba(Theme.selection.r, Theme.selection.g, Theme.selection.b, Selection.wash)
-                            }
-                        }
-                        Label {
-                            id: latestLabel
-                            objectName: "thinkingLatest"
-                            x: summaryLabel.x + summaryLabel.implicitWidth + 8
-                            anchors.baseline: summaryLabel.baseline
-                            width: text.length > 0 ? Math.min(implicitWidth, Math.max(0, entry.column - x)) : 0
-                            text: summary.live ? entry.preview : ""
-                            textFormat: Text.PlainText
-                            elide: Text.ElideRight
-                            maximumLineCount: 1
-                            color: Theme.secondary
-                            font.pixelSize: 14
-                        }
-                    }
-                }
-                // .thinking-content: a 1 px rule, 12 px in, the text as sent.
-                Item {
-                    visible: entry.expanded
-                    width: parent.width
-                    height: thinkingText.height
-                    Rectangle {
-                        width: 1
-                        height: parent.height
-                        color: Theme.quaternary
-                    }
-                    LiveText {
-                        id: thinkingText
-                        objectName: "thinkingBody"
-                        frontend: entry.frontend
-                        visible: entry.expanded
-                        x: 13
-                        width: parent.width - 13
-                        padding: 0
-                        content: entry.expanded ? entry.body : ""
-                        wrapMode: TextEdit.Wrap
-                        color: Theme.secondary
-                        font.pixelSize: 14
-                        lineHeight: 14 * 1.65
-                        // The conversation's selection, not its own.
-                        selectByMouse: false
-                        activeFocusOnPress: false
-                        readonly property string unit: "k:t"
-                        Component.onCompleted: Selection.enroll(thinkingText, entry.key, unit)
-                        background: SelectionWash {
-                            target: thinkingText
-                            range: { void Selection.revision; return Selection.range(entry.key, "k:t") }
-                            color: Qt.rgba(Theme.selection.r, Theme.selection.g, Theme.selection.b, Selection.wash)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    Component {
-        id: toolCard
-        ToolCard {
-            row: entry
         }
     }
 

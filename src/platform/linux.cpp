@@ -10,7 +10,7 @@ bool selectedPortal = false;
 
 void platform::beforeApplication()
 {
-    // Ghosty's Wayland/NVIDIA frame pacing and native portal file chooser.
+    // OpenGhost's Wayland/NVIDIA frame pacing and native portal file chooser.
     // Explicit user selections continue to win. Never apply this on Windows/macOS.
     if (qEnvironmentVariableIsEmpty("QSG_RENDER_LOOP"))
         qputenv("QSG_RENDER_LOOP", "threaded");

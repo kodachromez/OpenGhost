@@ -16,7 +16,7 @@ import OpenGhost.Native
 // patch (EffortStage). At the highest level lit oil pours over the panel and
 // a Ghost looks out of it (shaders/blur.frag and oil.frag). Keys:
 // arrows and PageUp/PageDown step, Home/End jump, Enter or Space opens;
-// Enter or Escape close. The value is Ghosty's own level name, sent with the
+// Enter or Escape close. The value is OpenGhost's advertised level name, sent with the
 // next run. Hidden, or with reduced motion (even turned on mid-way),
 // everything is at its end at once.
 Control {

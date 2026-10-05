@@ -2,9 +2,9 @@
 
 ## Target and first-pass result
 
-**Clone the dissected OpenGhost 1.3 frontend, not Ghosty.** Ghosty supplies the
-already-written native Qt implementation, not a new visual specification.
-OpenGhost's own motion stays; the owner's Ghosty-specific animations do not.
+**Clone the dissected OpenGhost 1.3 frontend.** The existing native Qt port
+supplies reusable code, not a new visual specification. OpenGhost's own motion
+stays; the source port's custom appearance and extra features do not.
 
 The standalone C++17/Qt 6.11/CMake executable builds and opens without any Rust
 backend, backend executable, workspace grant, credentials or Node installation.
@@ -29,7 +29,7 @@ install rule or native runtime reaches them.
 
 Most native files are whole-file imports from Ghosty's `native-ghosty/` at
 `3b0e7a51` (the full hash and per-file source hashes are in
-[`ghosty-import.json`](ghosty-import.json)). Committed source was used rather
+[`native-import.json`](native-import.json)). Committed source was used rather
 than sweeping up unrelated local edits. Selective historical copies restore
 OpenGhost 1.3 work that Ghosty later customized:
 
@@ -61,11 +61,11 @@ not a claim that this extraction repeated the full visual qualification.
 | Markdown and code | `markdown.*`, `highlight.*`, `rich.*`, `cssfont.*`, Markdown/Block/InlineText/CodeBlock/TableBlock QML |
 | TeX and diagrams | `tex.*`, the full `diagram*.cpp/.h` family, `diagramview.*`, editable diagram view and its native drawing/selection code (1.3's 43-kind engine) |
 | OpenGhost artwork and motion | Procedural `ghost.*`, original 1.3 `Splash.qml` and `mist.frag`, welcome/working ghost, `motion.*`, `wave.*`, `reveal.*`, effects, springs, entrance/glide components and shader resources |
-| Other presentation | Icons, file kinds, shadows, exposure tracking, approval cards, inherited tool-card display helpers, metrics and selection/copy machinery |
+| Other presentation | Icons, file kinds, shadows, exposure tracking, approval cards, metrics and selection/copy machinery |
 | Assets | Original OpenGhost icon; all applicable source/artwork terms and attribution retained |
 
 `presentation.h` extracts only the display-value declarations needed by the
-copied list models and settings from `client.h`, `transcript.h` and `activity.h`.
+copied list models and settings from `client.h` and `transcript.h`.
 No implementations of those clients, projections or protocol parsers were
 imported. `presentation.cpp` retains two display-truncation marker strings used
 by the rich renderer.
@@ -73,24 +73,31 @@ by the rich renderer.
 Most imported files are unchanged apart from the QML namespace/resource and
 frontend-binding names. Changes to large QML files remove additions or reconnect
 existing components; layout, drawing algorithms and OpenGhost animation curves
-were not reimplemented. The 1.3 splash wordmark is **OpenGhost**, not Ghosty.
+were not reimplemented. The wordmark and retained code names are **OpenGhost**.
+Historical names remain only in source provenance and attribution records.
 
 ### Explicit exclusions
 
 - All Rust/backend/agent/tool code; `client.*`, `rpc.*`, `launch.*`, backend
   transcript/activity projection implementations, service discovery and backend
   process/signal supervision.
-- Ghosty's file-upload/storage bridge, audio/voice implementation, notification
+- The source port's file-upload/storage bridge, audio/voice implementation, notification
   delivery/policy, installer/updater scripts and RPC tests.
-- The owner's custom `GhostySplash`/mascot image, Nunito font, custom splash
+- The owner's custom mascot splash/image, Nunito font, custom splash
   mist/aura shaders, Ripple splash/motion assets and happy-motion variants.
-- Ghosty's splash selector, custom Model and Notifications settings tabs and
+- The source port's splash selector, custom Model and Notifications settings tabs and
   bell/toggle animations, execution-mode settings, voice/transcription controls,
   slash-command helper and added Stop button. OpenGhost stops with Escape.
+- Tool/subagent result panels, child activity DTOs, transcript thinking disclosure,
+  startup workspace/service picker and Recover/Abandon & Delete banner. These
+  unused source-port paths and their model/controller bindings have been removed.
+  The reference's `chat.js::applyEvent` tracks tool status and shows the working
+  ghost; it does not create tool/subagent/thinking transcript cards. Approval
+  cards, model thinking-level selection and the original working ghost remain.
 - No Electron, Chromium, WebEngine, Node or React dependency in the native
   project. Qt QML's own JavaScript expressions are not Node or a browser.
 
-## What remains Ghosty-specific
+## Remaining presentation contracts
 
 The visible shell now follows the reference's four settings sections and 1.3
 appearance. Some **presentation interfaces**, not backend implementations, still
@@ -101,12 +108,11 @@ reflect the source port:
 - Existing QML action names and acknowledgement/draft bookkeeping. These must be
   mapped deliberately to the dissected frontend's ABP semantics, not assumed to
   match because method names look similar.
-- Attachment count/preview assumptions, title limits, provider colors, fallback
-  names and tool-card specializations. The old subagent/tool/thinking display
-  helpers are retained with the copied renderers but have no live data source;
-  they must not introduce extra visible features into the 1.3 clone.
-- Historical comments naming Ghosty and the native renderer's pre-existing
-  bounded-rendering limits.
+- Attachment count/preview assumptions, title limits, provider colors and fallback
+  names, plus the native renderer's pre-existing bounded-rendering limits.
+
+These contracts still need deliberate ABP integration; renaming retained code to
+OpenGhost does not make it a wire-compatible backend adapter.
 
 This is a buildable extraction, **not yet a complete functional or pixel-exact
 1.3 clone**. The inherited native port still lacks parts of the reference,
@@ -117,13 +123,12 @@ remain; this task did not rerun the original full pixel-comparison suite.
 
 ## What still depends on the old backend
 
-**Nothing depends on Ghosty's backend to build or launch.** The following UI
-paths previously depended on it and are now explicitly disconnected:
+**No backend is needed to build or launch.** The following UI paths are
+explicitly disconnected:
 
 - Catalog/auth/defaults; send/cancel/steer; session listing/history/rename/delete,
-  recovery, approvals and mode changes.
+  approvals and mode changes.
 - Attachment upload, stored-image retrieval and per-run usage/metrics.
-- Workspace/service switching and background child activity.
 
 `src/window.*` returns no accepted submission, does not append chat messages,
 starts no subprocess, reads no credentials and sends no network requests.
@@ -132,12 +137,12 @@ working OS-facing helpers are native window behavior, text clipboard/selection,
 allowlisted user-clicked external links, and theme preferences.
 
 The original General/Usage local stores were also **not** brought over: they
-share Ghosty's POSIX/file-transfer helpers. Their QML is present, but General is
+share the source port's POSIX/file-transfer helpers. Their QML is present, but General is
 read-only and Usage has no connected data. This does not mean these frontend
 preferences should become agent logic: their eventual ownership should match the
 [dissected frontend contract](../reference/openghost/docs/backend-interface.md).
-Appearance alone persists through Qt's app-specific path, separate from Ghosty
-and the Electron profile. No old profile migration is attempted.
+Appearance alone persists through Qt's app-specific path, separate from previous
+native and Electron profiles. No old profile migration is attempted.
 
 ## Platform boundaries and remaining Windows/macOS work
 
@@ -166,13 +171,19 @@ On Linux with Qt 6.11.2 and GCC 16.2.1:
 
 - Release configure and build succeeded, using C++/Qt only.
 - One `native_ui_smoke` check: independent offscreen/software launch, 1.3 splash
-  reveal, both themes, all four settings pages, no Ghosty-only controls,
+  reveal, both themes, all four settings pages, no source-port-only controls,
   disconnected-send/attachment refusal, Markdown/TeX/diagram rendering, native
   close signal and no QML load/binding warnings.
 - The same smoke launched on the real **Wayland/OpenGL** Qt scene graph and
   exited successfully. The uninstalled development executable produced a
   nonfatal portal app-ID registration warning; the Linux install includes its
   desktop entry.
+
+The cleanup pass repeated the Release build and offscreen smoke, adding checks
+for the removed panels/helpers, all three retained transcript delegates and
+message-state updates. A case-insensitive search found no former product names
+in native source, QML, tests, shaders, resources or CMake. The frozen reference
+and original license notices were not changed.
 
 Windows/macOS and full visual/behavior parity were not tested. No Rust, Electron,
 Node, provider login or live model tests were run. Commands are in the root
@@ -184,5 +195,5 @@ Keep the copied UI/renderers fixed. Add a narrow **read-only ABP adapter** for
 `initialize`, `auth.providers` and `models.list`, tested against a local scripted
 peer using the dissected frontend's contract. Translate those answers into the
 existing settings presentation model, replacing its unavailable state. Do not
-copy Ghosty's RPC, add an agent, or enable sending until durable turn/session
+copy the source port's RPC, add an agent, or enable sending until durable turn/session
 identity and acknowledgement handling have been migrated explicitly.

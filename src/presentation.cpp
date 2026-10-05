@@ -1,6 +1,6 @@
 #include "presentation.h"
 
-// Copied display markers used by RichDocument. No Ghosty transcript parser.
+// OpenGhost display markers used by RichDocument. No backend transcript parser.
 const QString &clippedNotice()
 {
     static const QString text =

@@ -6,12 +6,12 @@ import OpenGhost.Native
 // The card that asks before the agent acts (OpenGhost 1.3 approval-card.js,
 // .approval). It leads with what the step is for in plain words, says what
 // it does to the computer and where, and keeps the command or the changes
-// one click away. Everything it shows is Ghosty's description of the
-// pending operation (Client::approvals): the effect, places, command and
+// one click away. Everything it shows is OpenGhost's description of the
+// pending operation (WindowController::approvals): the effect, places, command and
 // changes come from the backend, never from this view. Allow and Deny send
-// the answer once; the card then settles (its buttons fade) and Ghosty's
-// resolution dismisses it. Not a tool card: once allowed, the call's
-// progress and result are the ToolCard's.
+// the answer once; the card then settles (its buttons fade) and OpenGhost's
+// resolution dismisses it. Tool activity uses the working ghost, not a
+// separate tool-result panel.
 Item {
     id: card
     objectName: "approvalCard"
@@ -25,11 +25,11 @@ Item {
     // window's choice, not saved).
     property bool detailsOpen: false
     signal detailsToggled(bool open)
-    // Allow or Deny was chosen here, before Ghosty's view says so.
+    // Allow or Deny was chosen here, before OpenGhost's backend confirms it.
     property bool chosen: false
     readonly property bool settled: chosen || approval.answered === true
     signal answer(bool allow)
-    // Ghosty resolved it: the card folds away, then `gone`.
+    // OpenGhost resolved it: the card folds away, then `gone`.
     property bool dismissed: false
     signal gone()
     // .approval's margin-top (none at the top of an empty message).

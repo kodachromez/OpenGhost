@@ -4,7 +4,7 @@ import QtQuick.Effects
 import QtQuick.Shapes
 import OpenGhost.Native
 
-// Ghosty's saved conversations by folder, newest first, drawn as OpenGhost's
+// OpenGhost's saved conversations by folder, newest first, drawn as its
 // sidebar (index.html .sidebar, chat-list.js, search-field.js). OpenGhost
 // 1.3's chats without a folder lead the list in their own group ("Chats",
 // keyed "home:"), then the "Folders" heading with New Folder and each
@@ -16,7 +16,7 @@ Pane {
     required property var frontend
     signal done() // Search finished: focus returns to the composer.
     signal settingsRequested()
-    // An action OpenGhost offers that Ghosty cannot honour here; the text
+    // An OpenGhost action unavailable in this disconnected port; the text
     // says why and that nothing changed.
     signal refused(string text)
     signal folderWanted() // New Folder: the folder chooser (Main.qml).
@@ -176,8 +176,8 @@ Pane {
     function newChat() {
         newChatIn("")
     }
-    // A group's New chat: in its folder, attaching to that folder's Ghosty
-    // service when the window is attached to another.
+    // A group's New chat: ask OpenGhost to select the requested folder.
+    // The disconnected facade refuses folders; no service is launched.
     function newChatIn(folder) {
         if (!frontend.canSwitch)
             return
@@ -212,7 +212,7 @@ Pane {
     Spring { id: glideH; k: 520; c: 40; within: 0.01; slower: 0.05 }
     Spring { id: glideO; goal: sidebar.hoverItem ? 1 : 0; k: 320; c: 32; within: 0.01; slower: 0.05 }
     // Renaming happens in the row (chat-list.js rename()): one chat at a time.
-    // Ghosty renames it; the row shows the title Ghosty answers with.
+    // OpenGhost renames it; the row shows the title OpenGhost answers with.
     property string renamingId: ""
     property Item renameField: null // The open field, for presses outside it.
     function startRename(sessionId, index) {
@@ -234,8 +234,8 @@ Pane {
     }
     // Deleting (chat-list.js askDelete(), keep(), remove()): Delete asks and
     // a second Delete within 3 s deletes; the pointer leaving the row, or the
-    // wait running out, keeps the chat. Ghosty deletes it: the row takes no
-    // more clicks until Ghosty answers, leaves only once Ghosty confirms, and stays
+    // wait running out, keeps the chat. OpenGhost deletes it: the row takes no
+    // more clicks until OpenGhost answers, leaves only once OpenGhost confirms, and stays
     // after a refusal, whose reason is shown as a notice.
     property string confirmingId: ""
     property var deleting: ({}) // Session IDs whose delete OpenGhost has not refused.
@@ -263,8 +263,8 @@ Pane {
     Timer { id: confirmWait; interval: 3000; onTriggered: sidebar.confirmingId = "" }
     // Delete Folder (chat-list.js askDeleteFolder(), keepFolder(),
     // removeFolder()) asks the same way. Confirmed, the folder and its rows
-    // fold away (REMOVE) and Ghosty then deletes each of its chats; the folder
-    // is forgotten once all are gone, and comes back if Ghosty keeps any.
+    // fold away (REMOVE) and OpenGhost then deletes each of its chats; the folder
+    // is forgotten once all are gone, and comes back if OpenGhost keeps any.
     property string confirmingFolder: ""
     property var leaving: ({}) // Folders confirmed, until gone or kept.
     property var folderQueue: [] // Confirmed folders still folding away.
@@ -335,7 +335,7 @@ Pane {
             delete next[sessionId]
             sidebar.deleting = next
         }
-        // A folder Ghosty kept chats in comes back; why was said already.
+        // A folder OpenGhost kept chats in comes back; why was said already.
         function onFolderRemoved(folder, removed, notice) {
             if (removed)
                 return
@@ -525,7 +525,7 @@ Pane {
         property bool renaming: false
         // Delete asked once (.chat-row.is-confirming): the time steps aside,
         // the actions stay, and Delete turns red with its lid lifted until a
-        // second click, the pointer leaving or 3 s. Then, until Ghosty answers,
+        // second click, the pointer leaving or 3 s. Then, until OpenGhost answers,
         // the row takes no more clicks.
         property bool confirming: false
         property bool deleting: false
@@ -628,7 +628,7 @@ Pane {
         }
 
         // The title drawn. Another title for the same chat, from a rename or
-        // from Ghosty naming it, writes itself in: each letter rises out of a
+        // from OpenGhost naming it, writes itself in: each letter rises out of a
         // 2 px blur 0.35 em low over 0.36 s, a moment after the one before,
         // the whole of it within 0.42 s (chat-list.js write(), .chat-letter);
         // then it is plain text again. Not with reduced motion.
@@ -785,7 +785,7 @@ Pane {
                     onTriggered: caret.lit = !caret.lit
                 }
             }
-            // Ghosty's bound (120 characters), never cutting the title it had.
+            // The native editor's bound (120 characters), never cutting the title it had.
             maximumLength: Math.max(120, original.length)
             inputMethodHints: Qt.ImhNoPredictiveText
             onVisibleChanged: {
@@ -1803,7 +1803,7 @@ Pane {
                     }
                     onRename: sidebar.startRename(row.sessionId, row.index)
                     // Enter or Escape gives the row its focus back, as
-                    // OpenGhost does; the list shows Ghosty's answer.
+                    // OpenGhost does; the list shows the confirmed answer.
                     onRenamed: function(keep, text, refocus) {
                         sidebar.finishRename(row.sessionId, keep, text, row.title)
                         if (refocus) {

@@ -15,7 +15,7 @@ void Settings::apply(const Account &account)
             m_providerIds << model.provider;
     }
     m_notice.clear();
-    // Ghosty's defaults select the first model; later catalogs only re-resolve.
+    // OpenGhost's defaults select the first model; later catalogs only re-resolve.
     if (!m_used && !account.defaults.model.isEmpty() && m_selected.model.isEmpty() && !m_invalid) {
         m_used = true;
         use(account.defaults);
@@ -54,7 +54,7 @@ const ModelInfo *Settings::find(const QString &provider, const QString &id) cons
     return nullptr;
 }
 
-// The exact wanted level when advertised, else Ghosty's saved default, else
+// The exact wanted level when advertised, else OpenGhost's saved default, else
 // medium, else the first level. Never a nearby level.
 QString Settings::resolve(const ModelInfo &model, const QString &wanted) const
 {

@@ -1,14 +1,14 @@
 import QtQuick
 import OpenGhost.Native
 
-// The pointer over a transcript row's texts (a reply, a user message,
-// thinking, a tool card's body or a note), as Chromium's over OpenGhost's
+// The pointer over a transcript row's texts (a reply, user message or note),
+// as Chromium's over OpenGhost's
 // .message: a press starts the conversation's one selection (selection.h)
 // at the nearest text, a drag carries it across blocks and on across rows
 // (SelectDriver, which the window's pointer moves reach), two and three
 // clicks take a word or a block, and Shift extends. Presses on controls
-// under it (copy buttons, a diagram's tools, a code or tool well's scroll
-// bar, a tool card's or thinking's toggle) pass through, and the wheel
+// under it (copy buttons, a diagram's tools or a code well's scroll bar)
+// pass through, and the wheel
 // reaches what scrolls under it. A right press asks for the selection menu.
 //
 // A press on a link is the link's, as Chromium's is: it selects nothing.
@@ -32,8 +32,8 @@ MouseArea {
     id: area
     objectName: "selectArea"
     required property var host     // The row: key, kind, frontend, menu().
-    // A reply's RichDocument; none for any other row (a user message, a
-    // tool card, thinking, a note: their texts come from the transcript).
+    // A reply's RichDocument; user messages and notes get their plain text
+    // from the transcript.
     property var document: host && host.kind === "assistant" ? host.rich : null
     property Item content: null    // What lies under it.
     property Flickable view: null  // The transcript, when there is one.

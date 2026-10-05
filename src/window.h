@@ -9,7 +9,7 @@ class QQmlNetworkAccessManagerFactory;
 void selectControlsStyle();
 QQmlNetworkAccessManagerFactory *denyNetwork();
 
-// The QML-facing surface of Ghosty's window, disconnected from its client.
+// The QML-facing surface of OpenGhost's window, currently disconnected.
 // No process, transport, credentials, session store or agent lives here.
 // Keep the existing UI bindings while a separate ABP adapter is migrated.
 class WindowController final : public QObject
@@ -31,7 +31,6 @@ class WindowController final : public QObject
     Q_PROPERTY(bool canSteer READ off CONSTANT)
     Q_PROPERTY(bool canSwitch READ on CONSTANT)
     Q_PROPERTY(bool admitting READ off CONSTANT)
-    Q_PROPERTY(bool needsWorkspace READ off CONSTANT)
     Q_PROPERTY(bool picking READ off CONSTANT)
     Q_PROPERTY(bool switching READ off CONSTANT)
     Q_PROPERTY(QVariantMap uploads READ emptyMap CONSTANT)
@@ -60,7 +59,6 @@ class WindowController final : public QObject
         newChat();
         return {};
     }
-    Q_INVOKABLE void chooseWorkspace(const QUrl &) { unavailable(); }
     Q_INVOKABLE quint64 send(const QString &, const QVariantList & = {})
     {
         unavailable();
@@ -85,7 +83,6 @@ class WindowController final : public QObject
         emit folderRemoved(folder, false, backendUnavailable());
     }
     Q_INVOKABLE int folderChats(const QString &) const { return 0; }
-    Q_INVOKABLE void resolve(const QString &, bool) { unavailable(); }
     Q_INVOKABLE void setPermissionMode(const QString &) { unavailable(); }
     Q_INVOKABLE void approve(const QString &, bool) { unavailable(); }
     Q_INVOKABLE void copy(const QString &text);
@@ -107,14 +104,12 @@ class WindowController final : public QObject
     Q_INVOKABLE void preview(const QString &key, int card) { emit previewChanged(key, card); }
     Q_INVOKABLE QString previewState(const QString &, int) const { return backendUnavailable(); }
     Q_INVOKABLE QImage previewImage(const QString &, int) const { return {}; }
-    Q_INVOKABLE void loadActivity(const QString &) { unavailable(); }
   signals:
     void changed();
     void approvalsChanged();
     void accepted(quint64 submission); // Never emitted by the disconnected facade.
     void filesPicked(QVariantList files, QString error);
     void conversationReplaced(QString left);
-    void sessionUnfinished(QString sessionId);
     void sessionRemoved(QString sessionId, bool deleted);
     void folderRemoved(QString folder, bool removed, QString notice);
     void previewChanged(QString key, int card);

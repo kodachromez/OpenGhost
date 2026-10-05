@@ -121,7 +121,7 @@ const QHash<QString, Glyph> &glyphs()
           "M34.5 17.7l7.8 7.8",
           5.5, 60}},
         {"pencil-line", {"M30 50h18", 5.5, 60}},
-        // A tool card's kind (glyphs.js terminal, file and globe).
+        // OpenGhost's glyphs.js terminal and file icons.
         {"terminal",
          {"M14 10H46A8 8 0 0 1 54 18V42A8 8 0 0 1 46 50H14A8 8 0 0 1 6 42V18A8 8 0 0 1 14 10Z"
           "M17 23l7 7-7 7M31 37h11",
