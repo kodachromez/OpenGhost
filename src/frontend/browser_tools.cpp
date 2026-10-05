@@ -29,9 +29,150 @@ QString key(const HostToolRequest &r)
     return QString::fromUtf8(QJsonDocument(QJsonArray{r.sessionId, r.turnId, r.toolCallId})
                                  .toJson(QJsonDocument::Compact));
 }
-const QSet<QString> supported = {"browser_snapshot", "browser_tabs", "browser_navigate",
-                                 "browser_wait",     "browser_read", "browser_screenshot",
-                                 "browser_scroll"};
+const QSet<QString> supported = {"browser_navigate", "browser_snapshot",   "browser_click",
+                                 "browser_type",     "browser_select",     "browser_press",
+                                 "browser_scroll",   "browser_screenshot", "browser_read",
+                                 "browser_wait",     "browser_tabs"};
+const QSet<QString> inputs = {"browser_click", "browser_type", "browser_select", "browser_press",
+                              "browser_scroll"};
+// JavaScript conversions the reference applies to direct-call arguments.
+bool truthy(const QJsonValue &v)
+{
+    switch (v.type()) {
+    case QJsonValue::Bool:
+        return v.toBool();
+    case QJsonValue::Double:
+        return v.toDouble() != 0 && !std::isnan(v.toDouble());
+    case QJsonValue::String:
+        return !v.toString().isEmpty();
+    case QJsonValue::Array:
+    case QJsonValue::Object:
+        return true;
+    default:
+        return false;
+    }
+}
+double number(const QJsonValue &v)
+{
+    switch (v.type()) {
+    case QJsonValue::Null:
+        return 0;
+    case QJsonValue::Bool:
+        return v.toBool();
+    case QJsonValue::Double:
+        return v.toDouble();
+    case QJsonValue::String: {
+        const auto text = v.toString().trimmed();
+        if (text.isEmpty())
+            return 0;
+        bool ok = false;
+        const double value = text.toDouble(&ok);
+        return ok ? value : std::nan("");
+    }
+    default:
+        return std::nan("");
+    }
+}
+QString string(const QJsonValue &v)
+{
+    switch (v.type()) {
+    case QJsonValue::String:
+        return v.toString();
+    case QJsonValue::Bool:
+        return v.toBool() ? "true" : "false";
+    case QJsonValue::Double: {
+        auto json = QJsonDocument(QJsonArray{v}).toJson(QJsonDocument::Compact);
+        return QString::fromUtf8(json.mid(1, json.size() - 2));
+    }
+    case QJsonValue::Null:
+        return "null";
+    case QJsonValue::Undefined:
+        return "undefined";
+    default:
+        return "[object Object]";
+    }
+}
+// A ref other than undefined/null/empty string selects the element.
+bool present(const QJsonValue &ref)
+{
+    return !ref.isUndefined() && !ref.isNull() && ref != QJsonValue("");
+}
+// desktop/browser.js KEYS/MODIFIERS/keyOf(): never an OS-dependent guess.
+struct Stroke {
+    BrowserAutomation::Input event;
+    QString error;
+};
+Stroke keyOf(const QString &combo)
+{
+    struct Named {
+        const char *key, *code;
+        int vk;
+        const char *text;
+    };
+    static const QHash<QString, Named> keys = {{"enter", {"Enter", "Enter", 13, "\r"}},
+                                               {"return", {"Enter", "Enter", 13, "\r"}},
+                                               {"tab", {"Tab", "Tab", 9, ""}},
+                                               {"escape", {"Escape", "Escape", 27, ""}},
+                                               {"esc", {"Escape", "Escape", 27, ""}},
+                                               {"backspace", {"Backspace", "Backspace", 8, ""}},
+                                               {"delete", {"Delete", "Delete", 46, ""}},
+                                               {"space", {" ", "Space", 32, " "}},
+                                               {"arrowup", {"ArrowUp", "ArrowUp", 38, ""}},
+                                               {"arrowdown", {"ArrowDown", "ArrowDown", 40, ""}},
+                                               {"arrowleft", {"ArrowLeft", "ArrowLeft", 37, ""}},
+                                               {"arrowright", {"ArrowRight", "ArrowRight", 39, ""}},
+                                               {"up", {"ArrowUp", "ArrowUp", 38, ""}},
+                                               {"down", {"ArrowDown", "ArrowDown", 40, ""}},
+                                               {"left", {"ArrowLeft", "ArrowLeft", 37, ""}},
+                                               {"right", {"ArrowRight", "ArrowRight", 39, ""}},
+                                               {"pageup", {"PageUp", "PageUp", 33, ""}},
+                                               {"pagedown", {"PageDown", "PageDown", 34, ""}},
+                                               {"home", {"Home", "Home", 36, ""}},
+                                               {"end", {"End", "End", 35, ""}}};
+    static const QHash<QString, int> modifiers = {
+        {"alt", 1}, {"control", 2}, {"ctrl", 2}, {"meta", 4}, {"cmd", 4}, {"win", 4}, {"shift", 8}};
+    Stroke out;
+    QStringList parts;
+    for (const auto &part : combo.split('+'))
+        if (!part.trimmed().isEmpty())
+            parts << part.trimmed();
+    if (parts.isEmpty()) {
+        out.error = "key is empty";
+        return out;
+    }
+    auto &event = out.event;
+    for (const auto &part : parts.mid(0, parts.size() - 1)) {
+        const int bit = modifiers.value(part.toLower());
+        if (!bit) {
+            out.error = "Unknown modifier " + part + ". Use Control, Alt, Shift or Meta.";
+            return out;
+        }
+        event.modifiers |= bit;
+    }
+    const auto last = parts.last();
+    if (const auto known = keys.find(last.toLower()); known != keys.end()) {
+        event.key = known->key;
+        event.code = known->code;
+        event.vk = known->vk;
+        event.text = event.modifiers & 7 ? QString() : QString::fromLatin1(known->text);
+        return out;
+    }
+    if (last.size() != 1) {
+        out.error = "Unknown key " + last +
+                    ". Use Enter, Tab, Escape, Backspace, Delete, Space, arrows, PageUp, "
+                    "PageDown, Home, End or a single character.";
+        return out;
+    }
+    static const QRegularExpression letter(QStringLiteral("[A-Z]")), digit(QStringLiteral("[0-9]"));
+    const auto upper = last.toUpper();
+    event.key = last;
+    event.code = letter.match(upper).hasMatch() ? "Key" + upper
+                 : digit.match(last).hasMatch() ? "Digit" + last
+                                                : QString();
+    event.vk = upper.at(0).unicode();
+    event.text = event.modifiers & 7 ? QString() : last;
+    return out;
+}
 } // namespace
 struct BrowserTools::Job {
     RequestId id;
@@ -43,7 +184,10 @@ struct BrowserTools::Job {
     QElapsedTimer elapsed;
     qint64 deadline = 0, loadDeadline = 0;
     bool explicitTab = false, done = false, started = false, navigating = false;
-    bool dirty = false, handed = false, held = false, addTabs = false;
+    // follow: a navigation-permissive step was issued; later barriers follow the
+    // replacement document (navigating additionally stops loading on abandon).
+    bool follow = false, dirty = false, handed = false, held = false, addTabs = false;
+    QPointer<QObject> back; // browser-panel.js run(): document.activeElement at receipt
 };
 BrowserTools::BrowserTools(Browser &browser, BrowserAutomation &engine)
     : QObject(nullptr), m_browser(browser), m_engine(engine)
@@ -74,6 +218,7 @@ BrowserTools::BrowserTools(Browser &browser, BrowserAutomation &engine)
 }
 BrowserTools::~BrowserTools()
 {
+    m_closing = true;
     const auto jobs = m_jobs.values();
     for (const auto &job : jobs)
         abandon(job);
@@ -139,6 +284,7 @@ void BrowserTools::run(RequestId id, const HostToolRequest &request)
     if (const auto *tab = m_browser.tab(job->tab))
         job->receiptRevision = tab->revision;
     job->lease = m_browser.m_selectionRevision;
+    job->back = m_engine.focused();
     // ChatService admits live turns. This owner also refuses conflicting/reused
     // identities so a queued step can never silently acquire another turn.
     QString error;
@@ -179,6 +325,11 @@ void BrowserTools::abandon(const Work &job)
         }
         m_reads.remove(job->tab);
     }
+    // browser-panel.js giveBack(): after any step, a keyboard the step moved
+    // into a guest returns to where the user was, unless the user has control.
+    if (!m_closing && !m_browser.m_user)
+        if (const auto lent = m_engine.giveBack(job->back.data()); !lent.isEmpty())
+            m_browser.m_lent = lent;
 }
 void BrowserTools::cancel(RequestId id)
 {
@@ -233,7 +384,7 @@ void BrowserTools::controlChanged()
                     m_browser.update(tab->handle);
                 }
             }
-            job->dirty = job->navigating = false;
+            job->dirty = job->navigating = job->follow = false;
             job->held = job->handed = true;
         } else if (job->held) {
             job->held = false;
@@ -247,6 +398,7 @@ void BrowserTools::controlChanged()
             job->explicitTab = false;
             job->tab = m_browser.activeHandle();
             job->lease = m_browser.m_selectionRevision;
+            job->back = m_engine.focused();
             if (const auto *tab = m_browser.tab(job->tab))
                 job->receiptRevision = tab->revision;
         }
@@ -334,7 +486,7 @@ bool BrowserTools::check(const Work &job, bool page)
         fail(job, "stale_tab", "The active browser target changed. Take a new snapshot.");
         return false;
     }
-    if (page && !job->page.isEmpty() && !job->navigating && tab->pageId != job->page) {
+    if (page && !job->page.isEmpty() && !job->follow && tab->pageId != job->page) {
         fail(job, "stale_page", "The page changed. Take a new snapshot.");
         return false;
     }
@@ -404,7 +556,26 @@ void BrowserTools::dispatch(const Work &job)
     if (!check(job))
         return;
     const auto name = job->request.name;
-    if (name == "browser_snapshot")
+    const auto &args = job->request.args;
+    if (inputs.contains(name) && !truthy(args["pageId"])) {
+        fail(job, "stale_page", "Pass pageId from a fresh snapshot with browser input.");
+        return;
+    }
+    // A step that types where the page's focus is gets the lent keyboard back.
+    const bool keys =
+        name == "browser_press" ||
+        (name == "browser_type" && (args["ref"].isUndefined() || args["ref"].isNull()));
+    if (keys && m_browser.lent() == job->tab)
+        emit m_browser.act(job->tab, QStringLiteral("focus"), {});
+    if (name == "browser_click")
+        click(job);
+    else if (name == "browser_type")
+        type(job);
+    else if (name == "browser_select")
+        select(job);
+    else if (name == "browser_press")
+        press(job);
+    else if (name == "browser_snapshot")
         observe(job);
     else if (name == "browser_navigate")
         navigate(job);
@@ -434,9 +605,9 @@ void BrowserTools::query(const Work &job, BrowserAutomation::Query kind, QJsonOb
             fail(job, "timeout", "The page is not responding");
     });
     auto queryTarget = target(job);
-    // Navigation deliberately follows the replacement document while settling.
-    // All non-navigation steps retain the exact document they admitted.
-    if (job->navigating)
+    // Navigation and a final input deliberately follow the replacement document
+    // while settling. All other steps retain the exact document they admitted.
+    if (job->follow)
         queryTarget.document = m_browser.tab(job->tab)->document;
     m_engine.query(call, queryTarget, kind, args,
                    now() + std::min<qint64>(m_limits.call, job->deadline - job->elapsed.elapsed()),
@@ -631,7 +802,7 @@ void BrowserTools::navigate(const Work &job)
         url = ipv6.match(raw).hasMatch() ? "http://" + raw : Browser::normalize(raw);
         verb = "load";
     }
-    job->navigating = true;
+    job->navigating = job->follow = true;
     m_browser.find(job->tab)->error.clear();
     const auto before = tab->revision;
     m_engine.navigate(target(job), verb, url);
@@ -664,7 +835,7 @@ void BrowserTools::navigate(const Work &job)
                 }
                 job->page = current->pageId;
                 job->document = current->document;
-                job->navigating = false;
+                job->navigating = job->follow = false;
                 observe(job);
             },
             history);
@@ -792,37 +963,295 @@ void BrowserTools::screenshot(const Work &job)
 }
 void BrowserTools::scroll(const Work &job)
 {
-    if (job->request.args["pageId"].toString().isEmpty()) {
-        fail(job, "stale_page", "Pass pageId from a fresh snapshot with browser input.");
-        return;
-    }
     const auto after = [this, job] {
         later(job, 250, [this, job] { settle(job, [this, job] { observe(job); }); });
     };
-    const auto ref = job->request.args["ref"];
-    if (!ref.isUndefined() && !ref.isNull() && ref != QJsonValue("")) {
+    const auto args = job->request.args;
+    const auto ref = args["ref"];
+    if (present(ref)) {
         job->dirty = true;
         query(job, BrowserAutomation::Query::Reveal, {{"ref", ref}},
               [after](QJsonObject) { after(); });
         return;
     }
-    double amount = job->request.args["amount"].toDouble();
-    amount = std::clamp(amount ? amount : 0.8, 0.1, 10.0);
-    if (job->request.args["direction"].toString().toLower() == "up")
-        amount = -amount;
+    const double requested = number(args["amount"]);
+    const double amount =
+        std::min(10.0, std::max(0.1, requested && !std::isnan(requested) ? requested : 0.8));
+    const double sign =
+        (truthy(args["direction"]) ? string(args["direction"]) : "down").toLower() == "up" ? -1 : 1;
+    query(job, BrowserAutomation::Query::Metrics, {},
+          [this, job, amount, sign, after](QJsonObject metrics) {
+              // A mouse wheel at the visual viewport's centre, by its client height.
+              BrowserAutomation::Input wheel;
+              wheel.kind = BrowserAutomation::Input::Kind::Wheel;
+              wheel.x = metrics["viewWidth"].toDouble() / 2;
+              wheel.y = metrics["viewHeight"].toDouble() / 2;
+              wheel.deltaY = sign * metrics["viewHeight"].toDouble() * amount;
+              send(job, wheel, false, after);
+          });
+}
+void BrowserTools::send(const Work &job, const BrowserAutomation::Input &event, bool mayNavigate,
+                        std::function<void()> next)
+{
+    if (!check(job))
+        return;
+    job->dirty = true;
     job->call = ++m_serial;
     const auto call = job->call, generation = job->generation;
-    m_engine.wheel(
-        call, target(job), amount, [this, job, call, generation, after](QJsonObject answer) {
-            if (job->generation != generation || job->call != call || !check(job))
+    QTimer::singleShot(m_limits.call, this, [this, job, call, generation] {
+        if (!job->done && !job->held && job->call == call && job->generation == generation)
+            fail(job, "timeout", "Browser input timed out");
+    });
+    m_engine.input(call, target(job), event,
+                   [this, job, call, generation, next = std::move(next)](QJsonObject answer) {
+                       if (job->generation != generation || job->call != call || !check(job))
+                           return;
+                       job->call = 0;
+                       if (answer.contains("error"))
+                           fail(job, answer["code"].toString("browser_error"),
+                                answer["error"].toString());
+                       else
+                           next();
+                   });
+    // The final input may itself navigate before it is acknowledged. Only its
+    // release and observation may follow, never input to a replacement page.
+    if (mayNavigate)
+        job->follow = true;
+}
+void BrowserTools::barrier(const Work &job, std::function<void()> next)
+{
+    // Between dispatches of one sequence: a round trip to the admitted
+    // document and page. A page change stops the remaining input.
+    query(job, BrowserAutomation::Query::Probe, {}, [next](QJsonObject) { next(); });
+}
+void BrowserTools::pointer(const Work &job, double x, double y, std::function<void()> next)
+{
+    if (!check(job))
+        return;
+    emit m_browser.pointer(job->tab, x, y);
+    // The pointer is shown moving only on a guest the open panel shows.
+    if (m_browser.isOpen() && m_browser.activeHandle() == job->tab)
+        later(job, 420, std::move(next));
+    else
+        next();
+}
+void BrowserTools::mouse(const Work &job, double x, double y, int count, bool mayNavigate,
+                         std::function<void()> next)
+{
+    using Kind = BrowserAutomation::Input::Kind;
+    const auto event = [x, y](Kind kind, int k) {
+        BrowserAutomation::Input e;
+        e.kind = kind;
+        e.x = x;
+        e.y = y;
+        e.count = k;
+        return e;
+    };
+    auto step = std::make_shared<std::function<void(int)>>();
+    std::weak_ptr<std::function<void(int)>> weak = step;
+    *step = [this, job, event, count, mayNavigate, next, weak](int k) {
+        auto keep = weak.lock();
+        if (!keep)
+            return;
+        const bool final = k == count;
+        send(job, event(Kind::Press, k), mayNavigate && final,
+             [this, job, event, k, final, next, keep] {
+                 send(job, event(Kind::Release, k), false, [this, job, k, final, next, keep] {
+                     if (final)
+                         next();
+                     else
+                         barrier(job, [keep, k] { (*keep)(k + 1); });
+                 });
+             });
+    };
+    send(job, event(Kind::Move, 1), false, [step] { (*step)(1); });
+}
+void BrowserTools::stroke(const Work &job, const QString &combo, bool mayNavigate,
+                          std::function<void()> next)
+{
+    const auto parsed = keyOf(combo);
+    if (!parsed.error.isEmpty()) {
+        fail(job, "browser_error", parsed.error);
+        return;
+    }
+    auto down = parsed.event, up = parsed.event;
+    down.kind = BrowserAutomation::Input::Kind::KeyDown;
+    up.kind = BrowserAutomation::Input::Kind::KeyUp;
+    send(job, down, mayNavigate,
+         [this, job, up, next = std::move(next)] { send(job, up, false, next); });
+}
+void BrowserTools::afterInput(const Work &job, const QString &note)
+{
+    job->follow = true;
+    settle(job, [this, job, note] {
+        const auto *tab = m_browser.tab(job->tab);
+        job->page = tab->pageId;
+        job->document = tab->document;
+        job->follow = false;
+        observe(job, note);
+    });
+}
+void BrowserTools::click(const Work &job)
+{
+    const auto args = job->request.args;
+    const auto ref = args["ref"];
+    const int count = truthy(args["double"]) ? 2 : 1;
+    const auto proceed = [this, job, ref, count](double x, double y) {
+        if (!check(job))
+            return;
+        pointer(job, x, y, [this, job, ref, count, x, y] {
+            const auto go = [this, job, count, x, y] {
+                mouse(job, x, y, count, true, [this, job] { afterInput(job); });
+            };
+            // Loose `ref != null`, exactly as the reference rechecks.
+            if (ref.isUndefined() || ref.isNull()) {
+                go();
                 return;
-            job->call = 0;
-            if (answer.contains("error"))
-                fail(job, answer["code"].toString("browser_error"), answer["error"].toString());
-            else {
-                job->dirty = true;
-                after();
             }
+            job->dirty = true;
+            query(job, BrowserAutomation::Query::Point, {{"ref", ref}},
+                  [this, job, x, y, go](QJsonObject spot) {
+                      if (!spot["covered"].toString().isEmpty() || spot["x"].toDouble() != x ||
+                          spot["y"].toDouble() != y)
+                          fail(job, "stale_target",
+                               "The click target moved or is covered. Take a new snapshot.");
+                      else
+                          go();
+                  });
         });
+    };
+    if (present(ref)) {
+        job->dirty = true;
+        query(job, BrowserAutomation::Query::Point, {{"ref", ref}},
+              [this, job, ref, proceed](QJsonObject spot) {
+                  if (!spot["covered"].toString().isEmpty())
+                      fail(job, "element_covered",
+                           "Element [" + string(ref) + "] is covered by " +
+                               spot["covered"].toString() + ". No click was sent.");
+                  else
+                      proceed(spot["x"].toDouble(), spot["y"].toDouble());
+              });
+        return;
+    }
+    const double x = number(args["x"]), y = number(args["y"]);
+    if (!std::isfinite(x) || !std::isfinite(y)) {
+        fail(job, "browser_error", "Pass ref from the snapshot, or x and y in page pixels");
+        return;
+    }
+    proceed(x, y);
+}
+void BrowserTools::type(const Work &job)
+{
+    const auto args = job->request.args;
+    const auto ref = args["ref"];
+    const QString text =
+        args["text"].isUndefined() || args["text"].isNull() ? QString() : string(args["text"]);
+    const bool clear = args["clear"] != QJsonValue(false), submit = truthy(args["submit"]);
+    const auto finish = [this, job, submit] {
+        if (!submit) {
+            afterInput(job);
+            return;
+        }
+        later(job, 60,
+              [this, job] { stroke(job, "Enter", true, [this, job] { afterInput(job); }); });
+    };
+    const auto insert = [this, job, text, submit, finish] {
+        if (!check(job))
+            return;
+        if (text.isEmpty()) {
+            finish();
+            return;
+        }
+        BrowserAutomation::Input commit;
+        commit.kind = BrowserAutomation::Input::Kind::Text;
+        commit.text = text;
+        send(job, commit, !submit, [this, job, submit, finish] {
+            if (submit)
+                barrier(job, finish);
+            else
+                finish();
+        });
+    };
+    const auto keys = [this, job, text, clear, submit, insert] {
+        if (!check(job))
+            return;
+        if (!clear) {
+            insert();
+            return;
+        }
+        stroke(job, "Control+A", false, [this, job, text, submit, insert] {
+            barrier(job, [this, job, text, submit, insert] {
+                if (!text.isEmpty()) {
+                    insert();
+                    return;
+                }
+                stroke(job, "Delete", !submit, [this, job, submit, insert] {
+                    if (submit)
+                        barrier(job, insert);
+                    else
+                        insert();
+                });
+            });
+        });
+    };
+    if (!present(ref)) {
+        keys();
+        return;
+    }
+    job->dirty = true;
+    query(job, BrowserAutomation::Query::Point, {{"ref", ref}},
+          [this, job, ref, keys](QJsonObject spot) {
+              const double x = spot["x"].toDouble(), y = spot["y"].toDouble();
+              if (!check(job))
+                  return;
+              pointer(job, x, y, [this, job, ref, keys, x, y] {
+                  query(job, BrowserAutomation::Query::Point, {{"ref", ref}},
+                        [this, job, keys, x, y](QJsonObject now) {
+                            if (!now["covered"].toString().isEmpty() || now["x"].toDouble() != x ||
+                                now["y"].toDouble() != y) {
+                                fail(job, "stale_target",
+                                     "The field moved or is covered. Take a new snapshot.");
+                                return;
+                            }
+                            mouse(job, x, y, 1, false, [this, job, keys] {
+                                barrier(job, [this, job, keys] { later(job, 80, keys); });
+                            });
+                        });
+              });
+          });
+}
+void BrowserTools::select(const Work &job)
+{
+    const auto args = job->request.args;
+    job->dirty = true;
+    query(job, BrowserAutomation::Query::Choose, {{"ref", args["ref"]}, {"option", args["option"]}},
+          [this, job](QJsonObject answer) {
+              afterInput(job, "Chose \"" + answer["chosen"].toString() + "\".");
+          });
+    // The whole choice may navigate (a change handler); only observation follows.
+    job->follow = true;
+}
+void BrowserTools::press(const Work &job)
+{
+    const auto args = job->request.args;
+    const double times = number(args["times"]);
+    const int count = int(
+        std::min(20.0, std::max(1.0, std::floor((times && !std::isnan(times) ? times : 1) + 0.5))));
+    const auto combo = truthy(args["key"]) ? string(args["key"]) : QString();
+    auto step = std::make_shared<std::function<void(int)>>();
+    std::weak_ptr<std::function<void(int)>> weak = step;
+    *step = [this, job, combo, count, weak](int k) {
+        auto keep = weak.lock();
+        if (!keep || !check(job))
+            return;
+        const bool final = k == count - 1;
+        stroke(job, combo, final, [this, job, final, keep, k] {
+            if (final)
+                afterInput(job);
+            else
+                barrier(job, [keep, k] { (*keep)(k + 1); });
+        });
+    };
+    (*step)(0);
 }
 } // namespace openghost

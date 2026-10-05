@@ -1,6 +1,160 @@
 # Browser tools: native implementation map
 
+## Mutating input landing (based exactly on `4b9218c`)
+
+Branch `feat/native-browser-mutating-tools` in a new worktree started at
+`4b9218c8ff04e4f8415f579823330ab0fc03850a`. It supersedes the input rows of the
+automation landing below. No reference, Rust/RPC/FFI, plugin, other worktree or
+visual-parity change. **No CDP endpoint, remote-debugging flag or client.**
+
+### Reachable tools
+
+All eleven unchanged prepared schemas are published, in reference order.
+
+| Tool | Status | Notes |
+| --- | --- | --- |
+| `browser_click` | MATCH | Ref or `Number()` x/y, covered/moved/stale refusals, pointer delay, double click, final-press navigation |
+| `browser_select` | MATCH | The reference's own isolated `choose` (untrusted input/change there too) |
+| `browser_scroll` | MATCH | Ref reveal and exact direction/amount wheel |
+| `browser_type` | PARTIAL | Behavior matches; the Control+A keydown `key` is `a`, not the reference's literal `A` |
+| `browser_press` | PARTIAL | Key table/errors/repeats match; DOM key-field differences listed below |
+| `browser_screenshot` | PARTIAL | Unchanged: tall/scrolled full page refuses `unavailable` |
+| Snapshot, tabs, navigate, wait, read | MATCH | Unchanged |
+
+### Trusted input through public Qt
+
+- `BrowserAutomation::input` is the QtCore seam: one reference-shaped event
+  (Move/Press/Release with click count, KeyDown/KeyUp with keyOf()'s key, code,
+  virtual key, text and modifier bits, Text, Wheel with CSS deltaY). Engines never
+  reply inline; cancel drops completion, not issued effects.
+- `QtBrowserAutomation` sends `QMouseEvent`, `QKeyEvent`, `QInputMethodEvent` and
+  `QWheelEvent` with `QCoreApplication::sendEvent` directly to the WebEngine
+  view's input item (`RenderWidgetHostViewQtDelegateItem`, found by class name
+  among the view's children). Pages see `isTrusted` events. Window hit-testing is
+  skipped, so the input-blocking driving shield cannot intercept, as CDP input
+  bypasses the reference's embedder. The earlier prototype's direct wheel failed
+  only because it used a touchpad phase; a phase-less wheel works.
+- **Click counts:** WebEngine counts clicks from event timestamps, so mouse
+  events use a private clock starting at 2^40: each sequence jumps 10^6 ms, the
+  second press of a double click is 1 ms later. Separate steps never merge into a
+  double click with each other or with user clicks.
+- **Keys:** the reference `KEYS`/`MODIFIERS`/`keyOf` table is ported verbatim
+  into `BrowserTools` (errors included). Named keys and A–Z/0–9 carry the Qt key
+  and US XKB scan code (WebEngine derives `code` from it). An unmodified other
+  character carries only its text, so `key`/`code`/text match. Control/Alt/Meta
+  suppress text exactly as in the reference.
+- **Text:** a single `QInputMethodEvent` commit is the same renderer insertion as
+  CDP `Input.insertText`: trusted `beforeinput`/`input` with `insertText`, no
+  per-character key events, Unicode/surrogates intact.
+- **Wheel:** WebEngine converts a phase-less wheel to CSS pixels as
+  `angle/120 × wheelScrollLines × 20` and caches the line count per process; the
+  adapter inverts that, caching the same style hint. deltaY is exact at that
+  resolution (0.5 CSS px with the default 3 lines); deltaX 0, deltaMode 0, at the
+  visual viewport centre. The page scrolls by exactly deltaY in the tests.
+- **Focus emulation:** from a guest's first automated step (reference `attach`),
+  its input item's `FocusOut` is withheld and, if needed, a `FocusIn` is sent to
+  it: `Emulation.setFocusEmulationEnabled`. Qt keyboard focus still moves
+  (BrowserFocus, blur, giveBack), but the page sees no blur/change and keeps
+  `document.hasFocus()`. IME commits require page focus, so this is also what
+  lets ref-less type work without taking the app's keyboard.
+- **giveBack/lending:** the focused item at receipt is recorded. After every
+  step (finish or cancellation), unless the user has control, a keyboard the
+  step moved into a guest returns there and the page is recorded as lent. Press
+  and ref-less type focus a lent page first, as `browser-panel.js::run` does.
+
+### Sequencing and barriers (`BrowserTools`)
+
+- `act`'s order is ported: input needs a truthy pageId; ref point (scroll into
+  view, left-centre, clamp, hit test) → `element_covered` before any click;
+  pointer event + 420 ms when the open panel shows the guest; re-point →
+  `stale_target`; move, press/release pairs; type's focus click, 80 ms,
+  Control+A, Delete (empty text), insert, 60 ms + Enter; select's `choose`;
+  press repetitions; scroll metrics + wheel; 250 ms; settle; SS.
+- Direct-call coercions follow JavaScript: `Number()`, `String()`, truthiness,
+  `?? ''`, `clear !== false`, loose `ref != null` on click's recheck, and
+  `Math.round` for times.
+- Every dispatch is checked before and after its completion (owner, deadline,
+  tab, crash, lease, page). Between dispatches a `Probe` query round-trips to the
+  admitted document; input queries never install a ref map and refuse a changed
+  pageId, replaced document or a document-initiated navigation seen by the
+  isolated world's Navigation API `navigate` listener. Only the final dispatch is
+  navigation-permissive; it is followed by its release and settle/observation
+  of the replacement document. Partial input marks the observation dirty, so
+  cancellation, timeout or refusal after any input revises pageId and read state.
+- The barrier replaces CDP's per-command acknowledgement. It is a bounded JS
+  round trip plus native load/URL/document signals, not a renderer input ack.
+
+### Recorded differences (tested, not hidden)
+
+Public `QKeyEvent` lets WebEngine derive several DOM fields itself:
+
+- Unmodified non-alphanumeric characters: keydown/keyup `keyCode` is 0. The
+  reference sends `charCodeAt()` as the virtual key ('/' 47, '.' 46 = Delete).
+- Control/Alt/Meta letter chords use Qt's case: `Control+A` → `a`, `Alt+X` → `x`,
+  `Control+Shift+x` → `X` (reference: literal `A`, `X`, `x`). This is the only
+  difference in `browser_type` (its Control+A keydown).
+- Chorded punctuation carries a layout code/keyCode (`ctrl+/` → `Slash`/191;
+  reference `''`/47); chorded non-ASCII keeps `code` empty but keyCode 0 (é: 201).
+- Enter with Control/Alt/Meta also produces WebEngine's `\r` keypress (so e.g.
+  a field's change/implicit Enter behavior); the reference's raw key down has none.
+
+Sending a Qt key whose virtual key equals the reference value would change
+`code`/`key` and trigger that key's editing command, and many reference values
+have no Qt key; this was rejected rather than substituting a closer-looking
+fake. Fixing these needs an engine API that sets DOM key fields; CDP would do it
+but is not justified for these fields alone.
+
+### Validation
+
+Build directories outside the worktree, Release, Qt 6.11.2/GCC 16.2.1:
+
+```sh
+cmake -S . -B ~/.cache/og-mutating-on -DCMAKE_BUILD_TYPE=Release -DOPENGHOST_BUILD_SMOKE_TEST=ON
+cmake --build ~/.cache/og-mutating-on --target openghost-native native_browser_test \
+  native_browser_operations_test native_browser_automation_test native_contract_test
+ctest --test-dir ~/.cache/og-mutating-on \
+  -R '^native_browser(_operations|_automation)?_test$' --output-on-failure
+~/.cache/og-mutating-on/native_contract_test
+cmake -S . -B ~/.cache/og-mutating-off -DCMAKE_BUILD_TYPE=Release \
+  -DOPENGHOST_BUILD_SMOKE_TEST=ON -DOPENGHOST_BROWSER=OFF
+cmake --build ~/.cache/og-mutating-off --target openghost-native native_browser_test \
+  native_browser_operations_test native_contract_test
+ctest --test-dir ~/.cache/og-mutating-off -R '^native_browser(_operations)?_test$'
+~/.cache/og-mutating-off/native_contract_test
+ldd ~/.cache/og-mutating-off/openghost-native | grep -i webengine   # none
+node --test tests/browser-tools/reference.test.cjs
+node --test reference/openghost/test/browser-lifecycle.test.js
+git diff --check
+```
+
+Results, each ON/OFF where built: foundation `native_browser_test` **12 passes**,
+owner `native_browser_operations_test` **13 passes** (4 new input-sequencing
+cases), whole `native_contract_test` **55 passes**; ON-only real guest
+`native_browser_automation_test` **20 passes** (18 functions plus init/cleanup),
+run four times without failure after the final change. Node oracle **27 passes**,
+reference lifecycle **16 passes**. No skips. `ldd`: no WebEngine in the OFF
+binary (two WebEngine libraries in ON). GCC's pre-existing Qt metatype
+`-Wmaybe-uninitialized` and the OFF build's unused `browser_smoke.cpp` helper
+warnings remain; nothing in the changed files warns.
+
+New real-guest functions: `exactPreparedSchemasAndInputPageRequirement`,
+`clickTrustedRefCoordinatesDoubleAndFocusReturn`,
+`clickCoveredMovedAndFinalNavigation`, `typeInsertsTextClearsAppendsAndSubmits`,
+`typeAndPressAtPageFocusWithoutAppKeyboard`,
+`typeFieldMovedRefusesAndCancelSendsNothing`,
+`selectMatchesTextValueAndDispatchesInputChange`,
+`pressKeysModifiersRepeatAndNavigationBarrier`,
+`scrollWheelExactDirectionAndDelta`, `inputRendererLossAndTakeControl`. New
+owner functions: `inputSequenceStopsOnCancelAndLateAcknowledgement`,
+`navigationBetweenDoubleClickPressesStopsTheSecond`,
+`finalInputMayNavigateThenObservesTheReplacement`,
+`inputDeadlineSuppressesLateAcknowledgement`. The two prototypes
+(`nativeWheelDeliveryPrototype`, `trustedInputPrototypeNotToolImplementation`)
+were replaced by these tool tests. No UI smoke or visual parity run.
+
 ## Native automation landing (based exactly on `ce4cbce`)
+
+Historical record of `4b9218c`; its input rows are superseded above.
 
 Current implementation supersedes the **historical preparation baseline** below.
 The separate `feat/native-browser-automation` worktree started at

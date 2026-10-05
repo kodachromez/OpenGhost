@@ -186,6 +186,45 @@ function install(pageId) {
   return el;
  }
 
+ function inside(node, root) {
+  for (let n = node; n; n = n.parentNode || n.host) if (n === root) return true;
+  return false;
+ }
+
+ function point(ref) {
+  const el = element(ref);
+  el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+  const r = rectOf(el), vw = innerWidth, vh = innerHeight;
+  const x = Math.min(Math.max(r.left + Math.min(r.width / 2, 40), 1), vw - 1);
+  const y = Math.min(Math.max(r.top + r.height / 2, 1), vh - 1);
+  let hit = document.elementFromPoint(x, y);
+  while (hit?.shadowRoot) {
+   const deeper = hit.shadowRoot.elementFromPoint(x, y);
+   if (!deeper || deeper === hit) break;
+   hit = deeper;
+  }
+  const own = !hit || inside(hit, el) || inside(el, hit) || (hit.tagName === 'IFRAME' && el.ownerDocument !== document);
+  return { x, y, label: describe(el), covered: own ? '' : describe(hit) };
+ }
+
+ // The reference's own choice: isolated DOM assignment plus bubbling input and
+ // change events (untrusted there too), not a pointer-driven popup choice.
+ function choose(ref, wanted) {
+  const el = element(ref);
+  if (el.tagName !== 'SELECT') throw new Error(`[${ref}] is not a dropdown list. Click it and then click the option you need.`);
+  const want = clean(String(wanted)).toLowerCase();
+  const options = [...el.options];
+  const option = options.find(o => clean(o.text).toLowerCase() === want || o.value.toLowerCase() === want)
+   || options.find(o => clean(o.text).toLowerCase().includes(want));
+  if (!option) throw new Error(`No option like "${wanted}" in [${ref}]. Options: ${options.map(o => clean(o.text)).filter(Boolean).slice(0, 40).join(' | ')}`);
+  el.focus();
+  el.value = option.value;
+  option.selected = true;
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  el.dispatchEvent(new Event('change', { bubbles: true }));
+  return clean(option.text);
+ }
+
  function reveal(ref) {
   element(ref).scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
   return true;
@@ -210,7 +249,12 @@ function install(pageId) {
   return false;
  }
 
- window.__og = { pageId, snapshot, reveal, quiet, has, dispose: () => observer.disconnect() };
+ // did-start-navigation also revises the reference's pageId before an input
+ // acknowledgement; a document-initiated navigation fails later input here.
+ let navigating = false;
+ const navigated = () => { navigating = true; };
+ window.navigation?.addEventListener('navigate', navigated);
+ window.__og = { pageId, snapshot, point, choose, reveal, quiet, has, navigating: () => navigating, dispose: () => { observer.disconnect(); window.navigation?.removeEventListener('navigate', navigated); } };
 }
 
 const clean = text => text.replace(/[ \t\u00a0]+/g, ' ').replace(/ *\n */g, '\n').replace(/\n{3,}/g, '\n\n').trim();

@@ -33,6 +33,17 @@ unpublished. No CDP/debug endpoint was enabled. See
 [browser-tools-port.md](browser-tools-port.md) for limitations and focused tests.
 Unrelated file/media findings remain unchanged.
 
+**Update — mutating input slice, based exactly on `4b9218c`.** Click, press,
+type and select are implemented and all eleven unchanged schemas are published;
+scroll's direction/amount wheel works. Input is trusted Qt event delivery to the
+guest's own WebEngine input item (bypassing the driving shield as CDP bypasses
+the embedder), with reference focus emulation, explicit click counts, IME-style
+text commit and exact angle-derived wheel deltas. Select reuses the reference's
+isolated choice. **No CDP or debug endpoint was needed or enabled.** T06 (and a
+single Control+A key field of T04) keeps narrow, tested DOM key-field
+differences that public `QKeyEvent` cannot express. See
+[mutating input](#mutating-input-slice).
+
 ### Summary counts
 
 Each matrix row is one audited behavior. Cross-cutting lifecycle and individual
@@ -41,10 +52,10 @@ Reference absences listed later are not counted as missing features.
 
 | Status | Features |
 | --- | ---: |
-| MATCH | 25 |
-| PARTIAL | 17 |
+| MATCH | 30 |
+| PARTIAL | 16 |
 | MOCK ONLY | 2 |
-| MISSING | 30 |
+| MISSING | 26 |
 | INTENTIONAL DIFFERENCE | 1 |
 | **Total** | **75** |
 
@@ -52,8 +63,9 @@ The original audit counted 6 / 10 / 4 / 54 / 1; the browser foundation slice
 moved B01–B04, B06 and B15 to MATCH, B05, B07, B09–B13 and H07 from MISSING to
 PARTIAL, and H02 from MOCK ONLY to PARTIAL. Native automation then moved
 B05/B10/B11/H02/H04/H05/H07/H08 and T01/T02/T09/T10/T11 to MATCH;
-H01/H06/T07/T08 to PARTIAL. MATCH scopes the row, not the whole browser or a
-connected agent; input, download and sign-in gaps have separate rows.
+H01/H06/T07/T08 to PARTIAL. The mutating input slice moved T03, T05, T07, H01
+and H06 to MATCH and T04/T06 from MISSING to PARTIAL. MATCH scopes the row, not
+the whole browser or a connected agent; download and sign-in gaps have separate rows.
 
 - **MATCH:** the scoped frontend behavior exists, including deliberately inert
   presentation. Does not imply a connected agent or identical pixels.
@@ -173,9 +185,9 @@ Generic JSON capacity is explicitly not credited as an implemented feature.
 | B04 — Per-tab back/forward, reload/stop and external-open controls | MATCH | `browser-panel.js::build/syncBar`; `desktop/browser.js::navigate/adopt` | Bar buttons over `Browser::back/forward/reloadOrStop` → `act` → the guest's own history; enabled from the guest's `canGoBack/canGoForward` once ready; reload swaps to stop while loading; external open uses `WindowController::openExternal` (OS handler, HTTP(S)/mailto only, as before). No history-list UI, as in the reference. | Local navigation state (`Tab::back/forward`), no boundary type. Tested: `tabsNavigationAndLoading`, UI smoke Back. |
 | B05 — Lazy guests, readiness, failure and crash recreation | MATCH | `browser-panel.js::constructor/createView/ensure/close`; `desktop/browser.js::adopt/entry` | Browser retains lazy tabs, 15 s readiness, guarded guest creation and incarnation checks. BrowserTools::ensure recreates failed/gone guests before a later step. BrowserGuest observes an isolated document-creation marker and DOM readyState separately from native resource loading; replaced guests cannot acquire an old operation. Failures/crashes settle owned work. | BS unchanged. Foundation tests; real slow-resource DOM-readiness and renderer-crash/recreation tests. |
 | B06 — Visible loading/error/retry states | MATCH | `browser-panel.js::createView/render/syncBar/build`; `styles.css` browser progress, spinner and error styles | `qml/BrowserPanel.qml`: sweeping 2 px progress band and tab spinner while loading, empty state, failure card (`host · error`, Chromium's `ERR_*` text with Qt's `net::` prefix removed, Try again) and the crash message. | Local presentation; no boundary type. Tested: `errorsCrashesAndRetry`; UI smoke refused port, retry and crash. |
-| B07 — Browser keyboard shortcuts and focus lending | PARTIAL | `desktop/browser.js::adopt` `before-input-event`; `browser-panel.js::constructor/run/giveBack/take/handBack` | Focus lending is ported: `BrowserFocus` (`src/browserfocus.*`) takes the keyboard back from a page on any press outside the panel (yieldKeys); driving blurs the page; Take control focuses it; Hand back blurs it and records the lent page (`Browser::lent`). Missing: the guest shortcuts (F5/Ctrl+R, F12/Ctrl+Shift+I DevTools, Alt+arrows, Ctrl+L/T/W) and `giveBack` after a tool step. | Local focus interface, no boundary type. Tested: `takeControlAndHandBack`; UI smoke click-in/click-out, drive, take, hand back. |
+| B07 — Browser keyboard shortcuts and focus lending | PARTIAL | `desktop/browser.js::adopt` `before-input-event`; `browser-panel.js::constructor/run/giveBack/take/handBack` | Focus lending is ported: `BrowserFocus` (`src/browserfocus.*`) takes the keyboard back from a page on any press outside the panel (yieldKeys); driving blurs the page; Take control focuses it; Hand back blurs it and records the lent page (`Browser::lent`). After every tool step `giveBack` returns a keyboard the step moved into a page to the item focused at receipt and records the lent page; key steps take a lent keyboard back first (`BrowserTools::dispatch/abandon`, `QtBrowserAutomation::focused/giveBack`). Missing: the guest shortcuts (F5/Ctrl+R, F12/Ctrl+Shift+I DevTools, Alt+arrows, Ctrl+L/T/W). | Local focus interface, no boundary type. Tested: `takeControlAndHandBack`; UI smoke click-in/click-out, drive, take, hand back; real-guest click/type giveBack and lent-keyboard tests. |
 | B08 — Guest popup/new-tab routing and context menu | MISSING | `desktop/browser.js::adopt` window-open and context-menu handlers; `browser-panel.js::onEvent` | No equivalent in `src/platform/` or QML. Missing foreground/background tabs from guest links, separate `new-window` popup, open/copy link/image, editable cut/copy/paste/select-all, selection copy, history/reload and Inspect. The WebEngine guests suppress the engine's own page menu and ignore new-window requests rather than substitute non-reference behavior. | Local guest event/menu APIs needed; existing external-link helper is not enough. No boundary type. **Mixed** UI/host. |
-| B09 — Agent ownership overlays and pointer visualization | PARTIAL | `browser-panel.js::drive/sync/point`; `browser-toggle.js` live badge; `desktop/browser.js::pointer` | `qml/BrowserPanel.qml` driving ring/badge (input-blocking), hover-revealed Take control, user banner with Hand back; the toggle's pulsing live dot; all from `Browser::drive` state. BrowserTools now drives this state for admitted host calls. Missing: the animated cursor and click ripple (they need the tools' pointer events). | BS control; local driver state, no boundary type. Tested: `takeControlAndHandBack`, UI smoke overlays. |
+| B09 — Agent ownership overlays and pointer visualization | PARTIAL | `browser-panel.js::drive/sync/point`; `browser-toggle.js` live badge; `desktop/browser.js::pointer` | `qml/BrowserPanel.qml` driving ring/badge (input-blocking), hover-revealed Take control, user banner with Hand back; the toggle's pulsing live dot; all from `Browser::drive` state. BrowserTools now drives this state for admitted host calls. Click and ref typing now emit `Browser::pointer(handle, x, y)` and wait the reference's 420 ms when the open panel shows the guest. Missing: the animated cursor and click ripple that consume those events. | BS control; local driver state, no boundary type. Tested: `takeControlAndHandBack`, UI smoke overlays. |
 | B10 — Take Control / Hand Back without replaying the interrupted action | MATCH | `browser-panel.js::take/handBack/waitForAgent/release`; `chat.js::onHostTool/awaitHandBack/end` | BrowserTools::controlChanged cancels continuations and holds active/queued calls without a user-wait deadline. Hand-back substitutes fresh current-tab snapshots with empty args and handed-back status, even on error, never the original action. inputQueued returns empty cancelled/message results only to that session; turn end drops work and releases driving. | HT/BS unchanged; local HS inputQueued hook. Real hand-back and adversarial held-call tests. Early turn admission remains H03. |
 | B11 — Guest/app trust boundary | MATCH | `desktop/browser.js::guard/adopt/entry/install/world`; `desktop/main.js::fromApp` and browser handlers; `desktop/preload.js` | Separate WebEngine guests/profile; no app objects, WebChannel, Node or debug endpoint. QtBrowserAutomation sends host-owned scripts through ApplicationWorld; the main world cannot replace observation/ref/document state. Incarnation, page/document token, expiry and call-token checks guard completion. The QML adapter is not exposed to page scripts. Sign-in observation remains B14. | Existing envelopes, local browser-owned abstraction. Real hostile main-world globals, frame/shadow and isolation tests. |
 | B12 — Browser site permission handling | PARTIAL | `desktop/browser.js::setup`, `ALLOWED` | `qml/BrowserGuest.qml` grants pointer lock (`MouseLock`) and fullscreen requests and denies every other permission request. Differences: Qt has no separate sanitized-clipboard-write permission or synchronous permission-check handler; not yet covered by a test. | Internal host policy, not AP and not new backend types. |
@@ -189,12 +201,12 @@ Generic JSON capacity is explicitly not credited as an implemented feature.
 
 | ID / reference feature | Status | Exact reference implementation | Native implementation and absent/different behavior | Contracts / new types; work |
 | --- | --- | --- | --- | --- |
-| H01 — Discover and publish the eleven available browser tools | PARTIAL | `host-tools.js::SCHEMAS/schemas`; `backend-client.js::hello` | Browser::tools publishes seven unchanged schemas reused from prep; four input tools remain unpublished. src/browser/schemas.json is checked against the prepared/reference oracle. Screenshot/scroll explicitly refuse unsupported branches. NoHost and uncomposed Browser advertise nothing. | HT/HS unchanged. Real schema/refusal test, prepared contract fixtures and Node oracle. |
+| H01 — Discover and publish the eleven available browser tools | MATCH | `host-tools.js::SCHEMAS/schemas`; `backend-client.js::hello` | Browser::tools publishes all eleven unchanged schemas in reference order from src/browser/schemas.json, checked against the prepared/reference oracle. Screenshot's unsupported tall full-page branch refuses explicitly (T08). NoHost and uncomposed Browser advertise nothing. | HT/HS unchanged. Real schema test compares all eleven in order; prepared contract fixtures and Node oracle. |
 | H02 — Current browser context on start/retry/steer and change notifications | MATCH | `browser-panel.js::snapshot/report`; `chat.js::sessionParams/steer`; `backend-client.js` | Composed Browser reports available=true and real empty/lazy/loading/ready/failed/gone status, control, stable tabs/revisions and deduplicated changes, even closed/empty. Existing params/steering forwarding remains. OFF builds supply null. Sign-in hints remain separately B14 and never verified. | BS/HostContext unchanged. Foundation context tests and real adapter/schema tests; no connected backend qualification. |
 | H03 — Reverse-call correlation, admission and duplicate prevention | PARTIAL | `chat.js::claim/onHostTool`; `backend-client.js` reverse-ID handling | ChatService::reverse checks publication/session/accepted turn and now retains spent tool-call IDs after completion/cancellation. BrowserTools independently owns session/turn/call identity. Remaining: early calls refuse instead of awaiting accepted identity/recovery; some unknown-session failures still collapse to stale_turn. | HT/RequestId unchanged. Focused host-routing test rejects a repeated completed call. |
 | H04 — Stop/request-cancel/terminal cleanup and late-result suppression | MATCH | `chat.js::onHostTool/end/stop`; `backend-client.js` reverse cancellation; `browser-panel.js::cancel`; `desktop/main.js::cancelBrowser` | BrowserTools owns queued/active calls and timers; cancel/turn end/destruction invalidate continuations and engine callback tokens and stop issued navigation. Already-issued effects are not undone. ChatService answers reverse/terminal cancellation once with empty cancelled content, drops late completion and releases driving. | HT unchanged. Real cancellation/turn-end tests plus adversarial delayed callbacks; no action replay. |
 | H05 — Serialize browser steps across chats and pin receipt-time targets | MATCH | `browser-panel.js::run/tabsTool`; `desktop/browser.js::run` queues | One BrowserTools queue for sessions and tab operations pins targets/revisions at receipt. Explicit targets select only that tab; implicit switch-away-and-back invalidates the active lease. Cancelled queued entries cannot release the predecessor; late callbacks cannot dispatch a next stage. | Local owner, no boundary type. Real cross-session queue/target tests and delayed-adapter barrier tests. |
-| H06 — Fresh page/ref/target validation before further input | PARTIAL | `desktop/browser.js::revise/check/install/point/world/act`; `browser-panel.js::run` revision checks | Page/document/incarnation/active-target checks run before dispatch and after awaits. Ref reveal requires pageId and a connected same-page ref map; partial/cancelled reveal invalidates observations. Frozen reads expire on page change. Covered/moved point rechecks and multi-input/final-navigation sequencing remain with click/type/press/select. | HT/BS unchanged. Real stale-page/ref/read/history tests, document-version tests and partial-reveal cancellation tests. |
+| H06 — Fresh page/ref/target validation before further input | MATCH | `desktop/browser.js::revise/check/install/point/world/act`; `browser-panel.js::run` revision checks | Page/document/incarnation/active-target checks run before every dispatch and after every completion. Input requires a truthy matching pageId; point/choose/reveal and the between-input barrier never install a ref map and refuse a changed page, a replaced document or a document-initiated navigation (Navigation API `navigate` in the isolated world). Covered/moved point rechecks, dirty invalidation on partial input, and final-input-only navigation are implemented; a non-final input that navigates stops the sequence. The barrier is a JS round trip plus native signals instead of a CDP acknowledgement. | HT/BS unchanged. Real covered/moved/stale-ref/double-click-navigation/repeated-Enter tests; owner tests for navigation between presses, final navigation, cancelled late acknowledgements. |
 | H07 — Readiness/operation/dispatch deadlines and truthful errors | MATCH | `browser-panel.js::interruptible/ensure/run`; `desktop/browser.js::timed/check/settle/navigate/run` | BrowserTools enforces 90 s receipt/queue/readiness, 75 s page operation after readiness, 12 s JS/capture, 30 s navigation and 15 s loading settle; isolated JS checks dispatch expiry. Wait uses reference bounds/codes and 300 ms mutation quiet (2 s cap). Failures never fabricate successful loads. Already-issued work is not rolled back. | HT unchanged. Injected short deadlines/late callbacks, loopback failure, slow-resource readiness and real wait_timeout tests. |
 | H08 — Browser response formatter: text/images, metadata and errors | MATCH | `host-tools.js::result/read/readable/flatten`; `chat.js::onHostTool` status assignment | BrowserTools builds the prepared SS/TAB/IMG/READ families, allowlisted metadata, error text/status, screenshot text-then-image/label, UTF-16 pagination and hand-back status. The reference HTML converter runs on a capped frozen string in an isolated inert DOM. No chat cards or invented download/artifact fields. | HT unchanged. Prepared result comparisons, real parser/pixels, frozen reads and surrogate-boundary tests. |
 | H09 — Attribute downloaded files to the initiating guest/operation | MISSING | `desktop/browser.js::setup/state`; `host-tools.js::result`; `test/browser-lifecycle.test.js` download test | No producer of `{file, at, operationId}` metadata. Reference snapshots report only downloads completed for that operation; later/other calls cannot consume them. Late completion may still toast (B17). | HT `data.downloads` already fits. Local download ownership/tracking needed, no boundary type. **Host-service-only**. |
@@ -213,11 +225,11 @@ contract fixtures remain plumbing tests; real-guest tests are separate.
 | --- | --- | --- | --- | --- |
 | T01 — `browser_navigate` | MATCH | `host-tools.js::SCHEMAS`; `desktop/browser.js::act/navigate/normalize` | BrowserTools host normalization (including IPv6 loopback), Qt native load/back/forward/reload/stop, navigation/quiet settling and fresh SS. Failure is navigation_failed; deadline/abort stops loading, not a retry. | HT unchanged. Real local-file history/reload, stale-page and refused-loopback tests. |
 | T02 — `browser_snapshot` | MATCH | `host-tools.js::SCHEMAS`; `desktop/browser.js::install.snapshot/state` | src/browser/observe.js ports the reference viewport/full heuristic, labels/refs, masking, same-origin iframe/open-shadow traversal and unreadable-frame notices. BrowserTools formats SS with coverage/scroll/truncation and pageId. Same 9,000/40,000 text and 20,000 visited-element bounds; not a full accessibility-tree guarantee. | HT unchanged. Real hostile-world, masks, frame/shadow, stable-ref, full/bounded observation tests. |
-| T03 — `browser_click` | MISSING | `host-tools.js::SCHEMAS`; `desktop/browser.js::act/point/pointer/mouse` | Ref or page-coordinate input, optional double click, covered/moved recheck and post-click snapshot. | HT sufficient; real input host plus H06. **Host-service-only**. |
-| T04 — `browser_type` | MISSING | `host-tools.js::SCHEMAS`; `desktop/browser.js::act/press` | Ref/focused-field typing, clear-or-append, empty-text delete, optional Enter submit, navigation-safe sequencing and snapshot. | HT sufficient; real input host. **Host-service-only**. |
-| T05 — `browser_select` | MISSING | `host-tools.js::SCHEMAS`; `desktop/browser.js::install.choose/act` | Native select option matching by text/value, input/change dispatch, error on no matching option/non-select, returned selection note/snapshot. | HT sufficient; local DOM operation host. **Host-service-only**. |
-| T06 — `browser_press` | MISSING | `host-tools.js::SCHEMAS`; `desktop/browser.js::keyOf/press/act` | Key combinations and modifiers, bounded repeat count (1–20), key release and page-change barrier between repetitions. | HT sufficient; real keyboard host. **Host-service-only**. |
-| T07 — `browser_scroll` | PARTIAL | `host-tools.js::SCHEMAS`; `desktop/browser.js::install.reveal/act` | Working isolated ref scrollIntoView with required pageId, connected-ref checks, settle/SS and dirty invalidation. Direction/amount returns unavailable: targeted exact-delta trusted wheel delivery is not qualified. No scrollBy or synthetic wheel substitute. | Exact prepared schema. Real reveal/stale-ref/partial-cancel tests and native-wheel prototype; see automation limitations. |
+| T03 — `browser_click` | MATCH | `host-tools.js::SCHEMAS`; `desktop/browser.js::act/point/pointer/mouse` | Ref (left-centre point, scroll into view, covered → `element_covered` with the reference text) or `Number()` x/y; pointer delay; recheck covered/moved → `stale_target`; trusted move/press/release with explicit click counts 1/2 (dblclick), only the final press navigation-permissive; viewport SS. Delivered to WebEngine's input item, so the driving shield does not intercept; no DOM `.click()`. | HT sufficient. Real trusted ref/coordinate/double/covered/moved/final-navigation/stale tests. **Host-service-only**. |
+| T04 — `browser_type` | PARTIAL | `host-tools.js::SCHEMAS`; `desktop/browser.js::act/press` | Ref focus click with moved/covered recheck, 80 ms, Control+A, Delete for empty text, one IME commit (the `Input.insertText` renderer path: trusted `beforeinput`/`input` `insertText`, no per-character keys), optional 60 ms + Enter; navigation-safe sequencing, focus emulation and SS. One recorded difference: the Control+A keydown's DOM `key` is `a` (reference sends the literal `A`). | HT sufficient. Real Unicode/clear/append/delete/password/submit/moved/cancel/turn-end/hand-back tests. **Host-service-only**. |
+| T05 — `browser_select` | MATCH | `host-tools.js::SCHEMAS`; `desktop/browser.js::install.choose/act` | The reference's isolated `choose`: exact cleaned text or lowercase value, else substring; focus, assign, bubbling input then change (untrusted in both, as the reference dispatches them); `Chose "TEXT".` note SS; non-select/no-match texts and stale refs. Custom menus still use clicks. | HT sufficient. Real matching/event/error/stale tests. **Host-service-only**. |
+| T06 — `browser_press` | PARTIAL | `host-tools.js::SCHEMAS`; `desktop/browser.js::keyOf/press/act` | The reference key table/modifier bits/errors and `min(20,max(1,round(times)))`; trusted key down/up per repeat with a barrier, only the last navigation-permissive. Recorded differences from QKeyEvent→WebEngine mapping: non-alphanumeric characters have keyCode 0 (reference `charCodeAt`); Control/Alt/Meta letter chords take Qt's letter case; chorded punctuation gets a layout code/keyCode; modified Enter also gets its keypress (and implicit Enter behavior). | HT sufficient; tested key fields pin both matches and differences. **Host-service-only**. |
+| T07 — `browser_scroll` | MATCH | `host-tools.js::SCHEMAS`; `desktop/browser.js::install.reveal/act` | Ref reveal as before; otherwise a trusted phase-less mouse wheel at the visual viewport centre with deltaY = ±clientHeight × clamp(Number(amount)‖0.8, 0.1, 10), direction lowercased, then 250 ms + settle + SS. WebEngine's angle conversion gives exact CSS-pixel deltas at its 0.5 px (3-line) resolution; no `scrollBy`. | Exact prepared schema. Real wheel delta/direction/default/clamp/shield tests and reveal/stale tests. |
 | T08 — `browser_screenshot` | PARTIAL | `host-tools.js::SCHEMAS/result`; `desktop/browser.js::screenshot/act` | Native QQuickItem guest-only grab, JPEG 82, width ≤1280, dimensions/scale/coordinate guidance and post-grab document revalidation. Viewport works; full_page works only when the page fits at the top. Tall/scrolled full-page requests refuse unavailable: no resizing, scrolling or stitched pixels mislabelled as reference capture. | HT unchanged. Real JPEG pixel/dimension/scale and refusal tests. No automatic chat screenshot card. |
 | T09 — `browser_read` | MATCH | `desktop/browser.js::act` read case; `host-tools.js::read/readable/flatten/code` | Isolated capture caps source HTML at 4 Mi UTF-16 units and uses the reference inert DOM converter. BrowserTools freezes derived text/URL under readId/pageId and returns 40,000-unit slices with exact metadata. Refresh/navigation/dirty reveal/loss invalidate continuation; hidden text may remain, form controls/frame/shadow contents are excluded. | HT unchanged. Real parser/exclusions/cap/frozen refresh tests; UTF-16 split-surrogate/beyond-end tests. Ephemeral only, never action recovery. |
 | T10 — `browser_wait` | MATCH | `host-tools.js::SCHEMAS`; `desktop/browser.js::install.has/act` | Timed/text waits use isolated body/open-shadow search, 400 ms text polls, ≤250 ms sleep chunks, 0.5–60 s bounds, loading/mutation settle and SS. Missing text returns wait_timeout. Navigation, cancellation, tab/renderer loss or timeout blocks further stages. | HT unchanged. Real shadow/timed/expiry tests, cross-session cancellation and late-result deadline tests. |
@@ -321,13 +333,12 @@ These negative findings prevent an audit from manufacturing port requirements:
 
 ## Highest-priority gaps
 
-1. **Remaining browser input/capture**: T03–T08 remainders, covered/moved-target
-   checks and navigation-safe input sequences; also B07–B09/B14/B16/B17. The
-   public-Qt automation slice is real but must not advertise four absent tools
-   or disguise viewport/ref-only operations as full screenshot/wheel parity.
-2. **Remaining admission and safety qualification**: H03 early accepted-turn
-   waiting and H06 multi-input barriers. Queues, versions, late-callback guards
-   and hand-back now exist; cancellation still cannot undo already-issued work.
+1. **Remaining browser capture/keys**: tall full-page capture (T08), press/type
+   DOM key-field differences (T04/T06), and B07–B09/B14/B16/B17. Do not disguise
+   viewport capture as full-page parity.
+2. **Remaining admission qualification**: H03 early accepted-turn waiting.
+   Queues, versions, input barriers, late-callback guards and hand-back exist;
+   cancellation still cannot undo already-issued work.
 3. **Complete the existing file-preview path** (F04–F08, F11–F14). Fixing only an
    image widget will not help while preparation is text-only, `sync` throws away
    preview data, and the preview facade always refuses. Cached previews already
@@ -365,8 +376,8 @@ This does not authorize unrelated future work.
   Qt WebEngine as an optional build feature (`OPENGHOST_BROWSER`, default ON),
   because the reference's browser is embedded Chromium webviews, not an
   externally controlled OS browser. The public-Qt automation slice now ports
-  observation/navigation/read/wait and bounded capture/reveal. A CDP requirement
-  is not established; unresolved full-page capture/native input must first be
+  observation/navigation/read/wait, bounded capture and all input tools. A CDP
+  requirement is not established; unresolved full-page capture must first be
   qualified through the narrow host abstraction.
 - **Current UI resource policy blocks reference media networking.** A deliberate
   frontend-host resource policy is needed for favicons, permitted remote images,
@@ -393,8 +404,34 @@ This does not authorize unrelated future work.
   refs, downloads or authorization. Neither side currently promises exactly-once
   browser effects across a crash.
 
+## Mutating input slice
+
+New worktree/branch `feat/native-browser-mutating-tools` starting exactly at
+`4b9218c`. No reference, Rust/RPC/FFI, other worktree or visual-parity change;
+no push.
+
+- **Implemented and published:** `browser_click`, `browser_press`,
+  `browser_type`, `browser_select`, and scroll's direction/amount wheel.
+- **Mechanism:** `BrowserAutomation::input` (QtCore seam) carries reference-shaped
+  mouse/key/text/wheel events; `QtBrowserAutomation` sends `QMouseEvent`,
+  `QKeyEvent`, `QInputMethodEvent` and phase-less `QWheelEvent` straight to the
+  WebEngine view's input item. All arrive as trusted DOM events, including under
+  the driving shield. A private event clock keeps reference click counts. The
+  guest's FocusOut is withheld once automated, reproducing
+  `Emulation.setFocusEmulationEnabled` (no blur/change on giveBack, IME works).
+- **Sequencing:** `BrowserTools` ports `act`: point/pointer/re-point, mouse,
+  key strokes, insert, submit; Probe barriers between dispatches; only the final
+  dispatch may navigate; partial input invalidates the observation.
+- **CDP:** not required, not enabled.
+- **Remaining:** T06 key-field differences and T04's Control+A `key` case (all
+  pinned by tests); B09 cursor animation; T08 tall full-page capture.
+- **Rows moved:** MATCH T03, T05, T07, H01, H06; PARTIAL T04, T06 (from MISSING).
+
+Validation is listed in [browser-tools-port.md](browser-tools-port.md#mutating-input-landing-based-exactly-on-4b9218c).
+
 ## Native automation slice
 
+Historical record at `4b9218c`, before the mutating input slice above.
 Implemented in a new worktree/branch starting exactly at `ce4cbce`; schemas,
 result fixtures and the port map were selectively reused from `prep/browser-tools-port`
 (`0c41d69`), without its older production tree. The original checkout's unrelated

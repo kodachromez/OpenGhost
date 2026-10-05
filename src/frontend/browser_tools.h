@@ -2,6 +2,7 @@
 #include "browser_automation.h"
 #include "host.h"
 #include <QElapsedTimer>
+#include <QPointer>
 #include <QQueue>
 #include <memory>
 
@@ -44,7 +45,7 @@ class BrowserTools final : public QObject
     QHash<QString, QString> m_turns;
     QSet<QString> m_seen;
     quint64 m_serial = 0;
-    bool m_pumping = false;
+    bool m_pumping = false, m_closing = false;
     void pump();
     bool check(const Work &, bool page = true);
     void finish(const Work &, QJsonObject);
@@ -65,6 +66,18 @@ class BrowserTools final : public QObject
     void readResult(const Work &, const Read &);
     void screenshot(const Work &);
     void scroll(const Work &);
+    void click(const Work &);
+    void type(const Work &);
+    void select(const Work &);
+    void press(const Work &);
+    void send(const Work &, const BrowserAutomation::Input &, bool mayNavigate,
+              std::function<void()>);
+    void barrier(const Work &, std::function<void()>);
+    void pointer(const Work &, double x, double y, std::function<void()>);
+    void mouse(const Work &, double x, double y, int count, bool mayNavigate,
+               std::function<void()>);
+    void stroke(const Work &, const QString &combo, bool mayNavigate, std::function<void()>);
+    void afterInput(const Work &, const QString &note = {});
     QJsonArray tabData() const;
     QString tabText() const;
     BrowserAutomation::Target target(const Work &) const;

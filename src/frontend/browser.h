@@ -186,6 +186,9 @@ class Browser final : public HostServices
     void focusAddress();
     // Keyboard focus leaves the guests for the app (view.blur()).
     void yieldFocus();
+    // desktop/browser.js pointer(): where an agent click or ref typing is about
+    // to land, in guest viewport CSS pixels (the panel's cursor animation input).
+    void pointer(const QString &handle, double x, double y);
 
   protected:
     void timerEvent(QTimerEvent *event) override;

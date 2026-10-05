@@ -6,6 +6,7 @@
 #include <QQmlComponent>
 #include <QQmlEngine>
 #include <QQuickWindow>
+#include <QStyleHints>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTemporaryDir>
@@ -73,6 +74,39 @@ class BrowserAutomationTest : public QObject
         const auto result = run("browser_navigate", {{"url", page(html)}});
         QVERIFY2(!result.isError, qPrintable(text(result)));
     }
+    // Helpers for the input tools: refs come only from a real snapshot.
+    int refOf(const HostToolResult &snap, const QString &needle)
+    {
+        const auto refs = snap.data->value("refs").toObject();
+        for (auto it = refs.begin(); it != refs.end(); ++it)
+            if (it.value().toString().contains(needle))
+                return it.key().toInt();
+        return 0;
+    }
+    QJsonValue pageOf(const HostToolResult &r) { return r.data->value("pageId"); }
+    QJsonArray events()
+    {
+        return QJsonDocument::fromJson(js("JSON.stringify(events)").toString().toUtf8()).array();
+    }
+    QQuickItem *guest()
+    {
+        return qobject_cast<QQuickItem *>(window->property("activeGuest").value<QObject *>());
+    }
+    bool inGuest(QQuickItem *item)
+    {
+        for (; item; item = item->parentItem())
+            if (item == guest())
+                return true;
+        return false;
+    }
+    static constexpr const char *recorder =
+        "<script>window.events=[];for(const n of ['pointerdown','mousedown','mouseup','click',"
+        "'dblclick','keydown','keypress','keyup','beforeinput','input','change','wheel'])"
+        "addEventListener(n,e=>events.push({type:n,trusted:e.isTrusted,target:e.target.id||"
+        "e.target.nodeName,detail:e.detail,x:e.clientX,y:e.clientY,key:e.key,code:e.code,"
+        "keyCode:e.keyCode,ctrl:e.ctrlKey,shift:e.shiftKey,alt:e.altKey,meta:e.metaKey,"
+        "inputType:e.inputType,data:e.data,deltaY:e.deltaY,deltaX:e.deltaX,deltaMode:e.deltaMode,"
+        "bubbles:e.bubbles}),{capture:true,passive:true});</script>";
   private slots:
     void init()
     {
@@ -100,24 +134,26 @@ class BrowserAutomationTest : public QObject
         engine.reset();
         browser.reset();
     }
-    void exactPreparedSchemasAndUnimplementedInput()
+    void exactPreparedSchemasAndInputPageRequirement()
     {
         const auto actual = browser->tools();
-        QCOMPARE(actual.size(), 7);
+        const auto expected = browser_tools_test::schemas();
+        QCOMPARE(actual.size(), 11);
+        QCOMPARE(actual.size(), expected.size());
         QVERIFY(browser->snapshot().available);
         QCOMPARE(browser->snapshot().status, BrowserState::Status::Empty);
-        for (const auto &schema : actual) {
-            auto expected = browser_tools_test::schemas();
-            auto found = std::find_if(expected.begin(), expected.end(),
-                                      [&](const auto &s) { return s.name == schema.name; });
-            QVERIFY(found != expected.end());
-            QCOMPARE(schema.description, found->description);
-            QCOMPARE(schema.parameters, found->parameters);
+        for (int i = 0; i < actual.size(); ++i) {
+            QCOMPARE(actual[i].name, expected[i].name); // reference order
+            QCOMPARE(actual[i].description, expected[i].description);
+            QCOMPARE(actual[i].parameters, expected[i].parameters);
         }
-        for (const auto *name :
-             {"browser_click", "browser_press", "browser_type", "browser_select"})
-            QVERIFY(run(name).isError);
-        QCOMPARE(browser->tabList().size(), 0);
+        open("<h1>Page</h1>");
+        for (const auto *name : {"browser_click", "browser_press", "browser_type", "browser_select",
+                                 "browser_scroll"}) {
+            const auto refused = run(name, {{"key", "a"}, {"text", "a"}, {"ref", 1}});
+            QCOMPARE(code(refused), "stale_page");
+            QCOMPARE(text(refused), "Error: Pass pageId from a fresh snapshot with browser input.");
+        }
     }
     void snapshotIsolationRefsFramesAndBounds()
     {
@@ -361,12 +397,6 @@ class BrowserAutomationTest : public QObject
         QVERIFY(!shot.data->value("truncated").toBool());
         QCOMPARE(code(run("browser_screenshot", {{"full_page", true}})), "unavailable");
         QCOMPARE(js("scrollY").toInt(), 0); // no stitch/resize substitute
-        const auto snap = run("browser_snapshot");
-        auto scrolled =
-            run("browser_scroll", {{"pageId", snap.data->value("pageId")}, {"amount", 0.8}});
-        QCOMPARE(code(scrolled), "unavailable");
-        QCOMPARE(js("wheels.length").toInt(), 0);
-        QCOMPARE(js("scrollY").toInt(), 0);
         const auto full = run("browser_snapshot", {{"full", true}});
         const auto refs = full.data->value("refs").toObject();
         QVERIFY(!refs.isEmpty());
@@ -419,62 +449,531 @@ class BrowserAutomationTest : public QObject
         QVERIFY2(!recovered.isError, qPrintable(text(recovered)));
         QVERIFY(text(recovered).contains("User page"));
     }
-    void nativeWheelDeliveryPrototype()
+    void clickTrustedRefCoordinatesDoubleAndFocusReturn()
     {
-        open("<body "
-             "style='margin:0;height:3000px'><script>window.wheels=[];addEventListener('wheel',e=>"
-             "wheels.push([e.isTrusted,e.deltaY]),{passive:true})</script>");
-        auto *view = qobject_cast<QQuickItem *>(window->property("activeGuest").value<QObject *>());
-        QVERIFY(view);
-        auto *receiver = view;
-        QPointF point(view->width() / 2, view->height() / 2);
-        while (auto *child = receiver->childAt(point.x(), point.y())) {
-            point = child->mapFromItem(receiver, point);
-            receiver = child;
+        open(QString("<title>Click</title><body style='margin:0'>"
+                     "<button id=go style='position:absolute;left:20px;top:10px;width:200px;"
+                     "height:40px'>Go</button>"
+                     "<div id=area style='position:absolute;left:300px;top:200px;width:100px;"
+                     "height:100px;background:#ccc'></div>") +
+             recorder);
+        window->setProperty("shield", true); // the production driving shield
+        window->contentItem()->forceActiveFocus();
+        const auto snap = run("browser_snapshot");
+        const int go = refOf(snap, "button \"Go\"");
+        QVERIFY(go);
+        auto clicked = run("browser_click", {{"pageId", pageOf(snap)}, {"ref", go}});
+        QVERIFY2(!clicked.isError, qPrintable(text(clicked)));
+        QCOMPARE(clicked.status, HostToolResult::Status::Ok);
+        QVERIFY(text(clicked).startsWith("Page: Click\nURL: "));
+        QCOMPARE(clicked.data->value("coverage").toString(), "viewport-dom-heuristic");
+        QVERIFY(pageOf(clicked) != pageOf(snap)); // input revises the observation
+        auto seen = events();
+        QStringList kinds;
+        for (const auto &e : seen)
+            kinds << e.toObject()["type"].toString();
+        QCOMPARE(kinds, QStringList({"pointerdown", "mousedown", "mouseup", "click"}));
+        for (const auto &e : seen) {
+            QVERIFY(e.toObject()["trusted"].toBool());
+            QCOMPARE(e.toObject()["target"].toString(), "go");
         }
-        QWheelEvent direct(point, receiver->mapToGlobal(point), QPoint(0, -480), {}, Qt::NoButton,
-                           Qt::NoModifier, Qt::ScrollUpdate, false);
-        QCoreApplication::sendEvent(receiver, &direct);
-        QTest::qWait(150);
-        QCOMPARE(js("wheels.length").toInt(), 0); // not a usable targeted input primitive
-        const auto scene = view->mapToScene({view->width() / 2, view->height() / 2});
-        window->setProperty("shield", true);
-        QWheelEvent covered(scene, window->mapToGlobal(scene.toPoint()), QPoint(0, -480),
-                            QPoint(0, -120), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase,
-                            false);
-        QCoreApplication::sendEvent(window, &covered);
-        QTest::qWait(150);
-        QCOMPARE(js("wheels.length").toInt(), 0); // normal window route hits app chrome
-        window->setProperty("shield", false);
-        QWheelEvent normal(scene, window->mapToGlobal(scene.toPoint()), QPoint(0, -480),
-                           QPoint(0, -120), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
-        QCoreApplication::sendEvent(window, &normal);
-        QTRY_VERIFY(js("wheels.length").toInt() > 0);
-        QCOMPARE(js("wheels[0][0]").toBool(), true);
-        // This mouse-wheel route is trusted, but uses angle units: the supplied
-        // 480-pixel delta is not the reference's 480 CSS-pixel wheel event.
-        QCOMPARE(js("wheels[0][1]").toInt(), 60);
-        QTRY_VERIFY(js("scrollY").toInt() > 0);
+        // Left-centre: x = left + min(width/2, 40), y = vertical centre.
+        QCOMPARE(seen[3].toObject()["x"].toInt(), 60);
+        QCOMPARE(seen[3].toObject()["y"].toInt(), 30);
+        QCOMPARE(seen[3].toObject()["detail"].toInt(), 1);
+        // giveBack(): the keyboard returns to where it was; the page is lent.
+        QVERIFY(!inGuest(window->activeFocusItem()));
+        QCOMPARE(browser->lent(), browser->activeHandle());
+        QCOMPARE(code(run("browser_click", {{"pageId", pageOf(snap)}, {"ref", go}})), "stale_page");
+        js("events=[]");
+        auto twice = run("browser_click",
+                         {{"pageId", pageOf(clicked)}, {"x", 350}, {"y", "250"}, {"double", true}});
+        QVERIFY2(!twice.isError, qPrintable(text(twice)));
+        kinds.clear();
+        QList<int> details;
+        for (const auto &e : events()) {
+            kinds << e.toObject()["type"].toString();
+            details << e.toObject()["detail"].toInt();
+            QVERIFY(e.toObject()["trusted"].toBool());
+            QCOMPARE(e.toObject()["target"].toString(), "area");
+        }
+        QCOMPARE(kinds, QStringList({"pointerdown", "mousedown", "mouseup", "click", "pointerdown",
+                                     "mousedown", "mouseup", "click", "dblclick"}));
+        QCOMPARE(details, QList<int>({0, 1, 1, 1, 0, 2, 2, 2, 2}));
+        // Separate steps never join into a double click.
+        js("events=[]");
+        auto one = run("browser_click", {{"pageId", pageOf(twice)}, {"x", 350}, {"y", 250}});
+        auto two = run("browser_click", {{"pageId", pageOf(one)}, {"x", 350}, {"y", 250}});
+        QVERIFY(!two.isError);
+        for (const auto &e : events())
+            QVERIFY(e.toObject()["type"].toString() != "dblclick");
+        const auto bad = run("browser_click", {{"pageId", pageOf(two)}, {"x", "left"}, {"y", 1}});
+        QCOMPARE(code(bad), "browser_error");
+        QCOMPARE(text(bad), "Error: Pass ref from the snapshot, or x and y in page pixels");
+        QCOMPARE(code(run("browser_click", {{"pageId", pageOf(two)}, {"ref", 999}})), "stale_ref");
+        js("events=[]");
+        QVERIFY(events().isEmpty());
     }
-    void trustedInputPrototypeNotToolImplementation()
+    void clickCoveredMovedAndFinalNavigation()
     {
-        open("<button style='position:absolute;left:0;top:0;width:100px;height:60px' "
-             "id=b>Click</button>"
-             "<input id=i style='position:absolute;left:0;top:80px;width:180px;height:40px'>"
-             "<script>window.events=[];for(const n of "
-             "['click','keydown','input'])addEventListener(n,e=>events.push([n,e.isTrusted]));</"
-             "script>");
-        // Test the normal public Qt event route. This does NOT implement the
-        // tool's target/occlusion/final-navigation or Unicode insertion sequence.
-        QTest::mouseClick(window, Qt::LeftButton, {}, QPoint(40, 30));
-        QTRY_VERIFY(js("events.some(e=>e[0]==='click'&&e[1])").toBool());
-        QTest::mouseClick(window, Qt::LeftButton, {}, QPoint(40, 100));
-        QTest::keyClick(window, Qt::Key_A);
-        QTRY_COMPARE(js("document.getElementById('i').value").toString(), "a");
-        QVERIFY(js("events.some(e=>e[0]==='keydown'&&e[1])&&events.some(e=>e[0]==='input'&&e[1])")
-                    .toBool());
-        js("events=[];document.getElementById('b').click()");
-        QCOMPARE(js("events[0][1]").toBool(), false); // why JS .click() is not a replacement
+        const auto next =
+            page("<title>Next</title><h1>Arrived</h1>" + QString(recorder), "next.html");
+        open(QString("<title>Guarded</title><body style='margin:0'>"
+                     "<button id=under style='position:absolute;left:0;top:0;width:200px;"
+                     "height:50px'>Under</button><div id=cover style='position:absolute;left:0;"
+                     "top:0;width:300px;height:60px;background:red'></div>"
+                     "<button id=mover style='position:absolute;left:0;top:100px;width:200px;"
+                     "height:40px'>Mover</button>"
+                     "<a id=link href='") +
+             next +
+             "' style='position:absolute;left:0;top:200px'>Next page</a>"
+             "<button id=nav ondblclick='' onclick=\"location.href='" +
+             next +
+             "'\" "
+             "style='position:absolute;left:0;top:300px;width:200px;height:40px'>Leave</button>" +
+             recorder);
+        auto snap = run("browser_snapshot");
+        // Covered: describe the cover, send nothing.
+        js("document.getElementById('cover').setAttribute('role','button');"
+           "document.getElementById('cover').textContent='Banner'");
+        snap = run("browser_snapshot");
+        const int under = refOf(snap, "Under");
+        QVERIFY(under);
+        js("events=[]");
+        auto covered = run("browser_click", {{"pageId", pageOf(snap)}, {"ref", under}});
+        QCOMPARE(code(covered), "element_covered");
+        QCOMPARE(text(covered),
+                 QString("Error: Element [%1] is covered by button \"Banner\". No click was sent.")
+                     .arg(under));
+        QVERIFY(events().isEmpty());
+        // Moved during the open panel's 420 ms pointer delay: refused, no click.
+        snap = run("browser_snapshot");
+        const int mover = refOf(snap, "Mover");
+        QVERIFY(mover);
+        js("events=[]");
+        const auto moving = start("browser_click", {{"pageId", pageOf(snap)}, {"ref", mover}});
+        QTest::qWait(200);
+        js("document.getElementById('mover').style.top='400px'");
+        QVERIFY(QTest::qWaitFor([&] { return results.contains(moving); }));
+        QCOMPARE(code(results[moving]), "stale_target");
+        QCOMPARE(text(results[moving]),
+                 "Error: The click target moved or is covered. Take a new snapshot.");
+        QVERIFY(events().isEmpty());
+        // A final click may navigate; its observation follows the new page.
+        snap = run("browser_snapshot");
+        const int link = refOf(snap, "Next page");
+        auto followed = run("browser_click", {{"pageId", pageOf(snap)}, {"ref", link}});
+        QVERIFY2(!followed.isError, qPrintable(text(followed)));
+        QVERIFY(text(followed).startsWith("Page: Next\n"));
+        QVERIFY(text(followed).contains("Arrived"));
+        // Navigation on the first click of a double click stops the second.
+        open(QString("<title>Leave</title><body style='margin:0'><button id=nav "
+                     "onclick=\"location.href='") +
+             next +
+             "'\" style='position:absolute;left:0;top:0;width:200px;height:40px'>Leave</button>" +
+             recorder);
+        snap = run("browser_snapshot");
+        const int nav = refOf(snap, "Leave");
+        js("events=[]");
+        auto doubled =
+            run("browser_click", {{"pageId", pageOf(snap)}, {"ref", nav}, {"double", true}});
+        QCOMPARE(code(doubled), "stale_page");
+        QTRY_VERIFY(browser->url().endsWith("next.html"));
+        QTRY_VERIFY(js("typeof events").toString() == "object");
+        for (const auto &e : events())
+            QVERIFY2(e.toObject()["type"].toString() != "mousedown",
+                     "second press reached the new page");
+    }
+    void typeInsertsTextClearsAppendsAndSubmits()
+    {
+        const auto done = page("<title>Sent</title><h1>Submitted</h1>", "sent.html");
+        open(QString("<title>Form</title><body style='margin:0'><form action='") + done +
+             "'><input id=field name=q value=old style='position:absolute;left:0;top:0;"
+             "width:300px;height:30px'><input id=secret type=password style='position:absolute;"
+             "left:0;top:60px;width:300px;height:30px'><button style='position:absolute;"
+             "left:0;top:120px'>Send</button></form>" +
+             recorder);
+        window->contentItem()->forceActiveFocus();
+        auto snap = run("browser_snapshot");
+        const int field = refOf(snap, "textbox");
+        QVERIFY(field);
+        js("events=[]");
+        const QString unicode = QString::fromUtf8("héllo 😀 world");
+        auto typed =
+            run("browser_type", {{"pageId", pageOf(snap)}, {"ref", field}, {"text", unicode}});
+        QVERIFY2(!typed.isError, qPrintable(text(typed)));
+        QCOMPARE(js("document.getElementById('field').value").toString(), unicode);
+        QVERIFY(text(typed).contains("value=\"" + unicode + "\""));
+        // Focus click, Control+A (no text), then one IME-style insertion: no
+        // per-character keys, every event trusted.
+        QStringList kinds;
+        for (const auto &v : events()) {
+            const auto e = v.toObject();
+            QVERIFY2(e["trusted"].toBool(), qPrintable(e["type"].toString()));
+            kinds << e["type"].toString();
+            if (e["type"] == "keydown") {
+                QCOMPARE(e["code"].toString(), "KeyA");
+                QCOMPARE(e["keyCode"].toInt(), 65);
+                QVERIFY(e["ctrl"].toBool());
+            }
+            if (e["type"] == "beforeinput") {
+                QCOMPARE(e["inputType"].toString(), "insertText");
+                QCOMPARE(e["data"].toString(), unicode);
+            }
+        }
+        QVERIFY2(kinds == QStringList({"pointerdown", "mousedown", "mouseup", "click", "keydown",
+                                       "keyup", "beforeinput", "input"}),
+                 qPrintable(kinds.join(',')));
+        QVERIFY(!inGuest(window->activeFocusItem()));
+        // Focus emulation: the keyboard left the guest, but the page saw no
+        // blur/change and still acts focused, as with the reference debugger.
+        QVERIFY(js("document.hasFocus()").toBool());
+        QCOMPARE(js("document.activeElement.id").toString(), "field");
+        // Append without clearing, at the page's focus: the lent keyboard comes back first.
+        snap = run("browser_snapshot");
+        auto appended =
+            run("browser_type", {{"pageId", pageOf(snap)}, {"text", "!"}, {"clear", false}});
+        QVERIFY2(!appended.isError, qPrintable(text(appended)));
+        QCOMPARE(js("document.getElementById('field').value").toString(), unicode + "!");
+        // Empty text clears with Delete.
+        js("events=[]");
+        auto emptied = run("browser_type", {{"pageId", pageOf(appended)}, {"text", ""}});
+        QVERIFY(!emptied.isError);
+        QCOMPARE(js("document.getElementById('field').value").toString(), QString());
+        bool deleted = false;
+        for (const auto &v : events())
+            deleted |= v.toObject()["inputType"] == "deleteContentForward" &&
+                       v.toObject()["trusted"].toBool();
+        QVERIFY(deleted);
+        // A password is typed but never shown back.
+        snap = run("browser_snapshot");
+        const int secret = refOf(snap, "textbox \"secret\"") ? refOf(snap, "textbox \"secret\"")
+                                                             : refOf(snap, "•");
+        Q_UNUSED(secret)
+        const auto refs = snap.data->value("refs").toObject();
+        int password = 0;
+        for (auto it = refs.begin(); it != refs.end(); ++it)
+            if (it.key().toInt() != field && it.value().toString().startsWith("textbox"))
+                password = it.key().toInt();
+        QVERIFY(password);
+        auto hidden =
+            run("browser_type", {{"pageId", pageOf(snap)}, {"ref", password}, {"text", "hunter2"}});
+        QVERIFY(!hidden.isError);
+        QVERIFY(text(hidden).contains("value=••••"));
+        QVERIFY(!text(hidden).contains("hunter2"));
+        // Submit presses Enter after the text; the navigation is observed.
+        snap = run("browser_snapshot");
+        auto sent =
+            run("browser_type",
+                {{"pageId", pageOf(snap)}, {"ref", field}, {"text", "query"}, {"submit", true}});
+        QVERIFY2(!sent.isError, qPrintable(text(sent)));
+        QVERIFY2(text(sent).startsWith("Page: Sent\n"), qPrintable(text(sent)));
+        QVERIFY(text(sent).contains("sent.html?q=query"));
+    }
+    void typeAndPressAtPageFocusWithoutAppKeyboard()
+    {
+        open(QString("<body style='margin:0'><input id=field>") + recorder);
+        window->contentItem()->forceActiveFocus();
+        js("document.getElementById('field').focus()"); // the page's own focus
+        auto snap = run("browser_snapshot");
+        QVERIFY(browser->lent().isEmpty()); // nothing lent: no app focus change
+        js("events=[]");
+        auto typed =
+            run("browser_type", {{"pageId", pageOf(snap)}, {"text", "abc"}, {"clear", false}});
+        QVERIFY2(!typed.isError, qPrintable(text(typed)));
+        QCOMPARE(js("document.getElementById('field').value").toString(), "abc");
+        auto pressed = run("browser_press", {{"pageId", pageOf(typed)}, {"key", "Backspace"}});
+        QVERIFY(!pressed.isError);
+        QCOMPARE(js("document.getElementById('field').value").toString(), "ab");
+        for (const auto &v : events())
+            QVERIFY(v.toObject()["trusted"].toBool());
+        QVERIFY(!inGuest(window->activeFocusItem()));
+        QVERIFY(js("document.hasFocus()").toBool());
+    }
+    void typeFieldMovedRefusesAndCancelSendsNothing()
+    {
+        open(QString("<body style='margin:0'><input id=field style='position:absolute;left:0;"
+                     "top:0;width:300px;height:30px'>") +
+             recorder);
+        auto snap = run("browser_snapshot");
+        const int field = refOf(snap, "textbox");
+        js("events=[]");
+        const auto moving =
+            start("browser_type", {{"pageId", pageOf(snap)}, {"ref", field}, {"text", "x"}});
+        QTest::qWait(200);
+        js("document.getElementById('field').style.top='300px'");
+        QVERIFY(QTest::qWaitFor([&] { return results.contains(moving); }));
+        QCOMPARE(code(results[moving]), "stale_target");
+        QCOMPARE(text(results[moving]),
+                 "Error: The field moved or is covered. Take a new snapshot.");
+        QVERIFY(events().isEmpty());
+        snap = run("browser_snapshot");
+        const auto cancelled =
+            start("browser_type", {{"pageId", pageOf(snap)}, {"ref", field}, {"text", "late"}});
+        QTest::qWait(200);          // inside the pointer delay
+        browser->cancel(cancelled); // partial input invalidates the observation
+        snap = run("browser_snapshot");
+        js("events=[]");
+        const auto ended =
+            start("browser_type", {{"pageId", pageOf(snap)}, {"ref", field}, {"text", "ended"}});
+        QTest::qWait(200);
+        browser->turnEnded("test");
+        QTest::qWait(700);
+        QVERIFY(!results.contains(cancelled));
+        QVERIFY(!results.contains(ended));
+        QCOMPARE(js("document.getElementById('field').value").toString(), QString());
+        QVERIFY(events().isEmpty());
+    }
+    void selectMatchesTextValueAndDispatchesInputChange()
+    {
+        open(
+            QString("<body style='margin:0'><select id=size><option value=s>Small</option>"
+                    "<option value=m>  Medium   size </option><option value=xl>Extra large</option>"
+                    "</select><button id=plain>Plain</button>") +
+            recorder);
+        auto snap = run("browser_snapshot");
+        const int size = refOf(snap, "combobox");
+        QVERIFY(size);
+        js("events=[]");
+        auto chosen = run("browser_select",
+                          {{"pageId", pageOf(snap)}, {"ref", size}, {"option", "medium SIZE"}});
+        QVERIFY2(!chosen.isError, qPrintable(text(chosen)));
+        QVERIFY(text(chosen).startsWith("Chose \"Medium size\".\nPage: "));
+        QCOMPARE(js("document.getElementById('size').value").toString(), "m");
+        QStringList kinds;
+        for (const auto &v : events()) {
+            kinds << v.toObject()["type"].toString();
+            QVERIFY(v.toObject()["bubbles"].toBool());
+            QVERIFY(!v.toObject()["trusted"].toBool()); // as the reference's dispatchEvent
+        }
+        QCOMPARE(kinds, QStringList({"input", "change"}));
+        QCOMPARE(js("document.activeElement.id").toString(), "size");
+        auto byValue =
+            run("browser_select", {{"pageId", pageOf(chosen)}, {"ref", size}, {"option", "XL"}});
+        QVERIFY(text(byValue).startsWith("Chose \"Extra large\"."));
+        auto partial =
+            run("browser_select", {{"pageId", pageOf(byValue)}, {"ref", size}, {"option", "mal"}});
+        QVERIFY(text(partial).startsWith("Chose \"Small\"."));
+        auto missing =
+            run("browser_select", {{"pageId", pageOf(partial)}, {"ref", size}, {"option", "Huge"}});
+        QCOMPARE(code(missing), "browser_error");
+        QCOMPARE(text(missing), QString("Error: No option like \"Huge\" in [%1]. Options: Small | "
+                                        "Medium size | Extra large")
+                                    .arg(size));
+        snap = run("browser_snapshot");
+        const int plain = refOf(snap, "Plain");
+        auto wrong =
+            run("browser_select", {{"pageId", pageOf(snap)}, {"ref", plain}, {"option", "x"}});
+        QCOMPARE(text(wrong), QString("Error: [%1] is not a dropdown list. Click it and then click "
+                                      "the option you need.")
+                                  .arg(plain));
+        // The failed choice already ran in the page: its observation is spent.
+        QCOMPARE(
+            code(run("browser_select", {{"pageId", pageOf(snap)}, {"ref", size}, {"option", "x"}})),
+            "stale_page");
+        snap = run("browser_snapshot");
+        QCOMPARE(
+            code(run("browser_select", {{"pageId", pageOf(snap)}, {"ref", 999}, {"option", "x"}})),
+            "stale_ref");
+    }
+    void pressKeysModifiersRepeatAndNavigationBarrier()
+    {
+        const auto next =
+            page("<title>Pressed</title><h1>After enter</h1>" + QString(recorder), "pressed.html");
+        open(QString("<body style='margin:0'><input id=field style='position:absolute;left:0;"
+                     "top:0;width:300px;height:30px'>") +
+             recorder);
+        auto snap = run("browser_snapshot");
+        auto focused =
+            run("browser_click", {{"pageId", pageOf(snap)}, {"ref", refOf(snap, "textbox")}});
+        QVERIFY(!focused.isError);
+        js("events=[]");
+        auto pressed = run("browser_press", {{"pageId", pageOf(focused)}, {"key", "Shift+a"}});
+        QVERIFY2(!pressed.isError, qPrintable(text(pressed)));
+        QCOMPARE(js("document.getElementById('field').value").toString(), "a");
+        auto down = events().first().toObject();
+        QCOMPARE(down["type"].toString(), "keydown");
+        QVERIFY(down["trusted"].toBool());
+        QCOMPARE(down["key"].toString(), "a");
+        QCOMPARE(down["code"].toString(), "KeyA");
+        QCOMPARE(down["keyCode"].toInt(), 65);
+        QVERIFY(down["shift"].toBool());
+        // Control chords: the reference's literal key, no character.
+        const auto chords = [&](const QString &combo) {
+            js("events=[]");
+            auto r = run("browser_press", {{"pageId", pageOf(pressed)}, {"key", combo}});
+            pressed = r;
+            QStringList out;
+            for (const auto &v : events()) {
+                const auto e = v.toObject();
+                if (!e["trusted"].toBool())
+                    out << "UNTRUSTED";
+                out << e["type"].toString() + ":" + e["key"].toString() + ":" +
+                           e["code"].toString() + ":" + QString::number(e["keyCode"].toInt());
+            }
+            return out.join(' ');
+        };
+        // Exact matches with keyOf()'s fields:
+        QCOMPARE(chords("ctrl+q"), "keydown:q:KeyQ:81 keyup:q:KeyQ:81");
+        QCOMPARE(chords("Meta+b"), "keydown:b:KeyB:66 keyup:b:KeyB:66");
+        QCOMPARE(chords("Control+Space"), "keydown: :Space:32 keyup: :Space:32");
+        // Recorded divergences (browser-tools-port.md): through QKeyEvent,
+        // WebEngine derives a chord's letter case and punctuation code/keyCode
+        // itself, and modified Enter also gets its keypress. Reference values:
+        // "A", "X", "x"; "/" with code "" and keyCode 47; no keypress/change.
+        QCOMPARE(chords("Control+A"), "keydown:a:KeyA:65 keyup:a:KeyA:65");
+        QCOMPARE(chords("Alt+X"), "keydown:x:KeyX:88 keyup:x:KeyX:88");
+        QCOMPARE(chords("Control+Shift+x"), "keydown:X:KeyX:88 keyup:X:KeyX:88");
+        QCOMPARE(chords("ctrl+/"), "keydown:/:Slash:191 keyup:/:Slash:191");
+        QCOMPARE(chords(QString::fromUtf8("Control+é")),
+                 QString::fromUtf8("keydown:é::0 keyup:é::0"));
+        QCOMPARE(chords("Control+Enter"),
+                 "keydown:Enter:Enter:13 keypress:Enter:Enter:13 change:::0 keyup:Enter:Enter:13");
+        QCOMPARE(chords("Tab"), "keydown:Tab:Tab:9 keyup:Tab:Tab:9"); // focus moves on
+        QVERIFY(js("document.activeElement.id").toString() != "field");
+        QCOMPARE(js("document.getElementById('field').value").toString(), "a");
+        auto focusedAgain =
+            run("browser_click", {{"pageId", pageOf(pressed)}, {"x", 250}, {"y", 15}});
+        pressed = focusedAgain;
+        // Unmodified characters: exact key/code/text; keyCode 0 for
+        // non-alphanumerics (the reference's is charCodeAt, here 47).
+        QCOMPARE(chords("/"), "keydown:/::0 keypress:/::47 beforeinput:::0 input:::0 keyup:/::0");
+        QCOMPARE(chords("7"), "keydown:7:Digit7:55 keypress:7:Digit7:55 beforeinput:::0 "
+                              "input:::0 keyup:7:Digit7:55");
+        QCOMPARE(chords("Q"), "keydown:Q:KeyQ:81 keypress:Q:KeyQ:81 beforeinput:::0 input:::0 "
+                              "keyup:Q:KeyQ:81");
+        QCOMPARE(chords("space"), "keydown: :Space:32 keypress: :Space:32 beforeinput:::0 "
+                                  "input:::0 keyup: :Space:32");
+        QCOMPARE(js("document.getElementById('field').value").toString(), "a/7Q ");
+        QCOMPARE(chords("Escape"), "keydown:Escape:Escape:27 keyup:Escape:Escape:27");
+        js("document.getElementById('field').value='a'");
+        js("events=[]");
+        auto repeated = run("browser_press",
+                            {{"pageId", pageOf(pressed)}, {"key", "ArrowLeft"}, {"times", 2.6}});
+        QVERIFY(!repeated.isError);
+        int downs = 0, presses = 0;
+        for (const auto &v : events()) {
+            const auto e = v.toObject();
+            downs += e["type"] == "keydown";
+            presses += e["type"] == "keypress";
+            if (e["type"] == "keydown") {
+                QCOMPARE(e["code"].toString(), "ArrowLeft");
+                QCOMPARE(e["keyCode"].toInt(), 37);
+            }
+        }
+        QCOMPARE(downs, 3);   // round(2.6)
+        QCOMPARE(presses, 0); // rawKeyDown: no text
+        js("events=[]");
+        auto many =
+            run("browser_press",
+                {{"pageId", pageOf(repeated)}, {"key", "Control+Shift+Meta+Alt+X"}, {"times", 50}});
+        QVERIFY(!many.isError);
+        downs = 0;
+        for (const auto &v : events()) {
+            const auto e = v.toObject();
+            if (e["type"] != "keydown")
+                continue;
+            ++downs;
+            QVERIFY(e["ctrl"].toBool() && e["shift"].toBool() && e["meta"].toBool() &&
+                    e["alt"].toBool());
+            QCOMPARE(e["code"].toString(), "KeyX");
+        }
+        QCOMPARE(downs, 20);
+        QCOMPARE(js("document.getElementById('field').value").toString(), "a");
+        QCOMPARE(text(run("browser_press", {{"pageId", pageOf(many)}, {"key", " + "}})),
+                 "Error: key is empty");
+        QCOMPARE(text(run("browser_press", {{"pageId", pageOf(many)}, {"key", "Hyper+a"}})),
+                 "Error: Unknown modifier Hyper. Use Control, Alt, Shift or Meta.");
+        QCOMPARE(text(run("browser_press", {{"pageId", pageOf(many)}, {"key", "F5"}})),
+                 "Error: Unknown key F5. Use Enter, Tab, Escape, Backspace, Delete, Space, arrows, "
+                 "PageUp, PageDown, Home, End or a single character.");
+        // A navigating key stops the remaining repetitions.
+        js(QString("addEventListener('keydown',e=>{if(e.key==='Enter')location.href='%1'})")
+               .arg(next));
+        auto leaving =
+            run("browser_press", {{"pageId", pageOf(many)}, {"key", "Enter"}, {"times", 3}});
+        QCOMPARE(code(leaving), "stale_page");
+        QTRY_VERIFY(browser->url().endsWith("pressed.html"));
+        QTRY_COMPARE(js("typeof events").toString(), "object");
+        QVERIFY(events().isEmpty());
+        // The final repetition may navigate.
+        snap = run("browser_snapshot");
+        QVERIFY(!snap.isError);
+    }
+    void scrollWheelExactDirectionAndDelta()
+    {
+        open(QString("<title>Tall</title><body style='margin:0;height:20000px'>") + recorder);
+        window->setProperty("shield", true);
+        auto snap = run("browser_snapshot");
+        const double vh = js("visualViewport.height").toDouble();
+        const double vw = js("visualViewport.width").toDouble();
+        auto down = run("browser_scroll",
+                        {{"pageId", pageOf(snap)}, {"direction", "down"}, {"amount", 0.5}});
+        QVERIFY2(!down.isError, qPrintable(text(down)));
+        auto wheel = events().last().toObject();
+        QCOMPARE(wheel["type"].toString(), "wheel");
+        QVERIFY(wheel["trusted"].toBool());
+        QCOMPARE(wheel["deltaY"].toDouble(), vh * 0.5);
+        QCOMPARE(wheel["deltaX"].toDouble(), 0.0);
+        QCOMPARE(wheel["deltaMode"].toInt(), 0);
+        QCOMPARE(wheel["x"].toDouble(), std::floor(vw / 2));
+        QCOMPARE(wheel["y"].toDouble(), std::floor(vh / 2));
+        QCOMPARE(js("scrollY").toDouble(), vh * 0.5);
+        QCOMPARE(down.data->value("scroll").toObject()["top"].toDouble(), vh * 0.5);
+        QVERIFY(pageOf(down) != pageOf(snap));
+        QCOMPARE(code(run("browser_scroll", {{"pageId", pageOf(snap)}})), "stale_page");
+        js("events=[]");
+        auto up = run("browser_scroll",
+                      {{"pageId", pageOf(down)}, {"direction", "UP"}, {"amount", 0.25}});
+        QVERIFY(!up.isError);
+        QCOMPARE(events().last().toObject()["deltaY"].toDouble(), -vh * 0.25);
+        QCOMPARE(js("scrollY").toDouble(), vh * 0.25);
+        js("events=[]");
+        auto standard = run("browser_scroll", {{"pageId", pageOf(up)}});
+        QCOMPARE(events().last().toObject()["deltaY"].toDouble(), vh * 0.8);
+        js("events=[]");
+        auto capped = run("browser_scroll", {{"pageId", pageOf(standard)}, {"amount", 50}});
+        QCOMPARE(events().last().toObject()["deltaY"].toDouble(), vh * 10);
+        js("events=[]");
+        auto floor = run("browser_scroll",
+                         {{"pageId", pageOf(capped)}, {"amount", -3}, {"direction", "up"}});
+        QVERIFY(!floor.isError);
+        QCOMPARE(events().last().toObject()["deltaY"].toDouble(), -vh * 0.1);
+        QCOMPARE(js("scrollY").toDouble(), vh * (0.25 + 0.8 + 10 - 0.1));
+    }
+    void inputRendererLossAndTakeControl()
+    {
+        open(QString("<body style='margin:0'><input id=field style='position:absolute;left:0;"
+                     "top:0;width:300px;height:30px'>") +
+             recorder);
+        auto snap = run("browser_snapshot");
+        const int field = refOf(snap, "textbox");
+        const auto taken =
+            start("browser_type",
+                  {{"pageId", pageOf(snap)}, {"ref", field}, {"text", "secret"}, {"submit", true}});
+        QTest::qWait(200);
+        browser->take();
+        QTest::qWait(600);
+        QVERIFY(!results.contains(taken));
+        QCOMPARE(js("document.getElementById('field').value").toString(), QString());
+        browser->handBack();
+        QVERIFY(QTest::qWaitFor([&] { return results.contains(taken); }));
+        QCOMPARE(results[taken].status, HostToolResult::Status::HandedBack);
+        QCOMPARE(js("document.getElementById('field').value").toString(), QString());
+        QVERIFY(!text(results[taken]).contains("secret"));
+        snap = run("browser_snapshot");
+        js("events=[]");
+        const auto crashing = start("browser_click", {{"pageId", pageOf(snap)}, {"ref", field}});
+        QTest::qWait(150);
+        const auto pid = guest()->property("renderProcessPid").toLongLong();
+        QVERIFY(pid > 0);
+        QCOMPARE(::kill(pid_t(pid), SIGKILL), 0);
+        QVERIFY(QTest::qWaitFor([&] { return results.contains(crashing); }));
+        QCOMPARE(code(results[crashing]), "guest_crashed");
+        auto recovered = run("browser_snapshot");
+        QVERIFY2(!recovered.isError, qPrintable(text(recovered)));
+        QCOMPARE(code(run("browser_click", {{"pageId", pageOf(snap)}, {"ref", field}})),
+                 "stale_page");
     }
 };
 int main(int argc, char **argv)

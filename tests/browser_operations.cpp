@@ -17,6 +17,12 @@ class DelayedAutomation final : public BrowserAutomation
         Done done;
     };
     QVector<Call> calls;
+    struct Event {
+        quint64 id;
+        Input input;
+        Done done;
+    };
+    QVector<Event> inputs;
     QStringList navigation;
     QVector<quint64> cancelled;
     void attach(const QString &, int, QObject *) override {}
@@ -33,7 +39,10 @@ class DelayedAutomation final : public BrowserAutomation
     {
         QFAIL("unexpected capture");
     }
-    void wheel(quint64, const Target &, double, Done) override { QFAIL("unexpected wheel"); }
+    void input(quint64 id, const Target &, const Input &input, Done done) override
+    {
+        inputs.append({id, input, std::move(done)});
+    }
     void cancel(quint64 call) override
     {
         cancelled << call;
@@ -154,7 +163,7 @@ class BrowserOperationsTest : public QObject
         QVERIFY(!results.contains(pending));
         QVERIFY(!results.contains(queued));
         QCOMPARE(browser->tabList().size(), 1);
-        const auto rejected = start("browser_click");
+        const auto rejected = start("browser_click", {{"pageId", browser->tab(tab)->pageId}});
         browser->cancel(rejected);
         QTest::qWait(20);
         QVERIFY(!results.contains(rejected));
@@ -230,6 +239,86 @@ class BrowserOperationsTest : public QObject
         const auto expired = start("browser_read", {{"readId", readId}, {"start", 1}});
         QTRY_VERIFY(results.contains(expired));
         QCOMPARE(code(expired), "stale_read");
+    }
+    void inputSequenceStopsOnCancelAndLateAcknowledgement()
+    {
+        const auto page = browser->tab(tab)->pageId;
+        const auto id = start("browser_press", {{"pageId", page}, {"key", "a"}, {"times", 3}});
+        QTRY_COMPARE(engine->inputs.size(), 1);
+        QCOMPARE(engine->inputs[0].input.kind, BrowserAutomation::Input::Kind::KeyDown);
+        QCOMPARE(engine->inputs[0].input.code, "KeyA");
+        QCOMPARE(engine->inputs[0].input.text, "a");
+        engine->inputs[0].done({});
+        QTRY_COMPARE(engine->inputs.size(), 2);
+        browser->cancel(id);
+        QVERIFY(browser->tab(tab)->pageId != page); // partial input spends the page
+        engine->inputs[1].done({});
+        QTest::qWait(60);
+        QCOMPARE(engine->inputs.size(), 2);
+        QVERIFY(engine->calls.isEmpty()); // no barrier, settle or snapshot
+        QVERIFY(results.isEmpty());
+    }
+    void navigationBetweenDoubleClickPressesStopsTheSecond()
+    {
+        browser->setOpen(false); // no pointer delay on a hidden panel
+        const auto id =
+            start("browser_click",
+                  {{"pageId", browser->tab(tab)->pageId}, {"x", 5}, {"y", 6}, {"double", true}});
+        using Kind = BrowserAutomation::Input::Kind;
+        for (const auto kind : {Kind::Move, Kind::Press, Kind::Release}) {
+            QTRY_VERIFY(!engine->inputs.isEmpty() && engine->inputs.last().input.kind == kind);
+            QCOMPARE(engine->inputs.last().input.x, 5.0);
+            QCOMPARE(engine->inputs.last().input.count, 1);
+            engine->inputs.last().done({});
+        }
+        QTRY_COMPARE(engine->calls.size(), 1);
+        QCOMPARE(engine->calls[0].kind, BrowserAutomation::Query::Probe);
+        browser->navigated(tab, browser->tab(tab)->incarnation, "about:blank#moved", true);
+        engine->calls[0].done({{"probed", true}});
+        QTRY_VERIFY(results.contains(id));
+        QCOMPARE(code(id), "stale_page");
+        QCOMPARE(engine->inputs.size(), 3); // the second press was never sent
+    }
+    void finalInputMayNavigateThenObservesTheReplacement()
+    {
+        const auto before = browser->tab(tab)->pageId;
+        const auto id = start("browser_press", {{"pageId", before}, {"key", "Control+Enter"}});
+        QTRY_COMPARE(engine->inputs.size(), 1);
+        QCOMPARE(engine->inputs[0].input.modifiers, 2);
+        QVERIFY(engine->inputs[0].input.text.isEmpty()); // Control suppresses text
+        browser->navigated(tab, browser->tab(tab)->incarnation, "about:blank#next", true);
+        engine->inputs[0].done({});
+        QTRY_COMPARE(engine->inputs.size(), 2); // its release still follows
+        QCOMPARE(engine->inputs[1].input.kind, BrowserAutomation::Input::Kind::KeyUp);
+        engine->inputs[1].done({});
+        QTRY_COMPARE(engine->calls.size(), 1);
+        QCOMPARE(engine->calls[0].kind, BrowserAutomation::Query::Quiet);
+        engine->calls[0].done({{"quiet", true}});
+        QTRY_COMPARE(engine->calls.size(), 2);
+        QCOMPARE(engine->calls[1].kind, BrowserAutomation::Query::Snapshot);
+        engine->calls[1].done(DelayedAutomation::snapshot());
+        QTRY_VERIFY(results.contains(id));
+        QVERIFY(!results[id].isError);
+        QVERIFY(results[id].data->value("pageId").toString() != before);
+    }
+    void inputDeadlineSuppressesLateAcknowledgement()
+    {
+        browser->toolOwner()->setLimits({1000, 1000, 40, 1000});
+        const auto id = start("browser_scroll", {{"pageId", browser->tab(tab)->pageId}});
+        QTRY_COMPARE(engine->calls.size(), 1);
+        QCOMPARE(engine->calls[0].kind, BrowserAutomation::Query::Metrics);
+        engine->calls[0].done({{"viewWidth", 800}, {"viewHeight", 500}});
+        QTRY_COMPARE(engine->inputs.size(), 1);
+        const auto wheel = engine->inputs[0].input;
+        QCOMPARE(wheel.kind, BrowserAutomation::Input::Kind::Wheel);
+        QCOMPARE(wheel.x, 400.0);
+        QCOMPARE(wheel.y, 250.0);
+        QCOMPARE(wheel.deltaY, 400.0); // 0.8 viewport heights, downward
+        QTRY_VERIFY(results.contains(id));
+        QCOMPARE(code(id), "timeout");
+        engine->inputs[0].done({});
+        QTest::qWait(400);
+        QCOMPARE(engine->calls.size(), 1); // no settle or observation
     }
 };
 QTEST_GUILESS_MAIN(BrowserOperationsTest)

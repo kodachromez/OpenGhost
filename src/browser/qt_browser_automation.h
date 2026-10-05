@@ -3,6 +3,7 @@
 #include <QHash>
 #include <QPointer>
 #include <QQuickItem>
+#include <QSet>
 
 namespace openghost
 {
@@ -17,8 +18,12 @@ class QtBrowserAutomation final : public BrowserAutomation
     void query(quint64, const Target &, Query, const QJsonObject &, qint64, Done) override;
     void navigate(const Target &, const QString &, const QString &) override;
     void capture(quint64, const Target &, const QJsonObject &, bool, Done) override;
-    void wheel(quint64, const Target &, double, Done) override;
+    void input(quint64, const Target &, const Input &, Done) override;
     void cancel(quint64 call) override { m_pending.remove(call); }
+    QPointer<QObject> focused() const override;
+    QString giveBack(QObject *back) override;
+    static QQuickItem *receiver(QQuickItem *view);
+    bool eventFilter(QObject *watched, QEvent *event) override;
     Q_INVOKABLE void scriptResult(const QString &tab, int incarnation, const QString &call,
                                   const QVariant &result);
   signals:
@@ -36,7 +41,10 @@ class QtBrowserAutomation final : public BrowserAutomation
     };
     QHash<QString, Guest> m_guests;
     QHash<quint64, Pending> m_pending;
+    quint64 m_clock = quint64(1) << 40;
     QQuickItem *item(const Target &) const;
+    QQuickItem *emulateFocus(QQuickItem *view);
+    QSet<QObject *> m_emulated;
     void complete(quint64, QJsonObject);
 };
 } // namespace openghost
