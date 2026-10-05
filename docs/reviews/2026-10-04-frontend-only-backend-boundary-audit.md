@@ -335,6 +335,8 @@ Existing transcripts are returned and re-saved wholesale, not projected to a dis
 
 **Resolution:** Pinned text now shows character counts, not token estimates. The 200,000-character text cap and 20-file cap are explicitly local resource limits; synthetic image/path weights are removed. Usage uses the same generic palette for every provider, API-key placeholders defer to backend metadata or “API key”, and effort preferences migrate once to `openghost.effort` (obsolete model-key cleanup removed). Backend-reported usage/statistics remain unchanged. Validation: `node --test test/settings-presentation.test.js test/provider-auth.test.js test/model-capabilities.test.js test/usage.test.js` — 33 passed.
 
+**Superseded (issue #21, finding 6, `cc93989`):** the pinned-text display went back to a token estimate, now labelled as one: `≈N estimated tokens` from the display-only `CHARS_PER_TOKEN = 3.2` heuristic in `settings-general.js`. It is not a tokenizer count and sets no local or model limit; the local caps above are unchanged.
+
 ### F20 — CLEANUP: misleading recovery UX and avoidable coupling
 
 - `BackendClient` can reinitialize on a synthetic later `running` status, and the unit test says it “comes back”, but the production main process has **no restart/reconnect command or automatic restart**. After crash/configuration changes the user must relaunch the app. This is documented, not a hidden feature. Raw spawn/config errors exist in `Backend.process` but the normal UI says only “No backend is connected”.
