@@ -1,0 +1,599 @@
+{
+  "repository": "Ghosty (zoe-rust2)",
+  "revision": "3b0e7a512df11dc535be90229df2a11aa80702c3",
+  "files": [
+    {
+      "source": "native-ghosty/.clang-format",
+      "destination": ".clang-format",
+      "source_sha256": "edfebd2a5ebd573b2b356b9183f3208894863e987430a919e0e6d6ee6c41f9d1"
+    },
+    {
+      "source": "native-ghosty/qml/ApprovalCard.qml",
+      "destination": "qml/ApprovalCard.qml",
+      "source_sha256": "c67e8f12ed50673eaa36ce68d2b30c4fb823ce4bd904f230b8404394276d533e"
+    },
+    {
+      "source": "native-ghosty/qml/Backdrop.qml",
+      "destination": "qml/Backdrop.qml",
+      "source_sha256": "2d888c37e55fcda556a6854479514636d90d1e7894da314c222e91152f41ea70"
+    },
+    {
+      "source": "native-ghosty/qml/Block.qml",
+      "destination": "qml/Block.qml",
+      "source_sha256": "796aec1eac2b1c9955f138b2a7a5b4d7fbb7479e05bc40ee5d4c8b5039b6d2dd"
+    },
+    {
+      "source": "native-ghosty/qml/ButtonTip.qml",
+      "destination": "qml/ButtonTip.qml",
+      "source_sha256": "d92ef0abd58dd14329652dad55a1ff9e44cbaad40706659f4e0c525fb1942c2c"
+    },
+    {
+      "source": "native-ghosty/qml/ChatEntry.qml",
+      "destination": "qml/ChatEntry.qml",
+      "source_sha256": "6b30a82cd6695e3eb318f02873a513b18302e68ed06e7f214796245b918c3fd5"
+    },
+    {
+      "source": "native-ghosty/qml/CodeBlock.qml",
+      "destination": "qml/CodeBlock.qml",
+      "source_sha256": "041940aebfcb0dd536a6c60371f86c0fe3c07f83ea12339e4ecfd8ac91bb7c86"
+    },
+    {
+      "source": "native-ghosty/qml/CopyButton.qml",
+      "destination": "qml/CopyButton.qml",
+      "source_sha256": "b51b091355565c812b29989b6c1f161b0dfc614a9ebc365f98a9c6e4fab527c7"
+    },
+    {
+      "source": "native-ghosty/qml/DiagramBlock.qml",
+      "destination": "qml/DiagramBlock.qml",
+      "source_sha256": "6a74a5d0801a5ec6cec9c82b85f31e8be60df98c69e6cde59038767e7b0b304f"
+    },
+    {
+      "source": "native-ghosty/qml/EffortControl.qml",
+      "destination": "qml/EffortControl.qml",
+      "source_sha256": "28a12e73bb6a5624bf25a26e9b16cff3b211b3ab215770e558b6405788b11b8e"
+    },
+    {
+      "source": "native-ghosty/qml/EffortStage.qml",
+      "destination": "qml/EffortStage.qml",
+      "source_sha256": "61fad1e8468170749ff3746e89c3765ce0a21e7845236f75fe1c52e8e9468602"
+    },
+    {
+      "source": "native-ghosty/qml/Entrance.qml",
+      "destination": "qml/Entrance.qml",
+      "source_sha256": "0de417ce6290d6f796e959f1f92c1067a7804d0a953ee17a6297bbc21c8291ba"
+    },
+    {
+      "source": "native-ghosty/qml/Feather.qml",
+      "destination": "qml/Feather.qml",
+      "source_sha256": "4a028e2396bb2e1f1f00c4dd15ae048bdade2f7244a75472fcf24303aa595cb1"
+    },
+    {
+      "source": "native-ghosty/qml/IconButton.qml",
+      "destination": "qml/IconButton.qml",
+      "source_sha256": "6f78825e74ebcb376a1948149702b3bb5dd970d02243bd52bc1f2b4bfe1dcb03"
+    },
+    {
+      "source": "native-ghosty/qml/InlineText.qml",
+      "destination": "qml/InlineText.qml",
+      "source_sha256": "94ae2ecf4f850502709f02dfe9a5850a57e8e86599a19f4fe75be283fef27041"
+    },
+    {
+      "source": "native-ghosty/qml/JumpButton.qml",
+      "destination": "qml/JumpButton.qml",
+      "source_sha256": "7a15205928220efe66c92345bb787d31c84b660ba539898d74e933e3799bbb60"
+    },
+    {
+      "source": "native-ghosty/qml/LiveText.qml",
+      "destination": "qml/LiveText.qml",
+      "source_sha256": "6da2ca8c002195e02d4f0774d9b0fb4251239818ea858666991ff9be2fc816e1"
+    },
+    {
+      "source": "native-ghosty/qml/Main.qml",
+      "destination": "qml/Main.qml",
+      "source_sha256": "f3b2b1f1b80e72ba0304388e502b21454f276314ff9f7d33f48b448b6bc485c2"
+    },
+    {
+      "source": "native-ghosty/qml/Markdown.qml",
+      "destination": "qml/Markdown.qml",
+      "source_sha256": "d38657451b4d8c22ede24f20cba7d97263eaf278b3e58492c1c58dbba78db1c4"
+    },
+    {
+      "source": "native-ghosty/qml/Metrics.qml",
+      "destination": "qml/Metrics.qml",
+      "source_sha256": "9132537b21595f07a1691106a151a066b19fc70486dfe0193b5bccf1bd2ae491"
+    },
+    {
+      "source": "native-ghosty/qml/ModeDock.qml",
+      "destination": "qml/ModeDock.qml",
+      "source_sha256": "41e15f80c1929138db3472aedb808a360a9bde7c5737cf97168ba7ea0a25bdfc"
+    },
+    {
+      "source": "native-ghosty/qml/ModePicker.qml",
+      "destination": "qml/ModePicker.qml",
+      "source_sha256": "decdb775c80bf6d89f736552493b2fc8da3816f92c5c286dea18dda54cc3f565"
+    },
+    {
+      "source": "native-ghosty/qml/ModelButton.qml",
+      "destination": "qml/ModelButton.qml",
+      "source_sha256": "b7ba06c37c53d7c71a6a0c458f314984b7cc8d62bebe911f90ee0bd8fa69e324"
+    },
+    {
+      "source": "native-ghosty/qml/ModelGlyph.qml",
+      "destination": "qml/ModelGlyph.qml",
+      "source_sha256": "501a71da51d44b5fb88e0385798b17471349e1da6a9ab2f0bfe9fd7d3689b644"
+    },
+    {
+      "source": "native-ghosty/qml/ModelStage.qml",
+      "destination": "qml/ModelStage.qml",
+      "source_sha256": "fb22224908c8fcff44ac6816acd7a43e185cc3cc0b2bd396c9e35202300e0d76"
+    },
+    {
+      "source": "native-ghosty/qml/OverlayScrollBar.qml",
+      "destination": "qml/OverlayScrollBar.qml",
+      "source_sha256": "abba2100fd60aa21279a43d915b9c28d1329f9808b5b3463094b0d22fcf037f0"
+    },
+    {
+      "source": "native-ghosty/qml/RowLift.qml",
+      "destination": "qml/RowLift.qml",
+      "source_sha256": "dee79a2e0187d4c3c4c2200c97b900b8d8fe9f1497d3d1c2fca123b0cf91a67b"
+    },
+    {
+      "source": "native-ghosty/qml/SelectArea.qml",
+      "destination": "qml/SelectArea.qml",
+      "source_sha256": "11b01982699b97a6e5472597e85aba63bc5c65aac2f36ab56c93d23b4eb63abf"
+    },
+    {
+      "source": "native-ghosty/qml/SelectDriver.qml",
+      "destination": "qml/SelectDriver.qml",
+      "source_sha256": "571f486fc0d73c429b3567451adc1a0a647406db0266114d2c0d7b1540cc551c"
+    },
+    {
+      "source": "native-ghosty/qml/SelectableLabel.qml",
+      "destination": "qml/SelectableLabel.qml",
+      "source_sha256": "af721338936ea86c377dab2ff6ae92db5e0005a20726e78beb0eddd2fd679ef8"
+    },
+    {
+      "source": "native-ghosty/qml/SelectionMenu.qml",
+      "destination": "qml/SelectionMenu.qml",
+      "source_sha256": "d6f65d3a7ecbf944df438437629f9c6b85bb70893fa02f91b8e1a60b5992b968"
+    },
+    {
+      "source": "native-ghosty/qml/SelectionVeil.qml",
+      "destination": "qml/SelectionVeil.qml",
+      "source_sha256": "f9a61af7caf9e34d8df175a9d899a94a0ca759a994ac77b39198491853e946a9"
+    },
+    {
+      "source": "native-ghosty/qml/SettingsDialog.qml",
+      "destination": "qml/SettingsDialog.qml",
+      "source_sha256": "67acb2228a81f8e0d3381f467bc64542501a069b1a8b6d455b5d70acd3c86aad"
+    },
+    {
+      "source": "native-ghosty/qml/Spring.qml",
+      "destination": "qml/Spring.qml",
+      "source_sha256": "66febdddb6499464aa7fbf579931042b2147d872a603639f5e88ca4db1f630a0"
+    },
+    {
+      "source": "native-ghosty/qml/TableBlock.qml",
+      "destination": "qml/TableBlock.qml",
+      "source_sha256": "8e50491d332a54f62801df1980c4d0e7079ac865f940baf6c86997c531ab912b"
+    },
+    {
+      "source": "native-ghosty/qml/TextGlow.qml",
+      "destination": "qml/TextGlow.qml",
+      "source_sha256": "2e1a1f48dc400324fcd4ab9581148802ddaf9f7a80080714c029bd105f2821cb"
+    },
+    {
+      "source": "native-ghosty/qml/TitleTip.qml",
+      "destination": "qml/TitleTip.qml",
+      "source_sha256": "da6a03e8494c6e00e1a0cf7db38bfd17003521428d6d237fa4cd9dd94efe7be4"
+    },
+    {
+      "source": "native-ghosty/qml/ToolCard.qml",
+      "destination": "qml/ToolCard.qml",
+      "source_sha256": "63afe96ff49e927aefb6bfbdcfc51fbaa5025bcddb35c522fe429c828f89247a"
+    },
+    {
+      "source": "native-ghosty/qml/UsagePage.qml",
+      "destination": "qml/UsagePage.qml",
+      "source_sha256": "d1bc86a77b89ca11b2aab278b0835961c00eacb6522a440a9ff436195cdf6b39"
+    },
+    {
+      "source": "native-ghosty/qml/VeilFilter.qml",
+      "destination": "qml/VeilFilter.qml",
+      "source_sha256": "1a7e28598381a73d647d722c9d7d5ecd238985e777d5d53cf89c4f27ed741063"
+    },
+    {
+      "source": "native-ghosty/qml/WorkingGhost.qml",
+      "destination": "qml/WorkingGhost.qml",
+      "source_sha256": "924614c37263c3b90f18a43a81c9c2b9fa07c065a53a6244620c8bbcff976367"
+    },
+    {
+      "source": "native-ghosty/resources/ghosty.png",
+      "destination": "resources/openghost.png",
+      "source_sha256": "a16b234ec4518db70ed0996c8b33366e3b8363e0e1af7e226c72df0e8e83acdc"
+    },
+    {
+      "source": "native-ghosty/shaders/blur.frag",
+      "destination": "shaders/blur.frag",
+      "source_sha256": "5c7f46752078695597b35fcde1d6c6661d4baeb797ddac75696ceeff37398297"
+    },
+    {
+      "source": "native-ghosty/shaders/frame.frag",
+      "destination": "shaders/frame.frag",
+      "source_sha256": "3e8289d39151488107a202a3b82589916dceaa1c3571d01a6688a1fdf61562cf"
+    },
+    {
+      "source": "native-ghosty/shaders/glass.frag",
+      "destination": "shaders/glass.frag",
+      "source_sha256": "4dc45c35d80726b8c41ecbf91e9067ad6200b298cb81c8bd445e7d8d36a5eea2"
+    },
+    {
+      "source": "native-ghosty/shaders/oil.frag",
+      "destination": "shaders/oil.frag",
+      "source_sha256": "cb68f183c686ca9d89f6cfedf4746106ad9c930eacda5e29c7c31f5340e6574f"
+    },
+    {
+      "source": "native-ghosty/shaders/tone.frag",
+      "destination": "shaders/tone.frag",
+      "source_sha256": "f228172668a9af47b41a44bad1388d2d697d0660cec3d36aa985d1f4c4e7c63e"
+    },
+    {
+      "source": "native-ghosty/shaders/veil.frag",
+      "destination": "shaders/veil.frag",
+      "source_sha256": "4b187371ce7c9eaea8a3cbfaaa779fc5a90653a795ad6ac21bf3e29b83705d39"
+    },
+    {
+      "source": "native-ghosty/src/cssfont.cpp",
+      "destination": "src/cssfont.cpp",
+      "source_sha256": "2c09acc09b5ff644ca9b60bb58122a37f326018a0b54f564e8941b24317d8b3a"
+    },
+    {
+      "source": "native-ghosty/src/cssfont.h",
+      "destination": "src/cssfont.h",
+      "source_sha256": "1eee486f8fb72732a6085b83e19db3fb8e1ba7d42d6e230a80f12960a280ed21"
+    },
+    {
+      "source": "native-ghosty/src/diagram.cpp",
+      "destination": "src/diagram.cpp",
+      "source_sha256": "95b0e200c5ebe133c264afd6f7ccb45b1c057fc8d462209f806dc55360142ce7"
+    },
+    {
+      "source": "native-ghosty/src/diagram.h",
+      "destination": "src/diagram.h",
+      "source_sha256": "4cd83f424d42bf937742b397f6ee0bb712566415cecbaa768e3813d155eeecf2"
+    },
+    {
+      "source": "native-ghosty/src/diagram_charts.cpp",
+      "destination": "src/diagram_charts.cpp",
+      "source_sha256": "57b3793c10f054cd0c6f247896979f6175ccd8fa4e891b4a9767b71fdb3e8f49"
+    },
+    {
+      "source": "native-ghosty/src/diagram_core.cpp",
+      "destination": "src/diagram_core.cpp",
+      "source_sha256": "d35980c13e1677ef8f634f4e13415e22aee7650604afd9c3b998948d6444f791"
+    },
+    {
+      "source": "native-ghosty/src/diagram_data.cpp",
+      "destination": "src/diagram_data.cpp",
+      "source_sha256": "502778b0e14696210d3a3d2e4396ba77e95aebd4882dea5b99bc9786f22fc074"
+    },
+    {
+      "source": "native-ghosty/src/diagram_engine.h",
+      "destination": "src/diagram_engine.h",
+      "source_sha256": "9e36f9e10f21c059797f0eb551f6758f3f7f67ceb310aab545e3b3102132b9f8"
+    },
+    {
+      "source": "native-ghosty/src/diagram_figures.cpp",
+      "destination": "src/diagram_figures.cpp",
+      "source_sha256": "ac17a676e1a06e18668abc99b2bbf9c4e683e495aef75919232305f8f60f41eb"
+    },
+    {
+      "source": "native-ghosty/src/diagram_flow.cpp",
+      "destination": "src/diagram_flow.cpp",
+      "source_sha256": "612ad19ae602c1581b9dee58cdb9b0d8cb03bae3d2aeeadad788314dc4ed1fff"
+    },
+    {
+      "source": "native-ghosty/src/diagram_page.cpp",
+      "destination": "src/diagram_page.cpp",
+      "source_sha256": "f2ea16231c47a5cf607bbf2c229b3b05c3f174334a8cc9e89f076647ec0564f9"
+    },
+    {
+      "source": "native-ghosty/src/diagram_paint.cpp",
+      "destination": "src/diagram_paint.cpp",
+      "source_sha256": "5e33f756edc62b6096007d0fe62dfc6906afa7ee37002cebd6fa3eaeb4867b24"
+    },
+    {
+      "source": "native-ghosty/src/diagram_paint.h",
+      "destination": "src/diagram_paint.h",
+      "source_sha256": "da3eec59d01d0a8c92176281aebbec8a34f7bd69384ce1e5b46eff0b6f24f79f"
+    },
+    {
+      "source": "native-ghosty/src/diagram_scene.cpp",
+      "destination": "src/diagram_scene.cpp",
+      "source_sha256": "133e8401ceb36c5d2cc12db5738f62ec5035125f4e116c06b026334f10ff438c"
+    },
+    {
+      "source": "native-ghosty/src/diagram_scene.h",
+      "destination": "src/diagram_scene.h",
+      "source_sha256": "7f60615dd1c26758b426db00d51f511b7e24683328e903bb63fbf44facd93da5"
+    },
+    {
+      "source": "native-ghosty/src/diagram_subjects.cpp",
+      "destination": "src/diagram_subjects.cpp",
+      "source_sha256": "37b5a38aa76e1db114e65102e195e150f02a9ef24b78ab948d8d3ccc6e3a139d"
+    },
+    {
+      "source": "native-ghosty/src/diagramview.cpp",
+      "destination": "src/diagramview.cpp",
+      "source_sha256": "71b910eaa58e90a042153b8f55d00e0851a109805a034651e3468a3b1ab48807"
+    },
+    {
+      "source": "native-ghosty/src/diagramview.h",
+      "destination": "src/diagramview.h",
+      "source_sha256": "d61e7ca332acb9e1edbc9a9ea0b339bd07d9b5384d6c7db1b1fe51291498607c"
+    },
+    {
+      "source": "native-ghosty/src/exposure.cpp",
+      "destination": "src/exposure.cpp",
+      "source_sha256": "b16ecfd1b5adad18cdb451ee659f7197720c8bc33ea233495163a09aa7dc64d4"
+    },
+    {
+      "source": "native-ghosty/src/exposure.h",
+      "destination": "src/exposure.h",
+      "source_sha256": "ab95d61fe3ddaa157f8f6395d50ef6747592c662201b511d5cad714fc92faebb"
+    },
+    {
+      "source": "native-ghosty/src/filekinds.cpp",
+      "destination": "src/filekinds.cpp",
+      "source_sha256": "38033bb0cbe44385ad1103181cc46dea84c9fc1d4fd96a05fc2fe74b15b1301c"
+    },
+    {
+      "source": "native-ghosty/src/filekinds.h",
+      "destination": "src/filekinds.h",
+      "source_sha256": "8d6cc1e0d0584a60c12f324c46ac6327410e51fd198262ec4dae849eaaf7db79"
+    },
+    {
+      "source": "native-ghosty/src/highlight.cpp",
+      "destination": "src/highlight.cpp",
+      "source_sha256": "786dbe0f1d5781158f1920a58316c8b8d8b4ecd37fe32613488e33cea8f8705c"
+    },
+    {
+      "source": "native-ghosty/src/highlight.h",
+      "destination": "src/highlight.h",
+      "source_sha256": "010ca21a094b5967b4462948ded7f1ed420f3f3d4729955ab12a4835a43cb830"
+    },
+    {
+      "source": "native-ghosty/src/icon.cpp",
+      "destination": "src/icon.cpp",
+      "source_sha256": "478783f78a2c3c5ea1bdd3f33829cf770338c5f784812a9bc8d8dca4a374fe1a"
+    },
+    {
+      "source": "native-ghosty/src/icon.h",
+      "destination": "src/icon.h",
+      "source_sha256": "76a6f0384fd3dc25879a7387c5e3e7b3747e56f7689e36268a4cc3b222a63610"
+    },
+    {
+      "source": "native-ghosty/src/markdown.cpp",
+      "destination": "src/markdown.cpp",
+      "source_sha256": "c6c73cc0e59cefae1035692d44f2c7846df0dcccce8f4fc90e5ddfe95d9b2a6b"
+    },
+    {
+      "source": "native-ghosty/src/markdown.h",
+      "destination": "src/markdown.h",
+      "source_sha256": "1b0b01706633671c5a3076770b9cf9cebc5d106e4937b07b652c64ac2de5c9fb"
+    },
+    {
+      "source": "native-ghosty/src/motion.cpp",
+      "destination": "src/motion.cpp",
+      "source_sha256": "88dcd5e67f97b009695ca9ee2831790156b1f682778aa9a6d23f9f070ad8ae88"
+    },
+    {
+      "source": "native-ghosty/src/motion.h",
+      "destination": "src/motion.h",
+      "source_sha256": "4bccf2a85820bed507d3c87498382040f39257ee2c4f0e429295d08623cc88a9"
+    },
+    {
+      "source": "native-ghosty/src/reveal.cpp",
+      "destination": "src/reveal.cpp",
+      "source_sha256": "95637fe810cdcaa9cd0abb521bbb03b949f67dc401c667f778de2eb0fc1a3233"
+    },
+    {
+      "source": "native-ghosty/src/reveal.h",
+      "destination": "src/reveal.h",
+      "source_sha256": "6fd62bbf72d76a6a58255d74bff8e2921a58a60bd87e2262906c75c33fdf7bae"
+    },
+    {
+      "source": "native-ghosty/src/selection.cpp",
+      "destination": "src/selection.cpp",
+      "source_sha256": "ca09ff012eeb9bc96f87f98c8e50750fd0da15d04a11e4255875c8e13770cbb7"
+    },
+    {
+      "source": "native-ghosty/src/selection.h",
+      "destination": "src/selection.h",
+      "source_sha256": "5712844ae2fcd3af008827ab5d10f438121f555fa06ae4c55d6a2a4e6ad932b3"
+    },
+    {
+      "source": "native-ghosty/src/settings.cpp",
+      "destination": "src/settings.cpp",
+      "source_sha256": "a5dd74b9f831073c9d22e7ca3fadca7e316c3aef7f03c44f2bead2598fcffa78"
+    },
+    {
+      "source": "native-ghosty/src/settings.h",
+      "destination": "src/settings.h",
+      "source_sha256": "8ea3b37cdedf2fa5ee5b4256f780779eff4e975818726998b1d01098b6d61776"
+    },
+    {
+      "source": "native-ghosty/src/shadow.cpp",
+      "destination": "src/shadow.cpp",
+      "source_sha256": "6b4e55ef638a44dfcb6798d776efc3898b7b3464c69f7a406223f0c9b7ad46ef"
+    },
+    {
+      "source": "native-ghosty/src/shadow.h",
+      "destination": "src/shadow.h",
+      "source_sha256": "826b041374b23e368a2041a26414b29abdb3590fa9df7b09a74c5a047077b5cb"
+    },
+    {
+      "source": "native-ghosty/src/tex.cpp",
+      "destination": "src/tex.cpp",
+      "source_sha256": "cd6cac21df8d9ddfdad421fc5da1b45453058e26c30a9e5c0925b11837e98b46"
+    },
+    {
+      "source": "native-ghosty/src/tex.h",
+      "destination": "src/tex.h",
+      "source_sha256": "d11e23e4382acf9d6efe8ac3eca38d8780e066201f4b9c224128eed29bac79a2"
+    },
+    {
+      "source": "native-ghosty/src/toolcard.cpp",
+      "destination": "src/toolcard.cpp",
+      "source_sha256": "62ff5e81dcf8c2e13466445c5051a3e31497fa7be8a14893cc0af53ab8ec6ce6"
+    },
+    {
+      "source": "native-ghosty/src/toolcard.h",
+      "destination": "src/toolcard.h",
+      "source_sha256": "9c499ce8e463051f13451ecd64f2f003481c6246cb7ba066d6dbdc3034740891"
+    },
+    {
+      "source": "native-ghosty/src/wave.cpp",
+      "destination": "src/wave.cpp",
+      "source_sha256": "8254b1fbb7e00dff5002b6873344c5c8b420e3e883f98bedd2296185a995dfc6"
+    },
+    {
+      "source": "native-ghosty/src/wave.h",
+      "destination": "src/wave.h",
+      "source_sha256": "48973f5b15f75a240aa75b807b18bd79ec626603ac11f3c9a5b30feaf7dd335f"
+    },
+    {
+      "source": "native-ghosty/src/activity.h",
+      "destination": "src/presentation.h",
+      "source_sha256": "6cc8ad1db78543ad90c5637a2657aeb5bf761b0246d15dc7b36122c3a088f891",
+      "scope": "display value declarations only"
+    },
+    {
+      "source": "native-ghosty/src/transcript.h",
+      "destination": "src/presentation.h",
+      "source_sha256": "17a02453bb643bc011ce21d53b93a8f652ead6b21c34d3d0efd5f8db6749e5b1",
+      "scope": "display value declarations only"
+    },
+    {
+      "source": "native-ghosty/src/client.h",
+      "destination": "src/presentation.h",
+      "source_sha256": "647aa65c93ae7ad0c5c8c71c321e558cfaa2503ea9d2148029493283ea642b3c",
+      "scope": "display value declarations only"
+    },
+    {
+      "source": "native-ghosty/qml/Splash.qml",
+      "destination": "qml/Splash.qml",
+      "revision": "29b295c1cd6214d2690c91bc971597fec646f6de",
+      "source_sha256": "93884ebaa339ae859e406e5a84db427aad90ff7589dce51ea68f605a5bc449bf",
+      "reason": "Original OpenGhost 1.3 parity, before Ghosty-specific appearance changes"
+    },
+    {
+      "source": "native-ghosty/shaders/mist.frag",
+      "destination": "shaders/mist.frag",
+      "revision": "29b295c1cd6214d2690c91bc971597fec646f6de",
+      "source_sha256": "9597d64687f50735bd60642e563bf4b350df58d057f44c10037ee788760884f0",
+      "reason": "Original OpenGhost 1.3 parity, before Ghosty-specific appearance changes"
+    },
+    {
+      "source": "native-ghosty/src/rich.cpp",
+      "destination": "src/rich.cpp",
+      "revision": "29b295c1cd6214d2690c91bc971597fec646f6de",
+      "source_sha256": "19b8162b2223ae341ba2a58d9be08145dbf9dab9b7f854e84d60feb11d364c6a",
+      "reason": "Original OpenGhost 1.3 parity, before Ghosty-specific appearance changes"
+    },
+    {
+      "source": "native-ghosty/src/rich.h",
+      "destination": "src/rich.h",
+      "revision": "29b295c1cd6214d2690c91bc971597fec646f6de",
+      "source_sha256": "ccd390bae4e2b06fcddace12bbc7e6c79e3f56e687f12c3ea1705574d790496c",
+      "reason": "Original OpenGhost 1.3 parity, before Ghosty-specific appearance changes"
+    },
+    {
+      "source": "native-ghosty/src/ghost.cpp",
+      "destination": "src/ghost.cpp",
+      "revision": "29b295c1cd6214d2690c91bc971597fec646f6de",
+      "source_sha256": "3b52a7026165c64701ea6b161ee3618389a926325891e883909236336336fc39",
+      "reason": "Original OpenGhost 1.3 parity, before Ghosty-specific appearance changes"
+    },
+    {
+      "source": "native-ghosty/src/ghost.h",
+      "destination": "src/ghost.h",
+      "revision": "29b295c1cd6214d2690c91bc971597fec646f6de",
+      "source_sha256": "3422d9a2a6c086d82421d474e9de8cc2dfcd373d07fd769d7008fa6d5936c9c7",
+      "reason": "Original OpenGhost 1.3 parity, before Ghosty-specific appearance changes"
+    },
+    {
+      "source": "native-ghosty/src/theme.h",
+      "destination": "src/theme.h",
+      "revision": "5080f34092312113fcd4a17dd8c9304ea7641aed",
+      "source_sha256": "bd46c83762291ddcf994438e5940af083afa636374e187db163f9b8b1f2a582d",
+      "reason": "Original OpenGhost 1.3 parity, before Ghosty-specific appearance changes"
+    },
+    {
+      "source": "native-ghosty/qml/AppearancePage.qml",
+      "destination": "qml/AppearancePage.qml",
+      "revision": "c950fda106a8b141faf25f16b30b3e97fd7e5f8f",
+      "source_sha256": "9ea0a3b40f7d14c7c9bf4899801df9c64a86aebea86fd441e89aa6026ed215ae",
+      "reason": "Original OpenGhost 1.3 parity, before Ghosty-specific appearance changes"
+    },
+    {
+      "source": "native-ghosty/qml/WelcomeGhost.qml",
+      "destination": "qml/WelcomeGhost.qml",
+      "revision": "c950fda106a8b141faf25f16b30b3e97fd7e5f8f",
+      "source_sha256": "f0328f26966360bb0277eaf42210f63c8c8c70d1ac4923ea4abde9279b2916ef",
+      "reason": "Original OpenGhost 1.3 parity, before Ghosty-specific appearance changes"
+    },
+    {
+      "source": "native-ghosty/src/appearance.cpp",
+      "destination": "src/appearance.cpp",
+      "revision": "c950fda106a8b141faf25f16b30b3e97fd7e5f8f",
+      "source_sha256": "5016d7ca20aa8cef3ee826fdad5f6e4b9b0175e50e5cd67a0a998f88c2def71a",
+      "reason": "Original OpenGhost 1.3 parity, before Ghosty-specific appearance changes"
+    },
+    {
+      "source": "native-ghosty/src/appearance.h",
+      "destination": "src/appearance.h",
+      "revision": "c950fda106a8b141faf25f16b30b3e97fd7e5f8f",
+      "source_sha256": "5ee39f85e3e529b613b07a4f9e9e123ad9a33f80ec6138cae552b52843e3d00c",
+      "reason": "Original OpenGhost 1.3 parity, before Ghosty-specific appearance changes"
+    },
+    {
+      "source": "native-ghosty/qml/GeneralPage.qml",
+      "destination": "qml/GeneralPage.qml",
+      "revision": "742c86acf9e07e0c1af7078af844cd3741173d8c",
+      "source_sha256": "690247c8d6babf98c5d46cff21ce5731a0b68cd10661eda978c2537a7ff55e40",
+      "reason": "Copy before Ghosty-only execution settings were added"
+    },
+    {
+      "source": "native-ghosty/qml/Sidebar.qml",
+      "destination": "qml/Sidebar.qml",
+      "revision": "3222049f561d8cd98bbc30183c15176cbaa1e17f",
+      "source_sha256": "ddd48bd412d6a76d86d64e43bf3d40bd6d1e4e08445fb78dfa42d0e271ffb2db",
+      "reason": "Existing OpenGhost 1.3 home Chats group; no service/workspace-switching implementation"
+    },
+    {
+      "source": "native-ghosty/src/model.h",
+      "destination": "src/model.h",
+      "revision": "3222049f561d8cd98bbc30183c15176cbaa1e17f",
+      "source_sha256": "38daf6ff86a71c626151bf77003210fd9d7468b808e24a4fe75c84ced7d10c8c",
+      "reason": "Existing OpenGhost 1.3 home Chats group; no service/workspace-switching implementation"
+    },
+    {
+      "source": "native-ghosty/src/model.cpp",
+      "destination": "src/model.cpp",
+      "revision": "3222049f561d8cd98bbc30183c15176cbaa1e17f",
+      "source_sha256": "412536b4027529b21404869374a6d0a29e7817deedf11f807f4f9d4f74785e82",
+      "reason": "Existing OpenGhost 1.3 home Chats group; no service/workspace-switching implementation"
+    }
+  ],
+  "excluded_custom_animations": [
+    "qml/MistSplash.qml",
+    "src/mascot.h",
+    "src/mascot.cpp",
+    "shaders/splash_mist.frag",
+    "shaders/splash_aura.frag",
+    "resources/splash/mascot-down.png",
+    "resources/splash/Nunito-Bold.ttf",
+    "resources/splash/Nunito-OFL.txt"
+  ]
+}
