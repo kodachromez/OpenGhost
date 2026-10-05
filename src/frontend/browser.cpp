@@ -1,4 +1,5 @@
 #include "browser.h"
+#include "browser_tools.h"
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -96,6 +97,59 @@ Browser::Browser(QString statePath, QString storagePath, QObject *parent)
 }
 
 Browser::~Browser() = default;
+
+void Browser::setAutomation(std::unique_ptr<BrowserAutomation> automation)
+{
+    if (m_automation || !automation)
+        qFatal("Browser automation must be composed exactly once");
+    m_automation = std::move(automation);
+    m_tools = std::make_unique<BrowserTools>(*this, *m_automation);
+    report();
+}
+
+void Browser::attachGuest(const QString &handle, int incarnation, QObject *view)
+{
+    if (m_automation && find(handle, incarnation))
+        m_automation->attach(handle, incarnation, view);
+}
+
+QVector<HostToolSchema> Browser::tools() const
+{
+    return m_tools ? m_tools->schemas() : QVector<HostToolSchema>{};
+}
+
+void Browser::cancel(RequestId id)
+{
+    if (m_tools)
+        m_tools->cancel(id);
+    m_runs.remove(id);
+}
+
+void Browser::turnEnded(const QString &session)
+{
+    if (m_tools)
+        m_tools->turnEnded(session);
+    drive(session, false);
+}
+
+void Browser::inputQueued(const QString &session)
+{
+    if (m_tools)
+        m_tools->inputQueued(session);
+}
+
+void Browser::revise(Tab &tab)
+{
+    ++tab.revision;
+    invalidatePage(tab);
+}
+
+void Browser::invalidatePage(Tab &tab)
+{
+    // Input invalidates observations, not the panel's navigation revision.
+    // A queued observation without pageId may still observe the settled page.
+    tab.pageId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+}
 
 // browser-panel.js normalize(): a URL as typed, a local path, a local server,
 // a host name, else a search.
@@ -267,6 +321,8 @@ void Browser::createView(Tab &tab, const QString &url)
     const QString target = url.isEmpty() ? QStringLiteral("about:blank") : url;
     tab.view = true;
     ++tab.incarnation;
+    tab.document.clear();
+    revise(tab);
     // guard(): a guest on another scheme is never attached; its readiness
     // then times out as the reference's refused webview does.
     tab.source = guarded(target) ? target : QString();
@@ -370,7 +426,10 @@ void Browser::select(const QString &handle)
 
 void Browser::selectAt(int index, bool lazy)
 {
-    m_active = index >= 0 && index < m_tabs.size() ? m_tabs.at(index).handle : QString();
+    const auto active = index >= 0 && index < m_tabs.size() ? m_tabs.at(index).handle : QString();
+    if (active != m_active)
+        ++m_selectionRevision;
+    m_active = active;
     if (Tab *t = find(m_active); t && !t->view && !isBlank(t->url) && !lazy && m_open)
         createView(*t, t->url);
     if (!m_tabs.isEmpty())
@@ -456,6 +515,21 @@ void Browser::retry()
     update(m_active);
 }
 
+void Browser::documentState(const QString &handle, int incarnation, const QString &document,
+                            bool ready)
+{
+    auto *t = find(handle, incarnation);
+    if (!t || document.isEmpty())
+        return;
+    if (t->document != document) {
+        t->document = document;
+        revise(*t);
+        update(handle);
+    }
+    if (ready)
+        domReady(handle, incarnation);
+}
+
 void Browser::domReady(const QString &handle, int incarnation)
 {
     Tab *t = find(handle, incarnation);
@@ -473,7 +547,7 @@ void Browser::loadStarted(const QString &handle, int incarnation)
     Tab *t = find(handle, incarnation);
     if (!t)
         return;
-    ++t->revision; // did-start-navigation (main frame)
+    revise(*t); // did-start-navigation (main frame)
     t->loading = true;
     t->error.clear();
     update(handle);
@@ -485,6 +559,10 @@ void Browser::loadStopped(const QString &handle, int incarnation, const QString 
     Tab *t = find(handle, incarnation);
     if (!t)
         return;
+    // A finished replacement document invalidates observations made in-load,
+    // including same-URL reloads whose URL signal does not change.
+    if (t->loading)
+        revise(*t);
     t->loading = false;
     if (!isBlank(url))
         t->url = url;
@@ -514,9 +592,9 @@ void Browser::navigated(const QString &handle, int incarnation, const QString &u
     Tab *t = find(handle, incarnation);
     if (!t)
         return;
-    if (inPage)
-        ++t->revision; // did-start-navigation also starts an in-page navigation
-    else if (hostOf(url) != hostOf(t->url))
+    Q_UNUSED(inPage)
+    revise(*t); // commits and same-document history both invalidate observations
+    if (hostOf(url) != hostOf(t->url))
         t->icon.clear();
     if (!isBlank(url))
         t->url = url;
@@ -555,7 +633,7 @@ void Browser::crashed(const QString &handle, int incarnation)
     if (!t)
         return;
     failReady(*t); // "guest_crashed"
-    ++t->revision;
+    revise(*t);
     t->state = QStringLiteral("gone");
     t->error = QStringLiteral("The browser page crashed. Open the page again.");
     t->guest = 0;
@@ -567,7 +645,11 @@ void Browser::crashed(const QString &handle, int incarnation)
 
 void Browser::take()
 {
+    if (m_user)
+        return;
     m_user = true;
+    if (m_tools)
+        m_tools->controlChanged();
     emit changed();
     report();
     if (const Tab *t = tab(m_active); t && t->view)
@@ -576,7 +658,11 @@ void Browser::take()
 
 void Browser::handBack()
 {
+    if (!m_user)
+        return;
     m_user = false;
+    if (m_tools)
+        m_tools->controlChanged();
     // The keyboard leaves the page with the user; a later agent step that
     // types gets it back first.
     const Tab *t = tab(m_active);
@@ -613,9 +699,13 @@ void Browser::release()
         resolve();
 }
 
-void Browser::run(RequestId id, const HostToolRequest &)
+void Browser::run(RequestId id, const HostToolRequest &request)
 {
-    // Never published, so ChatService refuses before calling; settle anyway,
+    if (m_tools) {
+        m_tools->run(id, request);
+        return;
+    }
+    // Not composed, so ChatService refuses before calling; settle anyway,
     // exactly once and never inline, unless cancelled first.
     m_runs.insert(id);
     QTimer::singleShot(0, this, [this, id] {
@@ -633,10 +723,23 @@ void Browser::run(RequestId id, const HostToolRequest &)
 BrowserState Browser::snapshot() const
 {
     BrowserState state;
-    // Explicit even when empty or closed. No operation can run on it yet:
-    // `available` is the host's ability to execute browser tools.
-    state.available = false;
+    state.available = bool(m_tools);
     state.status = BrowserState::Status::Unavailable;
+    if (m_tools) {
+        state.status = BrowserState::Status::Empty;
+        if (const auto *t = tab(m_active)) {
+            if (t->state == "gone")
+                state.status = BrowserState::Status::Gone;
+            else if (t->state == "failed")
+                state.status = BrowserState::Status::Failed;
+            else if (t->state == "loading")
+                state.status = BrowserState::Status::Loading;
+            else if (t->guest)
+                state.status = BrowserState::Status::Ready;
+            else
+                state.status = BrowserState::Status::Lazy;
+        }
+    }
     state.control = userHas() ? BrowserState::Control::User : BrowserState::Control::Agent;
     state.open = m_open;
     for (int k = 0; k < m_tabs.size(); ++k) {

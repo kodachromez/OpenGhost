@@ -1,0 +1,327 @@
+[
+  {
+    "name": "browser_navigate",
+    "description": "Open a page in the built-in browser, the panel on the right of the app where the user's own logins live. Returns a snapshot of the screen: text, and the elements you can use, each with a [number].",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "tabId": {
+          "type": "string",
+          "description": "Stable tabId from a result or host.browser; otherwise the active tab is pinned at receipt."
+        },
+        "pageId": {
+          "type": "string",
+          "description": "Page identity from a snapshot. Required for input; a changed page fails without input. Re-snapshot after navigation."
+        },
+        "url": {
+          "type": "string",
+          "description": "An address (https://example.com or example.com), a local file path, words to search on Google, or back, forward, reload"
+        }
+      },
+      "required": [
+        "url"
+      ]
+    }
+  },
+  {
+    "name": "browser_snapshot",
+    "description": "Describe what the page in the built-in browser shows right now: text, and the elements you can use with their [numbers]. Only what is on screen, unless full is true.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "tabId": {
+          "type": "string",
+          "description": "Stable tabId from a result or host.browser; otherwise the active tab is pinned at receipt."
+        },
+        "pageId": {
+          "type": "string",
+          "description": "Page identity from a snapshot. Required for input; a changed page fails without input. Re-snapshot after navigation."
+        },
+        "full": {
+          "type": "boolean",
+          "description": "Cover the whole page, not only the visible part"
+        }
+      },
+      "required": []
+    }
+  },
+  {
+    "name": "browser_click",
+    "description": "Click in the built-in browser like a person with a mouse: pass ref, the [number] from the latest snapshot, or x and y in page pixels read from a screenshot. Returns the new snapshot.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "tabId": {
+          "type": "string",
+          "description": "Stable tabId from a result or host.browser; otherwise the active tab is pinned at receipt."
+        },
+        "pageId": {
+          "type": "string",
+          "description": "Page identity from a snapshot. Required for input; a changed page fails without input. Re-snapshot after navigation."
+        },
+        "ref": {
+          "type": "integer",
+          "description": "Element [number] from the latest snapshot"
+        },
+        "x": {
+          "type": "number",
+          "description": "Horizontal position in page pixels, instead of ref"
+        },
+        "y": {
+          "type": "number",
+          "description": "Vertical position in page pixels, instead of ref"
+        },
+        "double": {
+          "type": "boolean",
+          "description": "Double click"
+        }
+      },
+      "required": [
+        "pageId"
+      ]
+    }
+  },
+  {
+    "name": "browser_type",
+    "description": "Type into a field in the built-in browser: clicks field ref, replaces its text and types like a keyboard. submit true presses Enter after. Without ref it types where the focus is.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "tabId": {
+          "type": "string",
+          "description": "Stable tabId from a result or host.browser; otherwise the active tab is pinned at receipt."
+        },
+        "pageId": {
+          "type": "string",
+          "description": "Page identity from a snapshot. Required for input; a changed page fails without input. Re-snapshot after navigation."
+        },
+        "ref": {
+          "type": "integer",
+          "description": "Field [number] from the latest snapshot"
+        },
+        "text": {
+          "type": "string",
+          "description": "What to type"
+        },
+        "submit": {
+          "type": "boolean",
+          "description": "Press Enter after typing"
+        },
+        "clear": {
+          "type": "boolean",
+          "description": "false keeps the text already in the field and adds to it"
+        }
+      },
+      "required": [
+        "text",
+        "pageId"
+      ]
+    }
+  },
+  {
+    "name": "browser_select",
+    "description": "Choose an option of a dropdown list (a select element) in the built-in browser by its visible text or value. Menus built from other elements are opened with a click and chosen with a click.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "tabId": {
+          "type": "string",
+          "description": "Stable tabId from a result or host.browser; otherwise the active tab is pinned at receipt."
+        },
+        "pageId": {
+          "type": "string",
+          "description": "Page identity from a snapshot. Required for input; a changed page fails without input. Re-snapshot after navigation."
+        },
+        "ref": {
+          "type": "integer",
+          "description": "The list [number] from the latest snapshot"
+        },
+        "option": {
+          "type": "string",
+          "description": "Option text or value"
+        }
+      },
+      "required": [
+        "ref",
+        "option",
+        "pageId"
+      ]
+    }
+  },
+  {
+    "name": "browser_press",
+    "description": "Press a key or a combination in the built-in browser: Enter, Escape, Tab, Backspace, Delete, Space, ArrowDown, PageDown, Home, End, Control+A, Shift+Tab and so on.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "tabId": {
+          "type": "string",
+          "description": "Stable tabId from a result or host.browser; otherwise the active tab is pinned at receipt."
+        },
+        "pageId": {
+          "type": "string",
+          "description": "Page identity from a snapshot. Required for input; a changed page fails without input. Re-snapshot after navigation."
+        },
+        "key": {
+          "type": "string",
+          "description": "Key name or combination"
+        },
+        "times": {
+          "type": "integer",
+          "description": "How many times, 1 by default"
+        }
+      },
+      "required": [
+        "key",
+        "pageId"
+      ]
+    }
+  },
+  {
+    "name": "browser_scroll",
+    "description": "Scroll the page in the built-in browser down or up by a share of the screen, or bring element ref into view. Returns the new snapshot.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "tabId": {
+          "type": "string",
+          "description": "Stable tabId from a result or host.browser; otherwise the active tab is pinned at receipt."
+        },
+        "pageId": {
+          "type": "string",
+          "description": "Page identity from a snapshot. Required for input; a changed page fails without input. Re-snapshot after navigation."
+        },
+        "direction": {
+          "type": "string",
+          "enum": [
+            "down",
+            "up"
+          ],
+          "description": "down by default"
+        },
+        "amount": {
+          "type": "number",
+          "description": "How many screens, 0.8 by default"
+        },
+        "ref": {
+          "type": "integer",
+          "description": "Scroll this element into view instead"
+        }
+      },
+      "required": [
+        "pageId"
+      ]
+    }
+  },
+  {
+    "name": "browser_screenshot",
+    "description": "Look at the page in the built-in browser yourself: returns a picture of the screen, or of the page from the top with full_page. Use it when layout, images, colors, charts or the look of a site you build matter, or when the snapshot is not enough.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "tabId": {
+          "type": "string",
+          "description": "Stable tabId from a result or host.browser; otherwise the active tab is pinned at receipt."
+        },
+        "pageId": {
+          "type": "string",
+          "description": "Page identity from a snapshot. Required for input; a changed page fails without input. Re-snapshot after navigation."
+        },
+        "full_page": {
+          "type": "boolean",
+          "description": "The page from the top, up to four screens tall"
+        }
+      },
+      "required": []
+    }
+  },
+  {
+    "name": "browser_read",
+    "description": "Read a frozen HTML-derived text snapshot, with headings, lists and links. Not computed visibility: may include hidden text and omit form values, shadow roots and iframes. Long pages come in parts; continue with tabId, readId and start.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "tabId": {
+          "type": "string",
+          "description": "Stable tabId from a result or host.browser; otherwise the active tab is pinned at receipt."
+        },
+        "pageId": {
+          "type": "string",
+          "description": "Page identity from a snapshot. Required for input; a changed page fails without input. Re-snapshot after navigation."
+        },
+        "start": {
+          "type": "integer",
+          "description": "UTF-16 code-unit offset (not bytes) in the frozen read snapshot"
+        },
+        "readId": {
+          "type": "string",
+          "description": "Read identity from the first part; required for continuation. Start at 0 without readId to refresh."
+        }
+      },
+      "required": []
+    }
+  },
+  {
+    "name": "browser_wait",
+    "description": "Wait in the built-in browser until some text appears on the page, or for a number of seconds, then return the snapshot.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "tabId": {
+          "type": "string",
+          "description": "Stable tabId from a result or host.browser; otherwise the active tab is pinned at receipt."
+        },
+        "pageId": {
+          "type": "string",
+          "description": "Page identity from a snapshot. Required for input; a changed page fails without input. Re-snapshot after navigation."
+        },
+        "text": {
+          "type": "string",
+          "description": "Text to wait for"
+        },
+        "seconds": {
+          "type": "number",
+          "description": "How long to wait at most, 15 by default with text"
+        }
+      },
+      "required": []
+    }
+  },
+  {
+    "name": "browser_tabs",
+    "description": "List tabs, open a new one (with url to load a page), switch or close using stable tabId from the list. Opening at the 12-tab limit fails without eviction. Browser calls are serialized across chats.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "tabId": {
+          "type": "string",
+          "description": "Stable tabId from a result or host.browser; otherwise the active tab is pinned at receipt."
+        },
+        "pageId": {
+          "type": "string",
+          "description": "Page identity from a snapshot. Required for input; a changed page fails without input. Re-snapshot after navigation."
+        },
+        "action": {
+          "type": "string",
+          "enum": [
+            "list",
+            "new",
+            "switch",
+            "close"
+          ]
+        },
+        "url": {
+          "type": "string",
+          "description": "For new: what to open in it"
+        },
+        "tab": {
+          "type": "integer",
+          "description": "Display position only; use tabId for switch and close"
+        }
+      },
+      "required": [
+        "action"
+      ]
+    }
+  }
+]

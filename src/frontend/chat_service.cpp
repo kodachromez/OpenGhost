@@ -291,6 +291,9 @@ ChatService::ChatService(Backend *backend, PreferencesStore *preferences, Librar
                 if (auto chat = m_chats.find(owner.first); chat != m_chats.end())
                     chat->turn.hostCalls.remove(owner.second);
                 m_host->cancel(id);
+                HostToolResult result;
+                result.status = HostToolResult::Status::Cancelled;
+                m_backend->answer(id, result);
             }
             m_approvals.removeIf([id](const auto &p) { return p.request == id; });
             m_earlyApprovals.removeIf([id](const auto &p) { return p.request == id; });
@@ -1445,9 +1448,6 @@ void ChatService::cancelHost(ChatRecord::Turn &turn)
         m_hostRequests.remove(id);
         m_host->cancel(id);
         HostToolResult cancelled;
-        cancelled.content.append(
-            HostToolResult::Text{QStringLiteral("Cancelled: the turn ended.")});
-        cancelled.isError = true;
         cancelled.status = HostToolResult::Status::Cancelled;
         m_backend->answer(id, cancelled);
     }
@@ -1479,6 +1479,7 @@ quint64 ChatService::steer(const Input &input)
         return 0;
     }
     dismissApprovals(session, QStringLiteral("superseded"));
+    m_host->inputQueued(session);
     m_pending = true;
     call(SteerTurn{session, turnId, client, input, HostContext{m_host->browser()}},
          [this, session, key, submission](const Result &result) {
@@ -1830,7 +1831,7 @@ void ChatService::reverse(RequestId id, const ReverseRequest &request)
         auto chat = m_chats.find(tool->sessionId);
         if (chat == m_chats.end() || chat->turn.terminal || chat->turn.stopped ||
             chat->turn.remoteId.isEmpty() || tool->turnId != chat->turn.remoteId ||
-            tool->toolCallId.isEmpty() || chat->turn.hostCalls.contains(tool->toolCallId) ||
+            tool->toolCallId.isEmpty() || chat->turn.hostSeen.contains(tool->toolCallId) ||
             m_hostRequests.contains(id)) {
             m_backend->answer(id, Error{"stale_turn",
                                         "Host tool call does not name a new step of this turn.",
@@ -1838,6 +1839,21 @@ void ChatService::reverse(RequestId id, const ReverseRequest &request)
                                         {},
                                         false,
                                         {}});
+            return;
+        }
+        chat->turn.hostSeen.insert(tool->toolCallId);
+        const auto browser = m_host->browser();
+        const bool messageWaiting =
+            std::any_of(chat->rows.cbegin(), chat->rows.cend(), [&](const auto &row) {
+                return row.role == DisplayRow::Role::User && !row.clientInputId.isEmpty() &&
+                       row.backendTurn == chat->turn.clientId &&
+                       (row.state == "sending" || row.state == "queued");
+            });
+        if (browser && browser->control == BrowserState::Control::User && messageWaiting) {
+            HostToolResult result;
+            result.status = HostToolResult::Status::Cancelled;
+            result.reason = "message";
+            m_backend->answer(id, result);
             return;
         }
         chat->turn.hostCalls.insert(tool->toolCallId, id);

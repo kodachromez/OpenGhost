@@ -64,6 +64,7 @@ struct ChatRecord {
         bool dispatched = false, acknowledged = false, invalidStart = false;
         RequestId request = 0;               // The start/retry call; Stop cancels only this one.
         QHash<QString, RequestId> hostCalls; // toolCallId -> reverse request
+        QSet<QString> hostSeen; // completed/cancelled IDs remain spent for this turn
         std::optional<Usage::Context> context;
         QString activity, finishReason;
         struct ToolState {

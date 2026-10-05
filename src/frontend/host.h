@@ -8,10 +8,8 @@ namespace openghost
 // (desktop/preload.js, host-tools.js, browser-host-tools.md): the built-in
 // browser's state and the host.tool calls run against it. A build without the
 // browser (OPENGHOST_BROWSER=OFF) uses NoHost: no browser panel (null state).
-// The desktop build's Browser (browser.h) reports its panel but publishes no
-// tools yet. Either way every host.tool refuses with `unsupported`. Tests
-// inject a scripted host to check correlation, cancellation and turn-end
-// release without a real browser.
+// The desktop Browser owns its optional BrowserAutomation implementation.
+// An OFF build has no engine linkage or advertised browser tools.
 class HostServices : public QObject
 {
     Q_OBJECT
@@ -28,6 +26,9 @@ class HostServices : public QObject
     // The chat's turn ended (chat.js end): whatever the browser held for it
     // (its driving, a wait for the user's hand-back) ends with it.
     virtual void turnEnded(const QString &sessionId) { Q_UNUSED(sessionId) }
+    // A new queued user message releases that session's hand-back wait, never
+    // replays the interrupted browser action.
+    virtual void inputQueued(const QString &sessionId) { Q_UNUSED(sessionId) }
   signals:
     void finished(openghost::RequestId id, const openghost::HostToolResult &result);
     void browserChanged(const openghost::BrowserState &state);

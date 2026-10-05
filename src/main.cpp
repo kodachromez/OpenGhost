@@ -16,6 +16,7 @@
 #include <QTemporaryDir>
 #ifdef OPENGHOST_BROWSER
 #include <QtWebEngineQuick/qtwebenginequickglobal.h>
+#include "browser/qt_browser_automation.h"
 #endif
 
 #ifdef OPENGHOST_SMOKE_TEST
@@ -125,6 +126,7 @@ int main(int argc, char *argv[])
 #ifdef OPENGHOST_BROWSER
     // The desktop panel exists with or without an agent backend.
     browser = std::make_unique<openghost::Browser>(browserPath, browserStorage);
+    browser->setAutomation(std::make_unique<openghost::QtBrowserAutomation>());
 #else
     Q_UNUSED(browserStorage)
 #endif

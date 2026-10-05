@@ -1,4 +1,5 @@
 #include "backend/fake_backend.h"
+#include "browser-tools/fixtures.h"
 #include "frontend/attachments.h"
 #include "frontend/chat_service.h"
 #include "frontend/host.h"
@@ -164,12 +165,17 @@ class ScriptedHost final : public HostServices
 {
   public:
     QVector<RequestId> ran, cancelled;
-    std::optional<BrowserState> browser() const override { return std::nullopt; }
-    QVector<HostToolSchema> tools() const override
+    QHash<RequestId, HostToolRequest> received;
+    QVector<HostToolSchema> definitions{
+        {QStringLiteral("browser_snapshot"), QStringLiteral("fixture"), {}}};
+    std::optional<BrowserState> context;
+    std::optional<BrowserState> browser() const override { return context; }
+    QVector<HostToolSchema> tools() const override { return definitions; }
+    void run(RequestId id, const HostToolRequest &request) override
     {
-        return {{QStringLiteral("browser_snapshot"), QStringLiteral("fixture"), {}}};
+        ran.append(id);
+        received.insert(id, request);
     }
-    void run(RequestId id, const HostToolRequest &) override { ran.append(id); }
     void cancel(RequestId id) override { cancelled.append(id); }
 };
 void settle(FakeBackend &fake)
@@ -1449,12 +1455,16 @@ class ContractTest : public QObject
         emit host.finished(503, HostToolResult{{HostToolResult::Text{"page"}}, false, {}, {}, {}});
         emit host.finished(503, HostToolResult{});
         QCOMPARE(answered(503), 1); // exactly once
+        emit backend.reverseRequest(506,
+                                    HostToolRequest{session, turn, "t3", "browser_snapshot", {}});
+        QCOMPARE(host.ran, QVector<RequestId>{503}); // spent even after completion
+        QCOMPARE(answered(506), 1);
         emit backend.reverseRequest(504,
                                     HostToolRequest{session, turn, "t4", "browser_snapshot", {}});
         emit backend.reverseCancelled(504);
         QCOMPARE(host.cancelled, QVector<RequestId>{504});
         emit host.finished(504, HostToolResult{});
-        QCOMPARE(answered(504), 0); // the backend cancelled it
+        QCOMPARE(answered(504), 1); // cancellation settles, late callback is dropped
         emit backend.reverseRequest(505,
                                     HostToolRequest{session, turn, "t5", "browser_snapshot", {}});
         chat.stop(); // the turn ends: its running host step is released
@@ -1465,6 +1475,135 @@ class ContractTest : public QObject
                 return a.first == 505;
             })->second);
         QCOMPARE(last.status, HostToolResult::Status::Cancelled);
+        QVERIFY(last.content.isEmpty());
+        QVERIFY(!last.isError);
+    }
+    void hostHandBackRejectsAlreadyQueuedMessage()
+    {
+        InspectBackend backend;
+        PreferencesStore prefs({});
+        ScriptedHost host;
+        MemoryKeyStore store;
+        Library library(&store);
+        ChatService chat(&backend, &prefs, &library, &host);
+        chat.initialize();
+        QTRY_VERIFY(chat.ready());
+        QVERIFY(chat.send("/fake approval"));
+        QTRY_VERIFY(!chat.current().turn.remoteId.isEmpty());
+        const auto session = chat.current().id, turn = chat.current().turn.remoteId;
+        host.context = BrowserState{};
+        host.context->available = true;
+        host.context->control = BrowserState::Control::User;
+        QVERIFY(chat.send("New instruction while the user owns the page"));
+        emit backend.reverseRequest(601, HostToolRequest{session, turn, "held", "browser_snapshot", {}});
+        QVERIFY(host.ran.isEmpty());
+        const auto &answer = std::get<HostToolResult>(backend.answers.last().second);
+        QCOMPARE(answer.status, HostToolResult::Status::Cancelled);
+        QCOMPARE(answer.reason.value(), "message");
+        QVERIFY(answer.content.isEmpty());
+    }
+    void browserToolFixtures_data()
+    {
+        QTest::addColumn<QJsonObject>("fixture");
+        const auto cases = browser_tools_test::fixture("cases.json");
+        QCOMPARE(cases.size(), 11);
+        for (const auto &value : cases) {
+            const auto row = value.toObject();
+            QTest::newRow(qPrintable(row.value("name").toString())) << row;
+        }
+    }
+    void browserToolFixtures()
+    {
+        QFETCH(QJsonObject, fixture);
+        InspectBackend backend;
+        PreferencesStore prefs({});
+        ScriptedHost host;
+        host.definitions = browser_tools_test::schemas();
+        QCOMPARE(host.definitions.size(), 11);
+        MemoryKeyStore store;
+        Library library(&store);
+        ChatService chat(&backend, &prefs, &library, &host);
+        chat.initialize();
+        QTRY_VERIFY(chat.ready());
+        const auto published = std::get<Initialize>(backend.commands.first()).tools;
+        QCOMPARE(published.size(), 11);
+        for (qsizetype i = 0; i < published.size(); ++i) {
+            QCOMPARE(published[i].name, host.definitions[i].name);
+            QCOMPARE(published[i].description, host.definitions[i].description);
+            QCOMPARE(published[i].parameters, host.definitions[i].parameters);
+        }
+        QVERIFY(chat.send("/fake approval"));
+        QTRY_VERIFY(!chat.current().turn.remoteId.isEmpty());
+        const HostToolRequest request{chat.current().id, chat.current().turn.remoteId,
+                                      "fixture-call", fixture.value("name").toString(),
+                                      fixture.value("args").toObject()};
+        emit backend.reverseRequest(801, request);
+        QCOMPARE(host.ran, QVector<RequestId>{801});
+        QCOMPARE(host.received.value(801).args, request.args);
+        QCOMPARE(host.received.value(801).name, request.name);
+        QCOMPARE(host.received.value(801).sessionId, request.sessionId);
+        QCOMPARE(host.received.value(801).turnId, request.turnId);
+        QCOMPARE(host.received.value(801).toolCallId, request.toolCallId);
+        QVERIFY(backend.answers.isEmpty()); // passive host has performed no operation
+        const auto expected = browser_tools_test::result(fixture.value("result").toString());
+        QVERIFY(!expected.isEmpty());
+        const auto result = browser_tools_test::body(expected);
+        emit host.finished(801, result);
+        QCOMPARE(backend.answers.size(), 1);
+        QCOMPARE(backend.answers.first().first, RequestId(801));
+        QVERIFY(std::holds_alternative<HostToolResult>(backend.answers.first().second));
+        browser_tools_test::compare(std::get<HostToolResult>(backend.answers.first().second), result);
+        emit host.finished(801, result);
+        QCOMPARE(backend.answers.size(), 1); // late duplicate settlement is dropped
+    }
+    void browserResultFixtures_data()
+    {
+        QTest::addColumn<QJsonObject>("fixture");
+        const auto results = browser_tools_test::fixture("results.json");
+        QCOMPARE(results.size(), 10);
+        for (const auto &value : results) {
+            const auto row = value.toObject();
+            QTest::newRow(qPrintable(row.value("id").toString())) << row.value("expected").toObject();
+        }
+    }
+    void browserResultFixtures()
+    {
+        QFETCH(QJsonObject, fixture);
+        InspectBackend backend;
+        PreferencesStore prefs({});
+        ScriptedHost host;
+        MemoryKeyStore store;
+        Library library(&store);
+        ChatService chat(&backend, &prefs, &library, &host);
+        chat.initialize();
+        QTRY_VERIFY(chat.ready());
+        QVERIFY(chat.send("/fake approval"));
+        QTRY_VERIFY(!chat.current().turn.remoteId.isEmpty());
+        auto result = browser_tools_test::body(fixture);
+        // All status values must be forwarded, not inferred from text/data.code.
+        const QVector<HostToolResult::Status> statuses{
+            result.status, HostToolResult::Status::HandedBack, HostToolResult::Status::Cancelled};
+        RequestId id = 900;
+        for (const auto status : statuses) {
+            ++id;
+            result.status = status;
+            result.reason = status == HostToolResult::Status::Cancelled
+                                ? std::optional<QString>("message")
+                                : std::nullopt;
+            emit backend.reverseRequest(
+                id, HostToolRequest{chat.current().id, chat.current().turn.remoteId,
+                                    QString::number(id), "browser_snapshot", {}});
+            QVERIFY(!host.ran.isEmpty());
+            QCOMPARE(host.ran.last(), id);
+            emit host.finished(id, result);
+            QVERIFY(!backend.answers.isEmpty());
+            QCOMPARE(backend.answers.last().first, id);
+            QVERIFY(std::holds_alternative<HostToolResult>(backend.answers.last().second));
+            browser_tools_test::compare(std::get<HostToolResult>(backend.answers.last().second),
+                                        result);
+        }
+        // This only qualifies envelope transport inside C++, not cancellation
+        // orchestration or whether a real host can produce any of these results.
     }
     void foldersAndPinsThroughService()
     {
