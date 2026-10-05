@@ -655,7 +655,24 @@ Item {
         // A transcript notice: one text of the conversation's selection.
         Item {
             width: entry.column
-            implicitHeight: noteText.implicitHeight
+            implicitHeight: noteText.implicitHeight + (retry.visible ? retry.height + 8 : 0)
+            Button {
+                id: retry
+                objectName: "retryTurn"
+                z: 2
+                y: noteText.implicitHeight + 8
+                visible: entry.frontend && entry.frontend.retryRow === entry.key
+                text: "Retry"
+                onClicked: entry.frontend.retry()
+                padding: 8
+                horizontalPadding: 14
+                background: Rectangle {
+                    radius: 16
+                    color: retry.hovered ? Theme.hover : Theme.composerBg
+                    border.color: Theme.composerBorder
+                }
+                contentItem: Label { text: retry.text; color: Theme.text; font.pixelSize: 14 }
+            }
             SelectArea {
                 objectName: "selectArea"
                 anchors.fill: parent

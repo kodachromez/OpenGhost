@@ -4,11 +4,14 @@
 #include "tex.h"
 #include "window.h"
 
+#include <QElapsedTimer>
 #include <QFile>
+#include <QPointer>
 #include <QQmlApplicationEngine>
 #include <QQuickItem>
 #include <QQuickWindow>
 #include <QSignalSpy>
+#include <QTemporaryDir>
 #include <QtTest>
 
 namespace
@@ -70,10 +73,28 @@ int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
     check(controller.transcript()->rowCount() == 0 && controller.sessions()->rowCount() == 0,
           "no fabricated conversation");
     check(!controller.pick({QUrl::fromLocalFile(QStringLiteral("/does-not-exist"))}, 8).isEmpty(),
-          "attachments refuse without reading files");
+          "missing attachment refuses without fabricated payload");
 
-    // Exercise the original splash to completion and the real window render.
-    QTest::qWait(5000);
+    // Observe the handoff, not just the final frame: fading the app must not
+    // also fade/scale the splash overlay (which would flash at opening).
+    QPointer<QQuickItem> splash = findVisual(window->contentItem(), QStringLiteral("splash"));
+    bool sawOpening = false, independentOverlay = true;
+    QElapsedTimer splashClock;
+    splashClock.start();
+    while (splash && splashClock.elapsed() < 5000) {
+        if (splash->property("revealing").toBool()) {
+            sawOpening = true;
+            for (auto *parent = splash->parentItem(); parent; parent = parent->parentItem())
+                independentOverlay &= parent->opacity() > 0.99 && qAbs(parent->scale() - 1) < 0.001;
+        }
+        QTest::qWait(16);
+    }
+    check(sawOpening && !splash, "splash opens and hands off within its bounded timeline");
+    check(independentOverlay, "splash does not inherit the app reveal transform/opacity");
+    auto *welcome = findVisual(window->contentItem(), QStringLiteral("welcome"));
+    check(welcome && welcome->property("phase").toString() == "shown" &&
+              !welcome->property("held").toBool(),
+          "welcome ghost takes over after splash");
     check(!window->grabWindow().isNull(), "window paints");
     check(window->contentItem()->opacity() > 0.99, "1.3 splash reveals the app");
 
@@ -128,9 +149,80 @@ int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
             controller.open(first);
             check(QTest::qWaitFor([&] { return !controller.admitting(); }, 1000),
                   "opening reconciles fake session");
-            check(controller.session() == first && controller.transcript()->rowCount() == 2,
+            check(controller.session() == first && controller.transcript()->rowCount() == 3,
                   "open restores prior display");
             controller.newChat();
+
+            QTemporaryDir files;
+            QFile file(files.filePath(QStringLiteral("fixture.txt")));
+            check(file.open(QIODevice::WriteOnly), "temporary attachment opens");
+            file.write("A prepared text attachment.\n");
+            file.close();
+            check(controller.pick({QUrl::fromLocalFile(file.fileName())}, 20).isEmpty(),
+                  "native text preparation");
+            auto *cards = window->findChild<QObject *>(QStringLiteral("composerFiles"));
+            check(QTest::qWaitFor([&] { return cards && cards->property("count").toInt() == 1; },
+                                  500),
+                  "prepared attachment reaches real composer card");
+            composer->setProperty("text", QStringLiteral("With file"));
+            QMetaObject::invokeMethod(window, "submit");
+            check(QTest::qWaitFor([&] { return accepted.count() == 3; }, 1000),
+                  "attachment input acknowledged");
+            check(cards && cards->property("count").toInt() == 0,
+                  "only acknowledged attachment removed");
+            check(!controller.transcript()
+                       ->data(controller.transcript()->index(0), TranscriptModel::AttachmentsRole)
+                       .toList()
+                       .isEmpty(),
+                  "attachment transcript card");
+            check(controller.canSteer(), "composer can steer a running turn");
+            composer->setProperty("text", QStringLiteral("A steering input"));
+            QMetaObject::invokeMethod(window, "submit");
+            check(QTest::qWaitFor([&] { return accepted.count() == 4; }, 1000),
+                  "steering acknowledged through composer");
+            check(composer->property("text").toString().isEmpty(),
+                  "steering acknowledgement clears its draft");
+            check(QTest::qWaitFor([&] { return !controller.busy(); }, 3000),
+                  "steered answer completes");
+            check(controller.usage()->totals().value("fake").toMap().value("tokens").toDouble() > 0,
+                  "fake usage reaches settings ledger");
+
+            composer->setProperty("text", QStringLiteral("/fake approval"));
+            QMetaObject::invokeMethod(window, "submit");
+            check(QTest::qWaitFor([&] { return !controller.approvals().isEmpty(); }, 1000),
+                  "approval contract reaches UI");
+            auto *allow = findVisual(window->contentItem(), QStringLiteral("approvalAllow"));
+            check(allow && QMetaObject::invokeMethod(allow, "clicked"),
+                  "real approval Allow button answers");
+            check(QTest::qWaitFor([&] { return !controller.busy(); }, 3000),
+                  "approved simulated tool completes");
+            check(controller.approvals().isEmpty(), "resolved approval dismissed");
+
+            composer->setProperty("text", QStringLiteral("/fake error"));
+            QMetaObject::invokeMethod(window, "submit");
+            check(QTest::qWaitFor([&] { return controller.canRetry(); }, 3000),
+                  "terminal error enables Retry");
+            QQuickItem *retry = nullptr;
+            check(QTest::qWaitFor(
+                      [&] {
+                          retry = findVisual(window->contentItem(), QStringLiteral("retryTurn"));
+                          return retry && retry->isVisible();
+                      },
+                      1000),
+                  "Retry delegate becomes visible after model update");
+            check(retry && retry->isVisible() && QMetaObject::invokeMethod(retry, "clicked") &&
+                      (controller.admitting() || controller.busy()),
+                  "real Retry action dispatches");
+            check(QTest::qWaitFor([&] { return !controller.admitting() && !controller.busy(); },
+                                  3000),
+                  "retry completes without new user input");
+            const auto deleted = controller.session();
+            QSignalSpy removed(&controller, &WindowController::sessionRemoved);
+            controller.remove(deleted);
+            check(QTest::qWaitFor([&] { return !removed.isEmpty(); }, 1000) &&
+                      removed.first()[1].toBool(),
+                  "backend deletion acknowledged");
+            check(controller.session().isEmpty(), "deleting active chat opens a clean draft");
         }
     }
 
@@ -187,6 +279,27 @@ int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
                   "OpenGhost settings tab exists");
             check(dialog->setProperty("page", QString::fromLatin1(page)), "settings page switches");
             QTest::qWait(60);
+            if (fake && QString::fromLatin1(page) == "providers") {
+                auto *logout = findVisual(window->contentItem(), QStringLiteral("logout"));
+                check(logout && QMetaObject::invokeMethod(logout, "clicked"),
+                      "provider Log out button");
+                check(QTest::qWaitFor([&] { return controller.settings()->choices().isEmpty(); },
+                                      1000),
+                      "catalog invalidation removes unavailable models");
+                auto *key = findVisual(window->contentItem(), QStringLiteral("apiKey"));
+                check(key && QMetaObject::invokeMethod(key, "clicked"), "provider API key prompt");
+                auto *answer = findVisual(window->contentItem(), QStringLiteral("loginAnswer"));
+                check(answer && answer->isVisible(), "existing secret-input presentation wired");
+                if (answer) {
+                    answer->setProperty("text", QStringLiteral("fixture"));
+                    check(QMetaObject::invokeMethod(answer, "send"), "fixture key submits");
+                    check(answer->property("text").toString().isEmpty(),
+                          "key cleared from text field");
+                }
+                check(QTest::qWaitFor([&] { return controller.settings()->choices().size() == 2; },
+                                      1000),
+                      "fake sign-in refreshes catalog");
+            }
         }
         check(!findVisual(window->contentItem(), QStringLiteral("settingsTab-model")),
               "no extra Model tab");

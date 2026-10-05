@@ -1,5 +1,6 @@
 #pragma once
 
+#include "frontend/attachments.h"
 #include "frontend/chat_service.h"
 #include "model.h"
 #include "offline_services.h"
@@ -21,21 +22,23 @@ class WindowController final : public QObject
     Q_PROPERTY(QObject *general READ general CONSTANT)
     Q_PROPERTY(QObject *usage READ usage CONSTANT)
     Q_PROPERTY(QString status READ status NOTIFY changed)
-    Q_PROPERTY(bool routine READ off CONSTANT)
-    Q_PROPERTY(QString activity READ emptyText CONSTANT)
-    Q_PROPERTY(QVariantMap liveMetrics READ emptyMap CONSTANT)
+    Q_PROPERTY(bool routine READ routine NOTIFY changed)
+    Q_PROPERTY(QString activity READ activity NOTIFY changed)
+    Q_PROPERTY(QVariantMap liveMetrics READ liveMetrics NOTIFY changed)
     Q_PROPERTY(QString session READ session NOTIFY changed)
     Q_PROPERTY(bool ready READ ready NOTIFY changed)
     Q_PROPERTY(bool busy READ busy NOTIFY changed)
     Q_PROPERTY(bool canCancel READ canCancel NOTIFY changed)
-    Q_PROPERTY(bool canSteer READ off CONSTANT)
+    Q_PROPERTY(bool canSteer READ canSteer NOTIFY changed)
+    Q_PROPERTY(bool canRetry READ canRetry NOTIFY changed)
+    Q_PROPERTY(QString retryRow READ retryRow NOTIFY changed)
     Q_PROPERTY(bool canSwitch READ canSwitch NOTIFY changed)
     Q_PROPERTY(bool admitting READ admitting NOTIFY changed)
     Q_PROPERTY(bool picking READ off CONSTANT)
     Q_PROPERTY(bool switching READ off CONSTANT)
     Q_PROPERTY(QVariantMap uploads READ emptyMap CONSTANT)
     Q_PROPERTY(QVariantMap modes READ modes NOTIFY changed)
-    Q_PROPERTY(QVariantList approvals READ approvals CONSTANT)
+    Q_PROPERTY(QVariantList approvals READ approvals NOTIFY approvalsChanged)
   public:
     explicit WindowController(QObject *parent = nullptr);
     WindowController(openghost::Backend *backend, QString preferencesPath,
@@ -50,6 +53,19 @@ class WindowController final : public QObject
     bool ready() const { return m_chat.ready(); }
     bool busy() const { return m_chat.busy(); }
     bool canCancel() const { return m_chat.canCancel(); }
+    bool canSteer() const { return m_chat.canSteer(); }
+    bool canRetry() const { return m_chat.canRetry(); }
+    QString retryRow() const
+    {
+        const auto &chat = m_chat.current();
+        return canRetry() && chat.reconciled && !chat.rows.isEmpty() &&
+                       chat.rows.last().role == openghost::DisplayRow::Role::Note
+                   ? chat.rows.last().key
+                   : QString();
+    }
+    bool routine() const { return status().isEmpty(); }
+    QString activity() const { return m_chat.current().turn.activity; }
+    QVariantMap liveMetrics() const;
     bool canSwitch() const { return m_chat.canSwitch(); }
     bool admitting() const { return m_chat.pending(); }
     bool off() const { return false; }
@@ -57,7 +73,7 @@ class WindowController final : public QObject
     QString emptyText() const { return {}; }
     QVariantMap emptyMap() const { return {}; }
     QVariantMap modes() const;
-    QVariantList approvals() const { return {}; }
+    QVariantList approvals() const;
 
     Q_INVOKABLE bool isWorkspace(const QString &folder) const { return folder.isEmpty(); }
     Q_INVOKABLE QString newChatIn(const QString &folder)
@@ -68,19 +84,20 @@ class WindowController final : public QObject
         return {};
     }
     Q_INVOKABLE quint64 send(const QString &text, const QVariantList &files = {});
-    Q_INVOKABLE QString pick(const QList<QUrl> &, int, int = 0) { return backendUnavailable(); }
-    Q_INVOKABLE void release(const QVariantList &) {} // No tokens are ever issued.
+    Q_INVOKABLE QString pick(const QList<QUrl> &urls, int remaining, int pictures = 0);
+    Q_INVOKABLE void release(const QVariantList &tokens);
     Q_INVOKABLE bool pasteRefused() const;
     Q_INVOKABLE void cancel() { m_chat.stop(); }
+    Q_INVOKABLE void retry()
+    {
+        m_notice.clear();
+        m_chat.retry();
+    }
     Q_INVOKABLE void close();
     Q_INVOKABLE void newChat(); // Local draft; first start creates the backend session.
     Q_INVOKABLE void open(const QString &id) { m_chat.open(id); }
     Q_INVOKABLE void rename(const QString &id, const QString &title) { m_chat.rename(id, title); }
-    Q_INVOKABLE void remove(const QString &id)
-    {
-        unavailable();
-        emit sessionRemoved(id, false);
-    }
+    Q_INVOKABLE void remove(const QString &id) { m_chat.remove(id); }
     Q_INVOKABLE void removeFolder(const QString &folder)
     {
         unavailable();
@@ -88,23 +105,26 @@ class WindowController final : public QObject
     }
     Q_INVOKABLE int folderChats(const QString &) const { return 0; }
     Q_INVOKABLE void setPermissionMode(const QString &name);
-    Q_INVOKABLE void approve(const QString &, bool) { unavailable(); }
+    Q_INVOKABLE void approve(const QString &id, bool allow)
+    {
+        m_chat.approve(id.toULongLong(), allow);
+    }
     Q_INVOKABLE void copy(const QString &text);
     Q_INVOKABLE QString selectedText(QQuickTextDocument *document, int start, int end) const;
     Q_INVOKABLE void copySelection(QQuickTextDocument *document, int start, int end);
     Q_INVOKABLE void copyEntry(const QString &key);
     Q_INVOKABLE bool openExternal(const QString &url);
     Q_INVOKABLE bool openLink(const QString &url);
-    Q_INVOKABLE void refreshProviders() { unavailable(); }
-    Q_INVOKABLE void retryModels() { unavailable(); }
-    Q_INVOKABLE void saveDefaults() { unavailable(); }
-    Q_INVOKABLE void login(const QString &, const QString &) { unavailable(); }
-    Q_INVOKABLE void answerLogin(const QString &, const QString &, const QString &)
+    Q_INVOKABLE void refreshProviders() { m_chat.refresh(); }
+    Q_INVOKABLE void retryModels() { m_chat.refresh(); }
+    Q_INVOKABLE void saveDefaults();
+    Q_INVOKABLE void login(const QString &provider, const QString &method);
+    Q_INVOKABLE void answerLogin(const QString &id, const QString &prompt, const QString &answer);
+    Q_INVOKABLE void cancelLogin(const QString &id);
+    Q_INVOKABLE void logout(const QString &provider)
     {
-        unavailable();
+        m_chat.authenticate(openghost::Logout{provider});
     }
-    Q_INVOKABLE void cancelLogin(const QString &) { unavailable(); }
-    Q_INVOKABLE void logout(const QString &) { unavailable(); }
     Q_INVOKABLE void preview(const QString &key, int card) { emit previewChanged(key, card); }
     Q_INVOKABLE QString previewState(const QString &, int) const { return backendUnavailable(); }
     Q_INVOKABLE QImage previewImage(const QString &, int) const { return {}; }
@@ -132,6 +152,8 @@ class WindowController final : public QObject
     openghost::PreferencesStore m_preferences;
     openghost::ChatService m_chat;
     QString m_notice;
+    QVariantMap m_login;
+    openghost::AttachmentStore m_attachments;
     QHash<QString, Entry> m_rendered;
     TranscriptModel m_transcript;
     SessionModel m_sessions;

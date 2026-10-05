@@ -4,12 +4,14 @@
 
 #include <QClipboard>
 #include <QGuiApplication>
+#include <QJsonDocument>
 #include <QMimeData>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QQmlNetworkAccessManagerFactory>
 #include <QQuickStyle>
 #include <QQuickTextDocument>
+#include <QUuid>
 #include <algorithm>
 
 // OpenGhost's native window allows no QML image/font/style networking.
@@ -63,6 +65,16 @@ WindowController::WindowController(openghost::Backend *backend, QString preferen
     connect(&m_chat, &openghost::ChatService::changed, this, &WindowController::sync);
     connect(&m_chat, &openghost::ChatService::catalogChanged, this, &WindowController::catalog);
     connect(&m_chat, &openghost::ChatService::accepted, this, &WindowController::accepted);
+    connect(&m_chat, &openghost::ChatService::removed, this, &WindowController::sessionRemoved);
+    connect(&m_chat, &openghost::ChatService::usageRecorded, &m_usage, &UsagePreview::record);
+    connect(&m_chat, &openghost::ChatService::authFinished, this, [this] {
+        if (m_login.value("type") == "waiting") {
+            m_login.insert("begun", true);
+            return;
+        }
+        m_login.clear();
+        catalog();
+    });
     connect(&m_chat, &openghost::ChatService::answered, this, &WindowController::answered);
     connect(&m_chat, &openghost::ChatService::worked, this, &WindowController::worked);
     connect(&m_chat, &openghost::ChatService::replaced, this, [this](const QString &left) {
@@ -100,17 +112,43 @@ void WindowController::catalog()
         account.models.append({model.provider, model.id, model.name, model.thinkingLevels, true,
                                model.vision.value_or(false),
                                model.defaultThinking.value_or(QString())});
-    for (const auto &provider : m_chat.providers())
-        account.providers.append(QVariantMap{
-            {"id", provider.id},
-            {"name", provider.name},
-            {"hint", QStringLiteral("Development fixture only. No credentials or network.")},
-            {"connected", provider.status.connected},
-            {"logout", false},
-            {"oauth", false},
-            {"apiKey", false},
-            {"note", QString()},
-            {"error", false}});
+    for (const auto &provider : m_chat.providers()) {
+        if (m_login.value("providerId") == provider.id && m_login.value("begun").toBool() &&
+            !provider.status.waiting.value_or(false))
+            m_login.clear();
+        bool key = false, oauth = false;
+        QStringList hints;
+        for (const auto &method : provider.methods) {
+            key |= method.kind == openghost::AuthMethod::Kind::ApiKey;
+            oauth |= method.kind == openghost::AuthMethod::Kind::OAuth;
+            if (method.hint)
+                hints.append(*method.hint);
+        }
+        QString note = provider.status.waiting.value_or(false)
+                           ? QStringLiteral("Waiting for sign-in…")
+                       : provider.status.connected ? QStringLiteral("Connected")
+                                                   : QStringLiteral("Not connected");
+        if (provider.status.error)
+            std::visit(
+                [&](const auto &error) {
+                    using T = std::decay_t<decltype(error)>;
+                    if constexpr (std::is_same_v<T, openghost::Error>)
+                        note = error.message;
+                    else
+                        note = error;
+                },
+                *provider.status.error);
+        account.providers.append(QVariantMap{{"id", provider.id},
+                                             {"name", provider.name},
+                                             {"hint", hints.join(' ')},
+                                             {"connected", provider.status.connected},
+                                             {"logout", provider.status.connected},
+                                             {"oauth", oauth},
+                                             {"apiKey", key},
+                                             {"note", note},
+                                             {"error", provider.status.error.has_value()}});
+    }
+    account.login = m_login;
     account.providersLoaded = true;
     if (account.models.isEmpty())
         account.catalogError = account.providersError = m_chat.status();
@@ -122,6 +160,10 @@ void WindowController::catalog()
 
 void WindowController::sync()
 {
+    if (!m_chat.connected() && !m_login.isEmpty()) {
+        m_login.clear();
+        catalog();
+    }
     const auto &chat = m_chat.current();
     m_settings.use({chat.selection.provider, chat.selection.model,
                     chat.selection.thinking.value_or(QString())});
@@ -135,6 +177,21 @@ void WindowController::sync()
         entry.key = row.key;
         entry.text = row.text;
         entry.state = row.state;
+        entry.metrics = row.metrics;
+        entry.preview = row.tip;
+        if (entry.kind == Entry::User) {
+            static const QHash<QString, QString> receipts{
+                {"sending", "Sending…"},
+                {"queued", "Queued for this reply"},
+                {"applied", "Applied to this reply"},
+                {"notApplied", "Not applied. Nothing was resent."},
+                {"unconfirmed", "Input not confirmed. Nothing was resent."}};
+            entry.preview = receipts.value(row.state);
+        }
+        entry.started = row.started;
+        entry.completed = row.completed;
+        for (const auto &a : row.attachments)
+            entry.attachments.append({a.name, QStringLiteral("text/plain"), a.size.value_or(-1)});
         entry.copyable = entry.kind == Entry::Assistant && !row.text.isEmpty();
         const auto previous = m_rendered.constFind(entry.key);
         entry.revision =
@@ -142,7 +199,11 @@ void WindowController::sync()
                 ? 1
                 : previous->revision +
                       (previous->text != entry.text || previous->state != entry.state ||
-                       previous->kind != entry.kind || previous->copyable != entry.copyable);
+                       previous->kind != entry.kind || previous->copyable != entry.copyable ||
+                       previous->attachments != entry.attachments ||
+                       previous->metrics != entry.metrics || previous->preview != entry.preview ||
+                       previous->started != entry.started ||
+                       previous->completed != entry.completed);
         rows.append(entry);
         rendered.insert(entry.key, entry);
     }
@@ -154,6 +215,7 @@ void WindowController::sync()
             record.title.contains(m_sessions.query(), Qt::CaseInsensitive))
             sessions.append({record.id, record.title, {}, record.updated, record.created});
     m_sessions.apply(sessions);
+    emit approvalsChanged();
     emit changed();
 }
 
@@ -171,12 +233,145 @@ void WindowController::setPermissionMode(const QString &name)
 }
 quint64 WindowController::send(const QString &text, const QVariantList &files)
 {
-    if (!files.isEmpty()) {
-        unavailable();
+    QStringList tokens;
+    for (const auto &token : files)
+        tokens.append(token.toString());
+    const auto payload = m_attachments.resolve(tokens);
+    if (!payload) {
+        m_notice =
+            QStringLiteral("An attachment payload is no longer available. Choose the file again.");
+        emit changed();
         return 0;
     }
     m_notice.clear();
-    return m_chat.send(text);
+    return m_chat.send(text, *payload);
+}
+QString WindowController::pick(const QList<QUrl> &urls, int remaining, int pictures)
+{
+    Q_UNUSED(pictures);
+    if (!ready())
+        return backendUnavailable();
+    QVector<openghost::AttachmentStore::Prepared> prepared;
+    const auto error = m_attachments.prepare(urls, remaining, prepared);
+    if (!error.isEmpty())
+        return error;
+    QVariantList files;
+    for (const auto &a : prepared)
+        files.append(QVariantMap{
+            {"token", a.token}, {"name", a.name}, {"size", a.size}, {"picture", false}});
+    // This bounded preparation is synchronous: publish to the still-owning
+    // composer before returning, never to a draft switched on the next event.
+    emit filesPicked(files, {});
+    return {};
+}
+void WindowController::release(const QVariantList &tokens)
+{
+    QStringList list;
+    for (const auto &token : tokens)
+        list.append(token.toString());
+    m_attachments.release(list);
+}
+QVariantMap WindowController::liveMetrics() const
+{
+    const auto &turn = m_chat.current().turn;
+    if (!busy() || turn.started < 0)
+        return {};
+    return {{"text", openghost::ChatService::metrics(turn)},
+            {"started", turn.started},
+            {"live", true},
+            {"tip", QStringLiteral("Input %1 · Output %2").arg(turn.input).arg(turn.output)}};
+}
+QVariantList WindowController::approvals() const
+{
+    QVariantList result;
+    for (const auto &pending : m_chat.approvals()) {
+        if (pending.data.sessionId != session())
+            continue;
+        const auto &p = pending.data;
+        QVariantMap card;
+        if (p.presentation) {
+            const auto &d = *p.presentation;
+            QVariantList places;
+            for (const auto &place : d.places)
+                places.append(QVariantMap{
+                    {"kind", place.kind}, {"label", place.label}, {"title", place.title}});
+            card = {{"kind", d.kind},
+                    {"title", d.title},
+                    {"effect", d.effect.value_or(QString())},
+                    {"badge", d.badge.value_or(false)},
+                    {"places", places},
+                    {"code", d.code.value_or(QString())},
+                    {"removed", d.removed.value_or(QString())},
+                    {"added", d.added.value_or(QString())},
+                    {"quote", d.quote.value_or(QString())},
+                    {"reveal", d.reveal.value_or(QString())}};
+        } else
+            card = {{"kind", "command"},
+                    {"title", p.tool},
+                    {"code", QString::fromUtf8(QJsonDocument(p.args).toJson())},
+                    {"reveal", "command"}};
+        result.append(QVariantMap{
+            {"requestId", QString::number(pending.request)}, {"card", card}, {"answered", false}});
+    }
+    return result;
+}
+void WindowController::saveDefaults()
+{
+    auto prefs = m_preferences.value();
+    prefs.model = m_chat.current().selection;
+    prefs.preferredThinking = prefs.model.thinking;
+    prefs.model.thinking.reset();
+    m_preferences.save(prefs);
+}
+void WindowController::login(const QString &provider, const QString &method)
+{
+    if (!m_chat.connected() || !m_login.isEmpty() || (method != "api_key" && method != "oauth"))
+        return;
+    const auto &providers = m_chat.providers();
+    const auto p = std::find_if(providers.cbegin(), providers.cend(),
+                                [&](const auto &p) { return p.id == provider; });
+    if (p == providers.cend())
+        return;
+    const auto kind = method == "api_key" ? openghost::AuthMethod::Kind::ApiKey
+                                          : openghost::AuthMethod::Kind::OAuth;
+    const auto advertised = std::find_if(p->methods.cbegin(), p->methods.cend(),
+                                         [&](const auto &m) { return m.kind == kind; });
+    if (advertised == p->methods.cend())
+        return;
+    m_login = {{"id", QUuid::createUuid().toString()},
+               {"providerId", provider},
+               {"type", "prompt"},
+               {"message", advertised->hint.value_or(QString())}};
+    if (kind == openghost::AuthMethod::Kind::ApiKey) {
+        m_login.insert("promptId", "key");
+        m_login.insert("input", true);
+        m_login.insert("secret", true);
+        m_login.insert("placeholder", advertised->placeholder.value_or(QString()));
+    } else {
+        m_login.insert("type", "waiting");
+        m_chat.authenticate(openghost::Login{provider});
+    }
+    catalog();
+}
+void WindowController::answerLogin(const QString &id, const QString &prompt, const QString &answer)
+{
+    if (m_login.value("id").toString() != id || m_login.value("promptId").toString() != prompt ||
+        prompt != "key")
+        return;
+    const auto provider = m_login.value("providerId").toString();
+    m_login.remove("promptId");
+    m_login.remove("input");
+    catalog();
+    m_chat.authenticate(openghost::SetKey{provider, answer}); // Never retained in display/settings.
+}
+void WindowController::cancelLogin(const QString &id)
+{
+    if (m_login.value("id").toString() != id)
+        return;
+    const auto provider = m_login.value("providerId").toString();
+    m_login.clear();
+    catalog();
+    m_chat.authenticate(openghost::CancelLogin{provider});
 }
 void WindowController::copyEntry(const QString &key)
 {

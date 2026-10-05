@@ -15,16 +15,20 @@ class FakeBackend final : public Backend
     explicit FakeBackend(QObject *parent = nullptr, int intervalMs = 35);
     void request(RequestId id, const Command &command) override;
     void cancelRequest(RequestId id) override;
-    void answer(RequestId, const ReverseResult &) override {}
+    void answer(RequestId id, const ReverseResult &result) override;
     void browserChanged(const BrowserState &) override {}
     void advance(); // One deterministic streaming step; intervalMs=0 disables timer.
   private:
     struct Turn {
         StartTurn start;
         RecoveredTurn recovery;
-        QString messageId, response;
+        QString messageId, response, failedFrom;
         qsizetype offset = 0;
-        bool terminal = false;
+        bool terminal = false, failed = false, retried = false, toolStarted = false;
+        QHash<QString, Input> steering;
+        QVector<QString> queue;
+        RequestId approval = 0;
+        bool approvalDone = false;
     };
     struct Session {
         QString version, active;
@@ -38,6 +42,9 @@ class FakeBackend final : public Backend
     QHash<QString, Session> m_sessions;
     QSet<RequestId> m_pending;
     QTimer m_timer;
-    bool m_initialized = false;
+    bool m_initialized = false, m_connected = true, m_waiting = false;
+    RequestId m_reverse = 0;
+    QHash<RequestId, QString> m_approvals;
+    quint64 m_loginGeneration = 0;
 };
 } // namespace openghost

@@ -299,7 +299,7 @@ struct ToolStarted {
 struct ToolProgress {
     QString toolCallId;
     QJsonObject detail;
-}; // intentionally invisible
+}; // Activity state only, not assistant text.
 struct ToolCompleted {
     QString toolCallId;
     QJsonObject detail;

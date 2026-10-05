@@ -168,7 +168,7 @@ Column {
 
     UsageText {
         width: parent.width
-        text: "No usage data is connected in this standalone UI shell."
+        text: "Usage reported during this app session. Fake backend counts are fixtures, not billing."
         size: 13.5
         line: 20
         color: Theme.secondary

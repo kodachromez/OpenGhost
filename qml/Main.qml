@@ -180,7 +180,7 @@ ApplicationWindow {
         let pictures = 0
         for (let i = 0; i < composerFiles.count; ++i)
             pictures += composerFiles.get(i).picture ? 1 : 0
-        notice = window.frontend.pick(urls, 8 - composerFiles.count, pictures)
+        notice = window.frontend.pick(urls, 20 - composerFiles.count, pictures)
     }
     function removeFile(index) {
         window.frontend.release([composerFiles.get(index).token])
@@ -310,6 +310,7 @@ ApplicationWindow {
                 if (window.pendingFiles.indexOf(composerFiles.get(i).token) >= 0)
                     composerFiles.remove(i)
             }
+            window.frontend.release(window.pendingFiles)
             window.pendingSubmission = 0
             window.pendingDraft = ""
             window.pendingFiles = []
@@ -317,9 +318,9 @@ ApplicationWindow {
         function onFilesPicked(files, error) {
             if (error) {
                 window.notice = error
-            } else if (composerFiles.count + files.length > 8) {
+            } else if (composerFiles.count + files.length > 20) {
                 window.frontend.release(files.map(file => file.token))
-                window.notice = "Attach at most 8 files to one message. No files were added."
+                window.notice = "Attach at most 20 files to one message. No files were added."
             } else {
                 for (const file of files)
                     composerFiles.append(file)
@@ -1175,6 +1176,20 @@ ApplicationWindow {
                 color: Theme.danger
                 font.pixelSize: 14
             }
+            Button {
+                objectName: "reconcileTurn"
+                visible: window.frontend.canRetry && !window.frontend.retryRow
+                text: "Retry"
+                onClicked: window.frontend.retry()
+                padding: 8
+                horizontalPadding: 14
+                background: Rectangle {
+                    radius: 16
+                    color: parent.hovered ? Theme.hover : Theme.composerBg
+                    border.color: Theme.composerBorder
+                }
+                contentItem: Label { text: parent.text; color: Theme.text; font.pixelSize: 14 }
+            }
         }
         // The composer (.composer): one rounded panel for chosen files, text
         // and controls, at most 680 px and 24 px inside the panel's sides.
@@ -1576,7 +1591,7 @@ ApplicationWindow {
                     restOpacity: 1
                     hoverOpacity: 1
                     disabledOpacity: 1
-                    enabled: !window.frontend.picking && composerFiles.count < 8
+                    enabled: !window.frontend.picking && composerFiles.count < 20
                     onClicked: filePicker.choose()
                     text: "Add photos and files"
                     ButtonTip { text: parent.text }

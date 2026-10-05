@@ -6,10 +6,13 @@ port's custom appearance or extra features; this is not a UI rewrite.
 See [NOTICE.md](NOTICE.md) for attribution.
 
 Default launch is **disconnected**. Use `--fake-backend` to exercise chats,
-streaming, Escape Stop and model switching against an explicitly labelled,
-in-memory C++ fixture. It runs no model, tools, credentials, network or process.
-General instructions, model/effort/mode preferences and appearance save locally.
-There is no Rust/backend transport integration yet.
+streaming, Escape Stop, Retry, steering, approvals, text attachments, model/auth
+states and usage against an explicitly labelled, in-memory C++ fixture. It runs
+no model, real tools, credentials, network or process. General instructions,
+model/effort/mode preferences and appearance save locally. Try `/fake approval`
+or `/fake error`; fixture sign-in accepts only `fixture`, never a real key.
+There is no Rust, RPC or FFI integration yet. See [the port notes](docs/cpp-port.md)
+for end-to-end coverage and deliberately mocked host systems.
 
 ## Build and launch
 
@@ -48,7 +51,8 @@ is not a durable or production-conforming backend.
   small presentation adapter.
 - `src/backend/`: typed semantic contract, explicit fake, and transport interface
   (no wire/process implementation).
-- `src/frontend/`: frontend-owned chat state and portable local preferences.
+- `src/frontend/`: frontend-owned chat state, local preferences, bounded text
+  attachment preparation and session-lifetime usage ledger.
 - `src/platform/`: OS integration, selected by CMake.
 - [`reference/openghost/`](reference/openghost/): the **unchanged dissected 1.3
   frontend**, retained for visual/behavior comparison only. Its Electron/JS

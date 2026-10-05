@@ -1,6 +1,7 @@
 #pragma once
 
 #include "frontend/preferences.h"
+#include "frontend/usage.h"
 #include <QDate>
 #include <QImage>
 #include <QObject>
@@ -9,7 +10,8 @@
 #include <QVariantMap>
 
 // Small QML settings projections. Instructions use the frontend preference
-// store; file preparation and the usage ledger remain explicitly absent.
+// store; pinned-file preparation remains explicitly absent. Usage has a separate
+// frontend-owned, session-lifetime ledger.
 inline QString backendUnavailable()
 {
     return QStringLiteral("This operation is not connected in the native frontend yet.");
@@ -68,21 +70,4 @@ class GeneralPreview final : public QObject
     openghost::PreferencesStore *m_store;
 };
 
-class UsagePreview final : public QObject
-{
-    Q_OBJECT
-    Q_PROPERTY(QString thisMonth READ thisMonth CONSTANT)
-    Q_PROPERTY(double since READ since CONSTANT)
-  public:
-    using QObject::QObject;
-    QString thisMonth() const { return QDate::currentDate().toString(QStringLiteral("yyyy-MM")); }
-    double since() const { return 0; }
-    Q_INVOKABLE QVariantMap totals(int = 0) const { return {}; }
-    Q_INVOKABLE QVariantMap between(const QString &, const QString &) const { return {}; }
-    Q_INVOKABLE QVariantList daily(int) const { return {}; }
-    Q_INVOKABLE QVariantList month(const QString &) const { return {}; }
-    Q_INVOKABLE QStringList months() const { return {}; }
-    Q_INVOKABLE QString nameOf(const QString &id) const { return id; }
-  signals:
-    void changed();
-};
+using UsagePreview = openghost::UsageStore;
