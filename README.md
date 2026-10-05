@@ -197,7 +197,7 @@ Qt selects the app-specific locations for application name `openghost-native`:
 | `AppDataLocation/library/index.json` | Chat/folder index, titles/rename metadata, pins/collapse, model selection, lock metadata. |
 | `…/library/chats/<id>.json` | Allowlisted display messages, per-reply usage and pending-turn/steering checkpoints. |
 | `…/library/mini/<parent-id>.json` | Separate mini-chat display cache, pending markers and parent `seen` timestamp. |
-| `…/library/usage.json` | Local usage ledger, schema v2 (v1 keys upgraded on read); see the known save defect below. |
+| `…/library/usage.json` | Local usage ledger, schema v2 (v1 keys upgraded on read). |
 
 On Linux the defaults are normally `~/.config/openghost-native` and
 `~/.local/share/openghost-native`, respecting Qt/XDG overrides. Windows/macOS use
@@ -260,11 +260,12 @@ index metadata (folder/space names remain visible).
 
 Usage views aggregate correlated live usage by provider/model/day/month and keep
 per-reply metrics. Duplicate/replayed events do not charge again; unknown timing
-is not guessed. **Known defect:** the intended 800 ms single-shot usage save can
-expire before `flush()` checks `isActive()`, so it skips the write; shutdown after
-that timeout also skips it. Explicit/destructor flush while the timer is still
-active works. Do not rely on ledger durability yet. See the
-[verified preparation findings](docs/repository-readiness.md).
+is not guessed. Saves are debounced by 800 ms, with pending changes flushed on
+shutdown. Failed writes return false from `flush()` and emit the store's
+`saveFailed` signal; counts remain pending for an explicit flush, a later usage
+update or shutdown. There is no automatic retry loop or dedicated usage-error UI.
+Unsaved counts can still be lost on a crash or persistent storage failure. See
+[the persistence findings](docs/repository-readiness.md).
 
 Attachments are local regular UTF-8 text only: 20/message, 256 KiB/file,
 64 retained draft tokens and 8 MiB total retained text. Preparation is synchronous

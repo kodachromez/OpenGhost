@@ -1,10 +1,10 @@
 # Standalone repository readiness
 
-Audit scope: the native frontend on `cpp-native-extraction`, following the local
-state implementation in `185ed65`. This pass changes documentation and stale
-comments only. It adds no backend adapter, transport, RPC, FFI or frontend
-feature. The frozen `reference/openghost/` and all licensing/provenance records
-are preserved.
+Original audit: the native frontend on `cpp-native-extraction`, following the local
+state implementation in `185ed65`; documentation recorded in `4542756`. The focused
+usage-ledger follow-up below fixes one finding without adding backend integration
+or UI features. The frozen `reference/openghost/` and all licensing/provenance
+records are preserved.
 
 ## Before moving or sharing the repository
 
@@ -34,32 +34,31 @@ are preserved.
    features. The Rust harness, Pi and other backends are future adapter targets,
    not dependencies or working integrations.
 
+## Resolved: usage-ledger automatic save
+
+The audit reproduced skipped automatic saves in
+[`UsageStore`](../src/frontend/usage.cpp): `flush()` used `isActive()` as its
+pending-write flag, but Qt stops a single-shot timer **before** emitting timeout.
+The timeout and later destructor therefore returned without writing.
+
+The fix tracks dirty state independently and clears it only on successful
+publication. A failed write returns false from `flush()` and emits `saveFailed`
+(the same signal pattern as preferences). In-memory counts remain pending for an
+explicit flush, another usage-triggered save or destructor flush. No automatic
+retry loop or new error UI is added. Load errors still refuse recording; v2 JSON
+and v1 read/upgrade behavior are unchanged. A crash or persistent write failure
+can still lose unsaved counts.
+
+`usageLedgerTimerPersists` exercises two real timer-driven publications through a
+temporary `FileKeyStore`, without explicit flush/destruction, and failed against
+the old implementation. `usageLedgerSaveFailure` injects failed timeout writes,
+checks the failure signal/false flush result and unchanged stored data, and tests
+explicit, next-record and destructor recovery without losing counts. The existing
+round-trip test also checks v1-to-v2 publication and unknown-version refusal.
+
 ## Findings needing follow-up
 
-These are not fixed in this documentation-only pass.
-
-### Usage ledger automatic save is skipped
-
-[`UsageStore`](../src/frontend/usage.cpp) starts a single-shot 800 ms timer in
-`save()`, connects timeout to `flush()`, then has `flush()` return immediately
-when `!m_timer.isActive()`. Qt stops a single-shot timer before emitting timeout.
-Consequently the normal timeout saves nothing, and a destructor/explicit flush
-after timeout also returns success without writing. This is worse than merely
-losing the last 800 ms on a crash.
-
-A temporary, uncommitted QtCore probe linked against `native_contract` reproduced
-this on Qt 6.11.2:
-
-1. Create `UsageStore` over `MemoryKeyStore` and record 10 input tokens.
-2. Run the event loop for `SaveDelay + 300 ms` without another record.
-3. Check the key, explicitly flush, then destroy the store.
-
-Observed: `usage` absent after timeout; `flush()` returned true; `usage` still
-absent after destruction. The existing `usageLedgerPersists` test flushes by
-destruction **before** timeout, so it does not cover this failure. Follow-up
-should track dirty state independently of timer activity, test actual elapsed
-timeout and failed writes, and surface failures. No new production/test behavior
-was committed just to make this documentation pass green.
+The remaining findings below are not addressed by the usage-ledger fix.
 
 ### Local save and deletion failures are not uniformly reported
 
@@ -72,8 +71,6 @@ failure. That guarantee must not be generalized to every local write:
 - After remote deletion acknowledgements, `ChatService::remove` ignores the
   library removal result; `Library::remove` ignores cache-removal failures.
   Mini Clear and folder cleanup have similar best-effort local paths.
-- `UsageStore` stops its timer before a write and does not retain a separate
-  failed-write dirty state; its error reporting covers load, not all save errors.
 
 Qualify disk-full/write/remove failure handling and communicate partial outcomes
 before relying on the local library as durable user storage. Backend success
@@ -111,7 +108,7 @@ profile; qualify these boundaries before sensitive-data use.
   approval/host lifetimes and truthful usage/errors with that backend. The fake
   alone proves none of its durability or remote-effect guarantees.
 
-## Checks for this pass
+## Checks for the documentation audit (`4542756`)
 
 On Linux with CMake 4.4.4, Qt 6.11.2 and GCC 16.2.1:
 
@@ -128,7 +125,16 @@ On Linux with CMake 4.4.4, Qt 6.11.2 and GCC 16.2.1:
   reference. No change to `reference/openghost/` or retained licenses/import
   records is included.
 
-The temporary usage probe above is an additional diagnostic, not a new committed
-regression test or a passing durability qualification. No real backend/provider,
+That audit's temporary usage probe established the timer failure; the subsequent
+fix adds the committed regression coverage described above. No real backend/provider,
 Rust, RPC, FFI, Windows/macOS, full pixel-parity, deployment/signing or whole-history
 secret audit was run.
+
+## Checks for the usage-ledger fix
+
+On the same Linux/Qt/GCC toolchain: the focused usage run passed (7 QtTest passes,
+including init/cleanup and the three failure-recovery rows); the full native
+contract suite passed (32 passes). A clean Release configure/build passed with
+only the two existing GCC metatype warnings. Both existing UI smokes passed via
+CTest offscreen/software with no QML load/binding warnings. Visual parity work
+was not started; no backend integration, UI feature or reference change was made.

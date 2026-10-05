@@ -93,12 +93,16 @@ UsageStore::UsageStore(KeyStore *store, QObject *parent) : QObject(parent), m_st
 }
 void UsageStore::save()
 {
-    if (m_store && m_error.isEmpty())
+    if (m_store && m_error.isEmpty()) {
+        m_dirty = true;
         m_timer.start();
+    }
 }
 bool UsageStore::flush()
 {
-    if (!m_timer.isActive())
+    // A single-shot timer is already inactive when it emits timeout. Pending
+    // writes have their own state, cleared only after successful publication.
+    if (!m_dirty)
         return true;
     m_timer.stop();
     QJsonObject days, names;
@@ -111,9 +115,14 @@ bool UsageStore::flush()
     }
     for (auto it = m_names.cbegin(); it != m_names.cend(); ++it)
         names.insert(it.key(), it.value());
-    return m_store->write(
-        QStringLiteral("usage"),
-        {{"version", 2}, {"since", double(m_since)}, {"days", days}, {"names", names}});
+    if (!m_store->write(
+            QStringLiteral("usage"),
+            {{"version", 2}, {"since", double(m_since)}, {"days", days}, {"names", names}})) {
+        emit saveFailed(QStringLiteral("Usage could not be saved."));
+        return false;
+    }
+    m_dirty = false;
+    return true;
 }
 QString UsageStore::nameOf(const QString &id) const
 {

@@ -11,8 +11,10 @@ namespace openghost
 {
 // Frontend-local ledger (usage.js, schema version 2; version 1 upgraded on
 // read). Only identity-checked live events reach record(); replay updates reply
-// metrics but must not charge it. Saves are debounced and flushed on exit. An
-// unreadable/unknown saved ledger is left on disk untouched and not extended.
+// metrics but must not charge it. Saves are debounced and flushed on exit. Failed
+// writes report saveFailed and stay pending for a later record/flush or exit;
+// there is no automatic retry loop. An unreadable/unknown saved ledger is left
+// on disk untouched and not extended.
 class UsageStore final : public QObject
 {
     Q_OBJECT
@@ -22,8 +24,8 @@ class UsageStore final : public QObject
     explicit UsageStore(QObject *parent = nullptr) : UsageStore(nullptr, parent) {}
     explicit UsageStore(KeyStore *store, QObject *parent = nullptr);
     ~UsageStore() override { flush(); }
-    QString error() const { return m_error; }
-    bool flush(); // Writes a pending change now.
+    QString error() const { return m_error; } // Load error; blocks recording.
+    bool flush(); // Writes pending changes; false + saveFailed leaves them pending.
     static constexpr int SaveDelay = 800;
     QString thisMonth() const { return QDate::currentDate().toString("yyyy-MM"); }
     double since() const { return m_since; }
@@ -36,12 +38,14 @@ class UsageStore final : public QObject
     Q_INVOKABLE QString nameOf(const QString &id) const;
   signals:
     void changed();
+    void saveFailed(const QString &error);
 
   private:
     QVariantMap day(const QDate &date) const;
     void save();
     KeyStore *m_store = nullptr;
     QTimer m_timer;
+    bool m_dirty = false;
     QString m_error;
     QMap<QString, QMap<QString, Usage>> m_days;
     QMap<QString, QString> m_names;

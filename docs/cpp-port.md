@@ -185,7 +185,7 @@ The reference equivalents are `library.js`, `chat-store.js`, `chat.js`,
 | `ChatService` | Current/draft/mini records, live output buffers, local turn state, approvals, host-call ownership, recovery checkpoints. Backend versions/sequence/remote IDs are runtime state reacquired on reopen; client IDs/pending markers are saved in display entries. |
 | QML / `AttachmentStore` | In-memory composer drafts (32 inactive maximum) and opaque attachment tokens/full prepared input; never recovered from saved previews. |
 | `PreferencesStore` | Instructions (8,000-character bound), explicit model/effort and global permission preference. Per-chat mode is not an independently persisted canonical backend configuration. Pinned payloads unsupported. |
-| `UsageStore` | Version-2 local ledger, JSON-pair provider/model keys, v1 `provider\|model` upgrade; per-reply metrics also in display caches. Save defect noted below. |
+| `UsageStore` | Version-2 local ledger, JSON-pair provider/model keys, v1 `provider\|model` upgrade; per-reply metrics also in display caches. Save/failure behavior below. |
 | Appearance store | Theme choice only, with a separate read/write policy. |
 
 File store keys are validated relative names; `:` is escaped as `%3A` in file
@@ -287,12 +287,16 @@ names remain visible. Do not promise secure deletion or a secure vault.
 Only correlated live usage increments the ledger; replay updates reply metrics
 without charging again. Late old-turn usage cannot overwrite current context
 state. Counts are not locally guessed; absent timing remains unknown. The ledger
-has an intended 800 ms debounce and destructor flush, **but automatic saving is
-currently defective**: the single-shot timer is inactive when its timeout slot
-calls `flush()`, which returns without writing. A later destructor also sees it
-inactive. Tests cover explicit/early destruction flush, not that elapsed-timer
-case. The audit reproduced this; details are in [repository readiness](repository-readiness.md).
-Usage write failures also lack a surfaced/retryable dirty state.
+uses an 800 ms debounce and destructor flush. Pending writes are tracked
+independently of the single-shot timer, which Qt stops before emitting timeout.
+Only a successful write clears that pending state. A failed write returns false
+from `flush()` and emits `saveFailed`, following the preference store's error
+signal pattern; counts remain in memory for an explicit flush, a later usage
+update or destruction. There is no automatic retry loop or dedicated usage-error
+UI. Unreadable/unknown-version ledgers still block recording and remain untouched.
+Tests cover real timer-driven file writes, failure signalling and all three retry
+paths, unchanged v2 serialization and v1 upgrade. Unsaved counts can still be lost
+on crash or persistent write failure; see [repository readiness](repository-readiness.md).
 
 Preferences preserve invalid/unreadable files and publish changed values only on
 successful save. Appearance instead ignores invalid input, can replace it after
@@ -391,8 +395,8 @@ CMake selects `src/platform/linux.cpp` on Linux and `portable.cpp` elsewhere;
 
 ## Validation coverage and follow-up boundaries
 
-The existing focused suite contains 26 contract slots (QtTest reports 28 passes
-including init/cleanup) and two UI smokes. It exercises refusal, uncertain
+The existing focused suite contains 28 contract test functions (QtTest reports
+32 passes including data rows and init/cleanup) and two UI smokes. It exercises refusal, uncertain
 acceptance, ordered/interleaved projection, terminal/Stop sealing, exact Retry,
 steering receipts, attachment ownership, auth invalidation, approvals/host
 lifetimes, library/restart/checkpoint failure, mini/folder/lock state, ledger

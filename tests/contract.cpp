@@ -1186,6 +1186,107 @@ class ContractTest : public QObject
         QVERIFY(!store.values.value("chats/" + id).contains("sealed"));
         QCOMPARE(*keyed.titleOf(id), QStringLiteral("private words"));
     }
+    void usageLedgerTimerPersists()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        FileKeyStore store(dir.path());
+        UsageStore ledger(&store);
+        Usage usage;
+        usage.provider = "p|x";
+        usage.model = "m";
+        usage.modelName = "Model";
+        usage.input = 10;
+        usage.cached = 20; // clamped to input
+        usage.written = 3;
+        usage.output = 5;
+        usage.requests = 2;
+        const auto today = QDate::currentDate().toString(Qt::ISODate);
+        ledger.record(usage);
+        QCOMPARE(store.read("usage").status, KeyStore::Status::Absent); // still debounced
+        QJsonObject expected{
+            {"version", 2},
+            {"since", ledger.since()},
+            {"days", QJsonObject{{today, QJsonObject{{R"(["p|x","m"])",
+                                                    QJsonArray{10, 10, 3, 5, 2}}}}}},
+            {"names", QJsonObject{{R"(["p|x","m"])", "Model"}}}};
+        // No explicit flush or destruction: only the real timer can publish it.
+        QTRY_COMPARE_WITH_TIMEOUT(store.read("usage").value, expected, UsageStore::SaveDelay * 3);
+        usage.input = 4;
+        usage.cached = 1;
+        usage.written = 0;
+        usage.output = 1;
+        usage.requests = 1;
+        const auto nextDay = QDate::currentDate().toString(Qt::ISODate);
+        ledger.record(usage);
+        auto days = expected.value("days").toObject();
+        days.insert(nextDay, QJsonObject{{R"(["p|x","m"])", nextDay == today
+                                                                ? QJsonArray{14, 11, 3, 6, 3}
+                                                                : QJsonArray{4, 1, 0, 1, 1}}});
+        expected.insert("days", days);
+        QTRY_COMPARE_WITH_TIMEOUT(store.read("usage").value, expected, UsageStore::SaveDelay * 3);
+        UsageStore reread(&store);
+        QCOMPARE(reread.totals()["p|x"].toMap()["tokens"].toDouble(), 20.0);
+        QCOMPARE(reread.nameOf(R"(["p|x","m"])"), QStringLiteral("Model"));
+        QCOMPARE(reread.since(), ledger.since());
+    }
+    void usageLedgerSaveFailure_data()
+    {
+        QTest::addColumn<QString>("retry");
+        QTest::newRow("explicit-flush") << QStringLiteral("flush");
+        QTest::newRow("next-record") << QStringLiteral("record");
+        QTest::newRow("destructor") << QStringLiteral("destructor");
+    }
+    void usageLedgerSaveFailure()
+    {
+        QFETCH(QString, retry);
+        MemoryKeyStore store;
+        double expectedTokens = 30;
+        {
+            UsageStore ledger(&store);
+            QSignalSpy failed(&ledger, &UsageStore::saveFailed);
+            Usage usage;
+            usage.provider = "p";
+            usage.model = "m";
+            usage.input = 10;
+            usage.output = 5;
+            ledger.record(usage);
+            QVERIFY(ledger.flush());
+            const auto saved = store.values.value("usage");
+            store.failWrites = "usage";
+            ledger.record(usage);
+            // The timer's return value has no caller: failure must also signal.
+            QTRY_COMPARE_WITH_TIMEOUT(failed.size(), 1, UsageStore::SaveDelay * 3);
+            QCOMPARE(failed.first().first().toString(), QStringLiteral("Usage could not be saved."));
+            QCOMPARE(store.values.value("usage"), saved);
+            QCOMPARE(ledger.totals()["p"].toMap()["tokens"].toDouble(), expectedTokens);
+            // The failed timeout left the write pending, even with no active timer.
+            QVERIFY(!ledger.flush());
+            QCOMPARE(failed.size(), 2);
+            QCOMPARE(store.values.value("usage"), saved);
+            store.failWrites.clear();
+            if (retry == "flush") {
+                QVERIFY(ledger.flush());
+            } else if (retry == "record") {
+                ledger.record(usage); // write failure must not block further usage
+                expectedTokens += 15;
+                QTRY_VERIFY_WITH_TIMEOUT(store.values.value("usage") != saved,
+                                         UsageStore::SaveDelay * 3);
+            } else {
+                QCOMPARE(store.values.value("usage"), saved); // destructor must retry
+            }
+            if (retry != "destructor") {
+                UsageStore reread(&store);
+                QCOMPARE(reread.totals()["p"].toMap()["tokens"].toDouble(), expectedTokens);
+                store.failWrites = "usage";
+                QVERIFY(ledger.flush()); // clean: do not attempt another write
+                QCOMPARE(failed.size(), 2);
+            }
+        }
+        UsageStore reread(&store);
+        QCOMPARE(reread.totals()["p"].toMap()["tokens"].toDouble(), expectedTokens);
+        QCOMPARE(store.values.value("usage").value("version").toInt(), 2);
+    }
     void usageLedgerPersists()
     {
         MemoryKeyStore store;
@@ -1217,6 +1318,18 @@ class ContractTest : public QObject
         UsageStore old(&store);
         QCOMPARE(old.totals()["prov"].toMap()["tokens"].toDouble(), 3.0);
         QCOMPARE(old.nameOf(R"(["prov","mod"])"), QStringLiteral("mod"));
+        Usage increment;
+        increment.provider = "prov";
+        increment.model = "mod";
+        increment.input = 2;
+        increment.output = 1;
+        old.record(increment);
+        QVERIFY(old.flush());
+        const auto upgraded = store.values.value("usage");
+        QCOMPARE(upgraded.value("version").toInt(), 2);
+        QCOMPARE(upgraded.value("since").toDouble(), 1.0);
+        QCOMPARE(upgraded.value("days").toObject().value(today).toObject(),
+                 QJsonObject({{R"(["prov","mod"])", QJsonArray{3, 0, 0, 3, 2}}}));
         // An unreadable ledger is neither extended nor overwritten.
         store.raw.insert("usage", "broken");
         UsageStore broken(&store);
@@ -1227,6 +1340,15 @@ class ContractTest : public QObject
         broken.record(usage);
         QVERIFY(broken.flush());
         QVERIFY(store.raw.contains("usage") && broken.totals().isEmpty());
+        store.raw.clear();
+        const QJsonObject future{{"version", 3}, {"unknown", "keep"}};
+        store.values.insert("usage", future);
+        UsageStore unknown(&store);
+        QVERIFY(!unknown.error().isEmpty());
+        unknown.record(usage);
+        QVERIFY(unknown.flush());
+        QVERIFY(unknown.totals().isEmpty());
+        QCOMPARE(store.values.value("usage"), future);
     }
     void hostToolsRoutedAndReleased()
     {
