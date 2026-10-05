@@ -47,8 +47,8 @@ const SCHEMAS = [
   amount: { type: 'number', description: 'How many screens, 0.8 by default' },
   ref: { type: 'integer', description: 'Scroll this element into view instead' },
  }),
- fn('browser_screenshot', 'Look at the page in the built-in browser yourself: returns a picture of the screen, or of the page from the top with full_page. Use it when layout, images, colors, charts or the look of a site you build matter, or when the snapshot is not enough.', {
-  full_page: { type: 'boolean', description: 'The page from the top, up to four screens tall' },
+ fn('browser_screenshot', 'Look at the page in the built-in browser yourself: returns a picture of the screen, or with full_page the page from the top capped at four viewport heights. Taller pages return truncated: true, the captured range and total page height, and a warning that more content exists below. Use it when layout, images, colors, charts or the look of a site you build matter, or when the snapshot is not enough.', {
+  full_page: { type: 'boolean', description: 'Capture from the top, up to four viewport heights at viewport width. Reports truncated: false when the entire page height fits; otherwise only the top portion is captured.' },
  }),
  fn('browser_read', 'Read a frozen HTML-derived text snapshot, with headings, lists and links. Not computed visibility: may include hidden text and omit form values, shadow roots and iframes. Long pages come in parts; continue with tabId, readId and start.', {
   start: { type: 'integer', description: 'UTF-16 code-unit offset (not bytes) in the frozen read snapshot' },
@@ -140,7 +140,7 @@ function read(answer, start) {
 // [number] (`data.refs`) for a backend that words its approval cards with them.
 function result(args, answer) {
  const data = {};
- for (const key of ['code', 'tabId', 'pageId', 'readId', 'refs', 'tabs', 'truncated', 'coverage', 'scroll', 'width', 'height', 'scale', 'pageWidth', 'pageHeight', 'downloads']) {
+ for (const key of ['code', 'tabId', 'pageId', 'readId', 'refs', 'tabs', 'truncated', 'coverage', 'scroll', 'width', 'height', 'scale', 'pageWidth', 'pageHeight', 'capture', 'contentHeight', 'viewportHeight', 'downloads']) {
   if (answer?.[key] !== undefined) data[key] = answer[key];
  }
  if (!answer || answer.error) return { isError: true, data: { ...data, code: answer?.code || 'browser_error' }, content: [{ type: 'text', text: `Error: ${answer?.error || 'the browser did not answer'}` }] };

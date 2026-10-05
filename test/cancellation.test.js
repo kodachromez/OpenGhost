@@ -102,6 +102,16 @@ test('a step stopped before it reaches the browser never runs there', async () =
  assert.equal(bridge.runs.length, 0);
 });
 
+test('Stop from a focus handler is rechecked immediately before desktop dispatch', async () => {
+ const { bridge, panel } = page();
+ const controller = new AbortController();
+ panel.lent = panel.active.view;
+ panel.active.view.focus = () => controller.abort();
+ const answer = await panel.run('browser_type', { text: 'never' }, { id: 'focus-stop', signal: controller.signal });
+ assert.equal(answer.code, 'cancelled');
+ assert.equal(bridge.runs.length, 0);
+});
+
 test('a tabs step stopped while its new tab loads does not navigate it', async () => {
  const { bridge, panel, chat, conversation } = page();
  const owner = chat(), conv = conversation(owner), gate = deferred();
@@ -182,6 +192,66 @@ test('Take Control before a step reaches the browser keeps it from running', asy
  assert.equal((await answer).status, 'handed-back');
 });
 
+test('rapid Hand Back before the taken result arrives never replays the old action', async () => {
+ const { bridge, panel, chat, conversation } = page();
+ const owner = chat(), conv = conversation(owner), gate = deferred();
+ const run = panel.run.bind(panel);
+ panel.run = async (...args) => {
+  const answer = await run(...args);
+  if (answer.taken) await gate.promise;
+  return answer;
+ };
+ const old = owner.onHostTool(conv, request('browser_type', { text: 'old', submit: true }), new AbortController().signal);
+ await tick();
+ await panel.take();
+ panel.handBack();
+ gate.resolve();
+ await tick();
+ assert.deepEqual(bridge.runs.map(job => job.name), ['browser_type', 'browser_snapshot']);
+ bridge.runs[1].resolve({ text: 'Page: after hand-back' });
+ assert.equal((await old).status, 'handed-back');
+ const fresh = owner.onHostTool(conv, request('browser_type', { text: 'fresh' }), new AbortController().signal);
+ await tick();
+ assert.equal(bridge.runs.length, 3);
+ assert.equal(bridge.runs[2].args.text, 'fresh', 'typing requires a new host.tool request');
+ bridge.runs[2].resolve({ text: 'Page: fresh input' });
+ assert.equal((await fresh).status, 'ok');
+});
+
+test('Take Control also waits for a previous Stop acknowledgement after its result returned', async () => {
+ const { bridge, panel, chat, conversation } = page();
+ const owner = chat(), conv = conversation(owner), ack = deferred();
+ const old = owner.onHostTool(conv, request('browser_wait', { seconds: 60 }), new AbortController().signal);
+ await tick();
+ bridge.cancel = () => ack.promise;
+ owner.abort(conv);
+ assert.deepEqual(plain(await old), CANCELLED);
+ await tick();
+ assert.equal(panel.jobs.size, 0);
+ const take = panel.take();
+ assert.equal(panel.control, 'taking');
+ ack.resolve();
+ await take;
+ assert.equal(panel.control, 'user');
+ bridge.runs[0].resolve({ error: 'cancelled' });
+});
+
+test('failed cancellation acknowledgement cannot show user ownership', async () => {
+ const { bridge, panel } = page();
+ const notices = [];
+ panel.notify = message => notices.push(message);
+ bridge.cancel = async () => { throw new Error('IPC lost'); };
+ const active = panel.run('browser_wait', {}, { id: 'failed-ack', signal: new AbortController().signal });
+ await tick();
+ await panel.take();
+ assert.equal((await active).taken, true);
+ assert.equal(panel.control, 'taking');
+ panel.handBack();
+ assert.equal(panel.control, 'taking');
+ assert.match(notices[0], /IPC lost/);
+ bridge.runs[0].resolve({ error: 'cancelled' });
+});
+
 test('a step the main process finished before the take keeps its real result', async () => {
  const { bridge, panel, chat, conversation } = page();
  const owner = chat(), conv = conversation(owner);
@@ -207,6 +277,7 @@ test('Stop answers every step waiting for the user to hand the browser back', as
  await tick();
  owner.abort(conv);
  for (const answer of waiting) assert.deepEqual(plain(await answer), CANCELLED);
+ assert.equal(panel.waiters.length, 0, 'Stop releases hand-back waiters without needing Hand Back');
  panel.handBack();
  await tick();
  assert.equal(bridge.runs.length, 0);

@@ -276,7 +276,87 @@ function install(pageId) {
   return false;
  }
 
- window.__og = { pageId, snapshot, point, choose, reveal, quiet, has };
+ // Serialize an HTML prefix, not outerHTML followed by slice: that still builds the
+ // entire page in the renderer. Walk lazily (including template contents), never
+ // enter frames/shadow roots, and escape only small chunks of text/attribute data.
+ function read(max) {
+  const HTML = 'http://www.w3.org/1999/xhtml';
+  const VOID = new Set(['area', 'base', 'basefont', 'bgsound', 'br', 'col', 'embed', 'frame', 'hr', 'img', 'input', 'keygen', 'link', 'meta', 'param', 'source', 'track', 'wbr']);
+  const RAW = new Set(['script', 'style', 'xmp', 'iframe', 'noembed', 'noframes', 'plaintext', 'noscript']);
+  const entities = { '&': '&amp;', '\u00a0': '&nbsp;', '"': '&quot;', '<': '&lt;', '>': '&gt;' };
+  const parts = [];
+  let remaining = max, sourceTruncated = false;
+  const push = text => {
+   if (text.length > remaining) {
+    parts.push(text.slice(0, remaining));
+    remaining = 0; sourceTruncated = true;
+    return false;
+   }
+   parts.push(text); remaining -= text.length;
+   return true;
+  };
+  const data = (length, slice, attribute = false, raw = false) => {
+   for (let offset = 0; offset < length && !sourceTruncated;) {
+    // One extra code unit detects overflow without scanning the rest of a node.
+    const size = Math.min(4096, remaining + 1, length - offset);
+    const chunk = slice(offset, size);
+    push(raw ? chunk : chunk.replace(attribute ? /[&\u00a0"<>]/g : /[&\u00a0<>]/g, char => entities[char]));
+    offset += size;
+   }
+  };
+  const close = tag => push('</') && push(tag) && push('>');
+  // A cursor per ancestor, not an array of all descendants or a recursive walk.
+  const stack = [{ next: document.documentElement, tag: null }];
+  while (stack.length && !sourceTruncated) {
+   const frame = stack[stack.length - 1], node = frame.next;
+   if (!node) {
+    stack.pop();
+    if (frame.tag !== null) close(frame.tag);
+    continue;
+   }
+   frame.next = stack.length === 1 ? null : node.nextSibling;
+   if (node.nodeType === 1) {
+    const html = node.namespaceURI === HTML;
+    const tag = html || ['http://www.w3.org/2000/svg', 'http://www.w3.org/1998/Math/MathML'].includes(node.namespaceURI) ? node.localName : node.tagName;
+    if (!push('<') || !push(tag)) break;
+    for (const attr of node.attributes) {
+     let name = attr.name;
+     if (attr.namespaceURI === 'http://www.w3.org/XML/1998/namespace') name = `xml:${attr.localName}`;
+     else if (attr.namespaceURI === 'http://www.w3.org/2000/xmlns/') name = attr.localName === 'xmlns' ? 'xmlns' : `xmlns:${attr.localName}`;
+     else if (attr.namespaceURI === 'http://www.w3.org/1999/xlink') name = `xlink:${attr.localName}`;
+     if (!push(' ') || !push(name) || !push('="')) break;
+     // DOM has no substring accessor for attributes; do not also build an
+     // unbounded escaped copy of a potentially huge value.
+     const value = attr.value;
+     data(value.length, (offset, size) => value.slice(offset, offset + size), true);
+     if (sourceTruncated || !push('"')) break;
+    }
+    if (sourceTruncated || !push('>')) break;
+    if (!html || !VOID.has(tag)) {
+     const parent = html && tag === 'template' ? node.content : node;
+     stack.push({ next: parent.firstChild, tag });
+    }
+   } else if (node.nodeType === 3 || node.nodeType === 4) {
+    const parent = node.parentNode;
+    const raw = parent?.namespaceURI === HTML && RAW.has(parent.localName);
+    // substringData avoids materializing a giant Text.data string in JS.
+    data(node.length, (offset, size) => node.substringData(offset, size), false, raw);
+   } else if (node.nodeType === 8) {
+    if (!push('<!--')) break;
+    data(node.length, (offset, size) => node.substringData(offset, size), false, true);
+    if (!sourceTruncated) push('-->');
+   } else if (node.nodeType === 7) {
+    if (!push('<?') || !push(node.target) || !push(' ')) break;
+    data(node.length, (offset, size) => node.substringData(offset, size), false, true);
+    if (!sourceTruncated) push('?>');
+   }
+  }
+  // At exactly max, finish traversal until an actual extra character is found;
+  // a full buffer alone is not evidence that any source was omitted.
+  return { html: parts.join(''), sourceTruncated };
+ }
+
+ window.__og = { pageId, snapshot, point, choose, reveal, quiet, has, read };
 }
 
 const plain = (message, code = 'browser_error') => Object.assign(new Error(message), { plain: true, code });
@@ -289,12 +369,14 @@ function check() {
  const op = operations.getStore();
  if (!op) return;
  if (op.signal.aborted) throw op.signal.reason;
+ if (op.found.gone) throw op.found.gone;
  if (op.found.guest.isDestroyed()) throw plain('This browser tab is gone', 'tab_gone');
  if (op.lease !== shown.lease) throw plain('The active browser target changed. Take a new snapshot.', 'stale_tab');
  if (!op.navigating && op.pageId !== op.found.pageId) throw plain('The page changed. Take a new snapshot.', 'stale_page');
 }
 
 function sleep(ms) {
+ check();
  let timer;
  return timed(new Promise(resolve => { timer = setTimeout(resolve, ms); }), ms + WAIT.call, 'Browser delay timed out').finally(() => clearTimeout(timer));
 }
@@ -360,20 +442,19 @@ function guard(host, prefs, params) {
 function adopt(host, guest) {
  const found = { guest, host, queue: Promise.resolve(), attached: false, pageId: randomUUID(), downloads: [], read: null };
  guests.set(guest.id, found);
- const changed = () => { revise(found); found.failure = null; };
+ const changed = () => revise(found);
  guest.on('did-start-navigation', (event, url, inPlace, mainFrame) => { if (mainFrame) changed(); });
  // A snapshot taken during loading describes the old document, not the document that commits later.
  guest.on('did-navigate', changed);
  guest.on('did-navigate-in-page', (event, url, mainFrame) => { if (mainFrame) changed(); });
- guest.on('did-fail-load', (event, code, description, url, mainFrame) => {
-  if (mainFrame && code !== -3) found.failure = plain(`The page could not be opened: ${description}`, 'navigation_failed');
- });
  guest.on('render-process-gone', () => {
   found.pageId = randomUUID(); found.read = null;
-  found.stop?.(plain('The browser page crashed. Open it again.', 'guest_crashed'));
+  found.gone = plain('The browser page crashed. Open it again.', 'guest_crashed');
+  found.stop?.(found.gone);
  });
  guest.once('destroyed', () => {
-  found.stop?.(plain('This browser tab is gone', 'tab_gone'));
+  found.gone = plain('This browser tab is gone', 'tab_gone');
+  found.stop?.(found.gone);
   guests.delete(guest.id);
  });
  const tell = (type, data = {}) => { if (!host.isDestroyed()) host.send('browser:event', { type, id: guest.id, ...data }); };
@@ -436,6 +517,7 @@ function entry(id, host) {
 }
 
 async function attach(found) {
+ check();
  if (found.attached && found.guest.debugger.isAttached()) return;
  if (!found.guest.debugger.isAttached()) found.guest.debugger.attach('1.3');
  await command(found.guest, 'Emulation.setFocusEmulationEnabled', { enabled: true });
@@ -515,6 +597,7 @@ async function state(guest, { full = false, note = '' } = {}) {
 }
 
 async function pointer(found, x, y) {
+ check();
  const { guest, host } = found;
  if (host.isDestroyed()) return;
  host.send('browser:event', { type: 'pointer', id: guest.id, x, y });
@@ -557,39 +640,91 @@ async function press(guest, combo, mayNavigate = false) {
  await command(guest, 'Input.dispatchKeyEvent', { ...base, type: 'keyUp' });
 }
 
+function navigationError(error) {
+ const aborted = error.code === -3 || error.errno === -3 || error.code === 'ERR_ABORTED' || /\bERR_ABORTED\b/.test(error.message);
+ return aborted
+  ? plain('Navigation was aborted (ERR_ABORTED); the requested page did not finish loading.', 'navigation_aborted')
+  : plain(`The page could not be opened: ${error.message}`, 'navigation_failed');
+}
+
 async function navigate(guest, target) {
- const history = guest.navigationHistory;
+ const op = operations.getStore(), history = guest.navigationHistory;
+ const control = ['back', 'forward', 'reload'].includes(target);
  if (target === 'back' || target === 'forward') {
   const can = target === 'back' ? history.canGoBack() : history.canGoForward();
   if (!can) throw plain(`There is no page to go ${target} to`);
-  if (target === 'back') history.goBack(); else history.goForward();
-  await settle(guest, true);
-  return '';
  }
- if (target === 'reload') { guest.reload(); await settle(guest, true); return ''; }
- const url = normalize(target);
- try { await timed(guest.loadURL(url), WAIT.load, 'The page did not load in time'); }
- catch (error) {
-  if (operations.getStore().signal.aborted) throw error;
-  throw plain(`The page could not be opened: ${error.message}`, 'navigation_failed');
+ const listeners = [];
+ const on = (event, listener) => { guest.on(event, listener); listeners.push([event, listener]); };
+ const watchFailure = () => {
+  const failed = (event, code, description, url, mainFrame) => {
+   // Subframe failures do not establish failure of the requested main document.
+   // ERR_ABORTED (often provisional-only) is not evidence of a successful redirect.
+   if (mainFrame) op.stop(navigationError({ code, message: description }));
+  };
+  on('did-fail-load', failed);
+  on('did-fail-provisional-load', failed);
+  on('will-prevent-unload', () => op.stop(plain('Navigation was prevented by the current page.', 'navigation_aborted')));
+ };
+ try {
+  check();
+  if (control) {
+   // These APIs return void. Require load completion (or same-document history
+   // navigation), not merely isLoading() becoming false after a failure/stop.
+   watchFailure();
+   const loaded = new Promise(resolve => {
+    on('did-finish-load', resolve);
+    on('did-navigate-in-page', (event, url, mainFrame) => { if (mainFrame) resolve(); });
+   });
+   check();
+   if (target === 'reload') guest.reload();
+   else if (target === 'back') history.goBack();
+   else history.goForward();
+   await timed(loaded, WAIT.load, 'The page did not load in time');
+  } else {
+   const url = normalize(target);
+   try { check(); await timed(guest.loadURL(url), WAIT.load, 'The page did not load in time'); }
+   catch (error) {
+    check(); // Preserve cancellation, timeout, crash and target-change reasons.
+    throw navigationError(error);
+   }
+   // loadURL's own promise identifies its navigation. Listening earlier could
+   // mistake an abort of the previous, superseded load for failure of this one.
+   watchFailure();
+  }
+  await settle(guest, control);
+  op.pageId = op.found.pageId;
+  op.navigating = false;
+  return await state(guest);
+ } catch (error) {
+  // Partial DOM content is not a successful navigation. Do not snapshot on error,
+  // and do not let a cleanup error replace the original failure/cancellation.
+  try { if (!guest.isDestroyed()) guest.stop(); } catch {}
+  throw error;
+ } finally {
+  for (const [event, listener] of listeners) guest.removeListener(event, listener);
  }
- await settle(guest);
- return '';
 }
 
 async function screenshot(guest, full) {
  const cdp = (method, params = {}) => command(guest, method, params);
  const metrics = await cdp('Page.getLayoutMetrics');
  const view = metrics.cssVisualViewport, content = metrics.cssContentSize;
- const width = Math.round(view.clientWidth), height = Math.round(full ? Math.min(content.height, view.clientHeight * SHOT.tall) : view.clientHeight);
+ // CDP clips use CSS pixels; keep fractional full-page heights so rounding cannot mislabel a complete capture.
+ const width = Math.round(view.clientWidth), height = full ? Math.min(content.height, view.clientHeight * SHOT.tall) : Math.round(view.clientHeight);
+ const capture = { x: full ? 0 : view.pageX, y: full ? 0 : view.pageY, width, height };
  const params = { format: 'png' };
- if (full) Object.assign(params, { captureBeyondViewport: true, clip: { x: 0, y: 0, width, height, scale: 1 } });
+ if (full) Object.assign(params, { captureBeyondViewport: true, clip: { ...capture, scale: 1 } });
  const shot = await timed(cdp('Page.captureScreenshot', params), WAIT.call, 'The page did not draw a screenshot');
  let image = nativeImage.createFromBuffer(Buffer.from(shot.data, 'base64'));
  const target = Math.min(width, SHOT.max);
  if (image.getSize().width !== target) image = image.resize({ width: target, quality: 'good' });
  const size = image.getSize();
- return { image: `data:image/jpeg;base64,${image.toJPEG(SHOT.quality).toString('base64')}`, width: size.width, height: size.height, scale: size.width / width, pageWidth: width, pageHeight: height, truncated: !!full && content.height > height };
+ return {
+  image: `data:image/jpeg;base64,${image.toJPEG(SHOT.quality).toString('base64')}`, width: size.width, height: size.height,
+  scale: size.width / width, pageWidth: width, pageHeight: height, capture,
+  contentHeight: content.height, viewportHeight: view.clientHeight, truncated: !!full && content.height > height,
+ };
 }
 
 async function act(found, name, args) {
@@ -606,18 +741,7 @@ async function act(found, name, args) {
   case 'browser_navigate': {
    const raw = String(args.url || '').trim(), word = raw.toLowerCase();
    op.navigating = true;
-   found.failure = null;
-   let note;
-   try {
-    note = await navigate(guest, ['back', 'forward', 'reload'].includes(word) ? word : raw);
-    if (found.failure) throw found.failure;
-   } catch (error) {
-    if (!guest.isDestroyed()) guest.stop();
-    throw error;
-   }
-   op.pageId = found.pageId;
-   op.navigating = false;
-   return state(guest, { note });
+   return navigate(guest, ['back', 'forward', 'reload'].includes(word) ? word : raw);
   }
   case 'browser_snapshot':
    return state(guest, { full: !!args.full });
@@ -626,7 +750,7 @@ async function act(found, name, args) {
    if (args.ref !== undefined && args.ref !== null && args.ref !== '') {
     const spot = await world(guest, `__og.point(${Number(args.ref)})`);
     ({ x, y } = spot);
-    if (spot.covered) throw plain(`Element [${args.ref}] is covered by ${spot.covered}. No click was sent.`, 'element_covered');
+    if (spot.covered) throw plain(`Element [${args.ref}] is covered by ${spot.covered}. No click was sent. Take a fresh snapshot or explicitly target the covering element.`, 'element_covered');
    } else if (!Number.isFinite(x) || !Number.isFinite(y)) {
     throw plain('Pass ref from the snapshot, or x and y in page pixels');
    }
@@ -635,7 +759,8 @@ async function act(found, name, args) {
    check();
    if (args.ref != null) {
     const spot = await world(guest, `__og.point(${Number(args.ref)})`);
-    if (spot.covered || spot.x !== x || spot.y !== y) throw plain('The click target moved or is covered. Take a new snapshot.', 'stale_target');
+    if (spot.covered) throw plain(`Element [${args.ref}] is covered by ${spot.covered}. No click was sent. Take a fresh snapshot or explicitly target the covering element.`, 'element_covered');
+    if (spot.x !== x || spot.y !== y) throw plain('The click target moved. Take a new snapshot.', 'stale_target');
    }
    await mouse(guest, x, y, args.double ? 2 : 1, true);
    await afterInput();
@@ -691,15 +816,20 @@ async function act(found, name, args) {
   case 'browser_screenshot': {
    const shot = await screenshot(guest, !!args.full_page);
    const scale = Math.abs(shot.scale - 1) < 0.01 ? 'one screenshot pixel is one page pixel, so x and y for browser_click can be read from it' : `to click by coordinates divide screenshot pixels by ${shot.scale.toFixed(3)}`;
-   return { ...shot, text: `Screenshot of ${args.full_page ? 'the page from the top' : 'the viewport'}: ${guest.getTitle() || guest.getURL()}, ${shot.width}×${shot.height}; ${scale}.` };
+   const coverage = !args.full_page ? 'the viewport' : shot.truncated ? 'the page from the top (truncated full-page capture)' : 'the full page (complete vertical capture)';
+   const extent = !args.full_page ? '' : shot.truncated
+    ? ` Only the top ${shot.pageHeight} CSS pixels (${SHOT.tall} viewport heights) were captured, y=0–${shot.pageHeight} of ${shot.contentHeight} CSS pixels. More page content exists below; scroll down and take viewport screenshots to see it.`
+    : ` Captured the entire page height, y=0–${shot.pageHeight} of ${shot.contentHeight} CSS pixels.`;
+   return { ...shot, text: `Screenshot of ${coverage}: ${guest.getTitle() || guest.getURL()}, ${shot.width}×${shot.height}; ${scale}.${extent}` };
   }
   case 'browser_read': {
    if (Number(args.start) > 0 || args.readId) {
     if (!args.readId || args.readId !== found.read?.readId || found.read.pageId !== found.pageId) throw plain('The read snapshot expired. Read again from start=0.', 'stale_read');
     return found.read;
    }
-   const html = await timed(guest.executeJavaScript('document.documentElement ? document.documentElement.outerHTML : ""'), WAIT.call, 'The page is not responding');
-   found.read = { html: html.slice(0, READ_MAX), url: guest.getURL(), title: guest.getTitle(), pageId: found.pageId, readId: randomUUID(), sourceTruncated: html.length > READ_MAX };
+   check();
+   const source = await world(guest, `__og.read(${READ_MAX})`);
+   found.read = { html: source.html, url: guest.getURL(), title: guest.getTitle(), pageId: found.pageId, readId: randomUUID(), sourceTruncated: source.sourceTruncated };
    return found.read;
   }
   case 'browser_wait': {

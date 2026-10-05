@@ -73,7 +73,11 @@ function addressBar(window, url) {
   backButton: button(), forwardButton: button(), reloadButton: button(),
   active: { id: 1, url, view: { canGoBack: () => false, canGoForward: () => false } },
  });
+ const before = doc.html.length;
  panel.syncBar();
+ const parsed = doc.html.slice(before);
+ assert.equal(parsed.length, 1, 'only the trusted reload/stop SVG may reach innerHTML, never URL text');
+ assert.match(parsed[0], /^<svg\b/);
  return panel.urlView;
 }
 
@@ -91,6 +95,48 @@ test('a hostile URL in the address bar is shown as text, in the same host and pa
  const view = addressBar(window, 'http://example.invalid/%3Cimg%20src=x%20onerror=alert(1)%3E');
  noHostileHtml(doc);
  assert.deepEqual([...view.walk()].map(el => el.textContent), ['http://', 'example.invalid', '/<img src=x onerror=alert(1)>']);
+});
+
+test('issue #21: the encoded address-bar URL renders literal markup, not an element', () => {
+ const { window } = page();
+ const view = addressBar(window, 'https://example.invalid/%3Cb%20id=%22injected%22%3Ehello%3C/b%3E');
+ assert.equal(view.textContent, 'example.invalid/<b id="injected">hello</b>');
+ assert.deepEqual([...view.walk()].map(el => [el.tagName, el.className, el.textContent]), [
+  ['SPAN', 'browser-url-host', 'example.invalid'],
+  ['SPAN', 'browser-url-dim', '/<b id="injected">hello</b>'],
+ ]);
+});
+
+test('address-bar protocol, host, path, query and hash retain text-only formatting', () => {
+ const { window } = page();
+ const markup = '%3Cb%20id=%22injected%22%3Ehello%3C/b%3E';
+ const cases = [
+  ['http://www.example.invalid:8080/', ['http://', 'example.invalid:8080', '']],
+  [`https://example.invalid/?q=${markup}`, ['example.invalid', '?q=<b id="injected">hello</b>']],
+  [`https://example.invalid/#${markup}`, ['example.invalid', '#<b id="injected">hello</b>']],
+  ['https://example.invalid/&lt;b&gt;%20%E2%9C%93', ['example.invalid', '/&lt;b&gt; ✓']],
+  [`file:///tmp/${markup}`, ['file://', '', '/tmp/<b id="injected">hello</b>']],
+  [`data:text/html,${markup}`, ['data://', '', 'text/html,<b id="injected">hello</b>']],
+ ];
+ for (const [url, pieces] of cases) {
+  const view = addressBar(window, url);
+  assert.deepEqual([...view.walk()].map(el => el.textContent), pieces, url);
+  assert.ok([...view.walk()].every(el => el.tagName === 'SPAN' && el.childElementCount === 0), url);
+ }
+});
+
+test('invalid URLs and malformed escapes fall back to literal text; blank URLs stay empty', () => {
+ const { window } = page();
+ for (const url of ['not a URL <b id="injected">hello</b>', 'http://example.invalid/%ZZ%3Cb%3E']) {
+  const view = addressBar(window, url);
+  assert.equal(view.textContent, url);
+  assert.equal(view.childElementCount, 0, 'fallback must replace any partial protocol/host display');
+ }
+ for (const url of ['', 'about:blank']) {
+  const view = addressBar(window, url);
+  assert.equal(view.textContent, '');
+  assert.equal(view.childElementCount, 0);
+ }
 });
 
 test('an approval card shows a hostile tool name, arguments and presentation as text', () => {

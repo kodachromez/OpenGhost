@@ -114,7 +114,12 @@ const browserJobs = new Map();
 async function runBrowser(id, name, args, sender) {
  if (typeof name !== 'string' || !name.startsWith('browser_')) return { error: `Unknown browser tool ${name}` };
  const controller = new AbortController(), key = String(id || '');
- if (key) browserJobs.set(key, () => controller.abort());
+ if (!key || browserJobs.has(key)) return { error: 'Invalid or duplicate browser job', code: 'invalid_request' };
+ // Register synchronously, before starting any work. Cancellation acknowledges settlement,
+ // including navigation cleanup, not just delivery of an abort signal.
+ let settled;
+ const job = { controller, done: new Promise(resolve => { settled = resolve; }) };
+ browserJobs.set(key, job);
  try {
   return await Browser.run(name, args && typeof args === 'object' ? args : {}, sender, controller.signal);
  } catch (error) {
@@ -122,10 +127,17 @@ async function runBrowser(id, name, args, sender) {
   return { error: error.message, code: error.code || 'browser_error', stopped: controller.signal.aborted };
  } finally {
   browserJobs.delete(key);
+  settled();
  }
 }
 
-const cancelBrowser = () => { for (const stop of browserJobs.values()) stop(); };
+async function cancelBrowserJob(id) {
+ const job = browserJobs.get(String(id));
+ if (!job) return;
+ job.controller.abort();
+ await job.done;
+}
+const cancelBrowser = () => { for (const job of browserJobs.values()) job.controller.abort(); };
 
 // What YouTube tells about a video for its card: its name and who made it. Only YouTube's oEmbed is ever asked.
 async function videoInfo(id) {
@@ -236,7 +248,7 @@ ipcMain.handle('theme:set', (event, choice) => {
  return nativeTheme.shouldUseDarkColors;
 });
 ipcMain.handle('browser:run', (event, id, name, args) => fromApp(event) ? runBrowser(id, name, args, event.sender) : { error: 'Not allowed' });
-ipcMain.handle('browser:cancel', (event, id) => { if (fromApp(event)) browserJobs.get(String(id))?.(); });
+ipcMain.handle('browser:cancel', (event, id) => { if (fromApp(event)) return cancelBrowserJob(id); });
 ipcMain.on('browser:shown', (event, value) => { if (fromApp(event)) Browser.setShown(value); });
 ipcMain.handle('pdf:read', (event, source) => fromApp(event) ? Pdf.read(source) : { text: '', reason: 'unreadable' });
 ipcMain.handle('media:video-info', (event, id) => fromApp(event) ? videoInfo(id) : null);

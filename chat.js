@@ -1270,6 +1270,7 @@ class Chat {
   panel.drive(conv, true);
   let handed = false;
   for (;;) {
+   if (cancelled()) return { status: 'cancelled', content: [] };
    if (panel.userHas) {
     const why = await this.awaitHandBack(turn, panel, signal);
     if (why === 'abort' || cancelled()) return { status: 'cancelled', content: [] };
@@ -1291,7 +1292,9 @@ class Chat {
     turn.steps.delete(stop);
    }
    if (cancelled()) return { status: 'cancelled', content: [] };
-   if (answer?.taken) continue;
+   // Latch the interruption even if Hand Back beat this continuation. The original
+   // action is permanently retired; only a new observation may follow it.
+   if (answer?.taken) { handed = true; continue; }
    const result = HostTools.result(p.args || {}, answer);
    return { ...result, status: handed ? 'handed-back' : result.isError ? 'error' : 'ok' };
   }
@@ -1300,15 +1303,22 @@ class Chat {
  // Until the user hands the browser back ('back'), sends a message instead ('message'), or the step is stopped ('abort').
  async awaitHandBack(turn, panel, signal) {
   let release;
-  const why = await new Promise(resolve => {
-   release = resolve;
-   turn.releases.add(release);
-   panel.waitForAgent().then(() => resolve('back'));
-   signal.addEventListener('abort', () => resolve('abort'), { once: true });
-   turn.controller.signal.addEventListener('abort', () => resolve('abort'), { once: true });
-  });
-  turn.releases.delete(release);
-  return why;
+  const waiting = new AbortController(), stop = () => release('abort');
+  try {
+   return await new Promise(resolve => {
+    release = resolve;
+    turn.releases.add(release);
+    panel.waitForAgent(waiting.signal).then(() => resolve('back'));
+    signal.addEventListener('abort', stop, { once: true });
+    turn.controller.signal.addEventListener('abort', stop, { once: true });
+    if (signal.aborted || turn.controller.signal.aborted) stop();
+   });
+  } finally {
+   turn.releases.delete(release);
+   signal.removeEventListener('abort', stop);
+   turn.controller.signal.removeEventListener('abort', stop);
+   waiting.abort();
+  }
  }
 
  // The messages the backend took in between its steps join the chat, and the reply goes on in a new part under them.
