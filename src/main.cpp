@@ -2,9 +2,12 @@
 #include "backend/fake_backend.h"
 #include "platform/platform.h"
 #include "window.h"
+#include <cstdio>
+#include <cstring>
 #include <memory>
 
 #include <QCommandLineParser>
+#include <QFont>
 #include <QGuiApplication>
 #include <QIcon>
 #include <QQmlApplicationEngine>
@@ -13,10 +16,27 @@
 
 #ifdef OPENGHOST_SMOKE_TEST
 int smokeTest(QQmlApplicationEngine &engine, WindowController &controller);
+int parityTest(QQmlApplicationEngine &engine, WindowController &controller, const QString &manifest,
+               const QString &output);
 #endif
 
 int main(int argc, char *argv[])
 {
+#ifdef OPENGHOST_SMOKE_TEST
+    // Refuse before constructing an application: a mistaken direct invocation
+    // must never open a desktop window. The runner supplies an offscreen
+    // renderer on a private memory-only display, with no visible fallback.
+    bool parityRequested = false, platformOverride = false;
+    for (int i = 1; i < argc; ++i) {
+        parityRequested |= std::strncmp(argv[i], "--parity-", 9) == 0;
+        platformOverride |= std::strncmp(argv[i], "-platform", 9) == 0 ||
+                            std::strncmp(argv[i], "--platform", 10) == 0;
+    }
+    if (parityRequested && (qgetenv("QT_QPA_PLATFORM") != "offscreen" || platformOverride)) {
+        fprintf(stderr, "Parity requires QT_QPA_PLATFORM=offscreen and no platform override\n");
+        return 2;
+    }
+#endif
     platform::beforeApplication();
     QGuiApplication app(argc, argv);
     platform::afterApplication();
@@ -36,15 +56,26 @@ int main(int argc, char *argv[])
 #ifdef OPENGHOST_SMOKE_TEST
     parser.addOption(
         {QStringLiteral("smoke-test"), QStringLiteral("Run the isolated UI smoke test and exit.")});
+    parser.addOption({QStringLiteral("parity-manifest"),
+                      QStringLiteral("Offscreen-only visual fixture manifest."),
+                      QStringLiteral("path")});
+    parser.addOption({QStringLiteral("parity-output"),
+                      QStringLiteral("Visual fixture output directory."), QStringLiteral("path")});
 #endif
     parser.process(app);
+#ifdef OPENGHOST_SMOKE_TEST
+    if (parser.isSet(QStringLiteral("parity-output")) !=
+        parser.isSet(QStringLiteral("parity-manifest")))
+        parser.showHelp(2);
+#endif
     selectControlsStyle();
     QString appearancePath;
     QString preferencesPath;
     QString dataPath;
 #ifdef OPENGHOST_SMOKE_TEST
     QTemporaryDir testSettings;
-    if (parser.isSet(QStringLiteral("smoke-test"))) {
+    if (parser.isSet(QStringLiteral("smoke-test")) ||
+        parser.isSet(QStringLiteral("parity-manifest"))) {
         if (!testSettings.isValid())
             return 1;
         appearancePath = testSettings.path() + QStringLiteral("/appearance.json");
@@ -63,6 +94,13 @@ int main(int argc, char *argv[])
             dataPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) +
                        QStringLiteral("/library");
     }
+#ifdef OPENGHOST_SMOKE_TEST
+    if (parser.isSet(QStringLiteral("parity-manifest"))) {
+        QFont font(QStringLiteral("Noto Sans"));
+        font.setPixelSize(15);
+        app.setFont(font);
+    }
+#endif
     keepAppearance(appearancePath);
     std::unique_ptr<openghost::Backend> backend;
     if (parser.isSet(QStringLiteral("fake-backend")))
@@ -76,13 +114,25 @@ int main(int argc, char *argv[])
         [&engine](const QList<QQmlError> &) { engine.setProperty("smokeWarnings", true); });
 #endif
     engine.setNetworkAccessManagerFactory(denyNetwork());
-    engine.setInitialProperties({{"frontend", QVariant::fromValue(&controller)}});
+    QVariantMap initial{{"frontend", QVariant::fromValue(&controller)}};
+#ifdef OPENGHOST_SMOKE_TEST
+    // The offscreen GLX backing surface is allocated on first show and does
+    // not grow on resize. Allocate the fixture ceiling before its first frame.
+    if (parser.isSet(QStringLiteral("parity-manifest"))) {
+        initial.insert(QStringLiteral("width"), 2048);
+        initial.insert(QStringLiteral("height"), 1400);
+    }
+#endif
+    engine.setInitialProperties(initial);
     engine.load(QUrl(QStringLiteral("qrc:/OpenGhost/Ui/Main.qml")));
     if (engine.rootObjects().isEmpty())
         return 1;
 #ifdef OPENGHOST_SMOKE_TEST
     if (parser.isSet(QStringLiteral("smoke-test")))
         return smokeTest(engine, controller);
+    if (parser.isSet(QStringLiteral("parity-manifest")))
+        return parityTest(engine, controller, parser.value(QStringLiteral("parity-manifest")),
+                          parser.value(QStringLiteral("parity-output")));
 #endif
     return app.exec();
 }

@@ -57,12 +57,11 @@ Column {
     readonly property var model: {
         revision
         const all = usage.totals(0)
-        // Known providers in reference order, then the catalog, then the rest.
-        const first = ["openai-codex", "chatgpt", "openai", "anthropic", "deepseek"]
-        const listed = settings.providers.map(p => p.id).filter(id => !first.includes(id))
-        const known = first.filter(id => all[id] || connected(id))
-        const used = Object.keys(all).filter(id => !first.includes(id) && !listed.includes(id)).sort()
-        const order = known.concat(listed, used)
+        // settings-usage.js: backend display order, then providers retained
+        // only in the local ledger. Provider names do not select branding.
+        const listed = settings.providers.map(p => p.id)
+        const used = Object.keys(all).filter(id => !listed.includes(id))
+        const order = listed.concat(used)
         const shown = order.filter(id => (all[id] && all[id].tokens) || connected(id))
         const scopes = [""].concat(monthsBack())
         const month = scope ? usage.between(scope + "-01", scope + "-31") : null
@@ -71,22 +70,15 @@ Column {
                  totals: periods.map(p => usage.totals(p[1])) }
     }
 
-    // A provider's colour, as 1.2's TONES: ChatGPT turquoise, OpenAI lilac,
-    // Anthropic orange, DeepSeek blue; the rest take the other tones in turn.
-    readonly property var known: ({ "openai-codex": 1, chatgpt: 1, openai: 0, anthropic: 5, deepseek: 2 })
+    // The frozen reference cycles turquoise, lilac, orange, blue in display
+    // order for arbitrary providers; it no longer hard-codes provider colours.
     function tone(id) {
-        if (known[id] !== undefined)
-            return Theme.tones[known[id]]
-        const spare = [3, 4, 6, 0, 1, 2, 5]
-        const others = model.order.filter(p => known[p] === undefined)
-        return Theme.tones[spare[Math.max(0, others.indexOf(id)) % spare.length]]
+        const palette = [1, 0, 5, 2]
+        return Theme.tones[palette[Math.max(0, model.order.indexOf(id)) % palette.length]]
     }
-    readonly property var names: ({ "openai-codex": "ChatGPT", chatgpt: "ChatGPT", openai: "OpenAI API",
-                                    anthropic: "Anthropic", deepseek: "DeepSeek",
-                                    "claude-code": "Claude Code" })
     function nameOf(id) {
         const listed = settings.providers.find(p => p.id === id)
-        return listed ? listed.name : names[id] ?? id
+        return listed ? listed.name : id
     }
     function connected(id) {
         const listed = settings.providers.find(p => p.id === id)
@@ -253,7 +245,9 @@ Column {
                                 model: split.parts
                                 delegate: Rectangle {
                                     required property string modelData
-                                    readonly property real share: period.totals[modelData].tokens / Math.max(1, period.total)
+                                    // A scope/catalog change can replace totals before
+                                    // the repeater removes the old provider delegate.
+                                    readonly property real share: (period.totals[modelData]?.tokens ?? 0) / Math.max(1, period.total)
                                     width: Math.max(4, (split.width - 2 * (split.parts.length - 1)) * share)
                                     height: 4
                                     radius: 2

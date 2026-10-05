@@ -289,8 +289,16 @@ void BlockModel::apply(const QVector<Node> &nodes, const QString &path)
 // markdown.js's CSS margins, collapsed: the space above a row.
 int BlockModel::gap(int row) const
 {
-    if (row <= 0)
+    if (row <= 0) {
+        // The later .markdown > .md-diagram.md-wide rule outranks
+        // .markdown > :first-child: even the first wide diagram has 6 px.
+        if (row == 0 && m_container == Container::Top && !m_rows.isEmpty()) {
+            const auto &block = *m_rows.first().node.block;
+            if (block.kind == markdown::Kind::Diagram && block.flag)
+                return 6;
+        }
         return 0;
+    }
     switch (m_container) {
     case Container::Plain:
         return 0;

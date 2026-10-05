@@ -406,8 +406,11 @@ and [`tests/smoke.cpp`](../tests/smoke.cpp).
 UI smokes drive existing QML controls, both themes/four settings pages, native
 renderers, splash handoff, pins/collapse and disconnected/fake behavior. The
 reported splash artifact from an earlier pass was not reproduced/diagnosed;
-handoff state checks are not frame-by-frame visual qualification. There is no
-Windows/macOS CI, full pixel comparison or real provider/backend test here.
+handoff state checks are not frame-by-frame visual qualification. A subsequent
+[fresh visual audit](visual-parity.md) adds the desktop-safe headless/offscreen
+pixel-comparison harness and per-fixture measurements: 0/156 exact, six manual
+cases excluded. It does not qualify animation phase or every GPU effect. There
+is still no Windows/macOS CI or real provider/backend test here.
 
 Future work should be independently scoped: address storage findings and GCC
 warnings; qualify a crypto host before password UI; port missing reference views

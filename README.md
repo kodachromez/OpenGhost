@@ -81,8 +81,25 @@ file-backed library); contract tests use temporary or memory stores. No real
 credentials or live model calls are needed. They are focused regressions, not
 full visual parity, real crash recovery or cross-platform qualification.
 
-With a working Linux Wayland desktop, the same test-enabled binary can exercise
-the GPU path without CTest's offscreen override:
+### Desktop-safe visual audit
+
+After the test-enabled Release build above:
+
+```sh
+python3 tests/parity/run.py
+```
+
+This captures the unchanged JS reference headlessly and Qt offscreen, sequentially,
+with a private memory-only display and no visible fallback. It never opens a
+report window. See [visual parity](docs/visual-parity.md) for prerequisites,
+quantitative results, classifications and `--strict`. The audit currently has
+**0 exact matches out of 156 captured fixtures**, plus six excluded manual cases.
+
+### Manual/visible GPU smoke — opt-in only
+
+**Not part of the default suite; can open a window and take focus.** With an
+explicitly approved Linux Wayland desktop session, the same test-enabled binary
+can exercise the GPU path without CTest's offscreen override:
 
 ```sh
 QT_QPA_PLATFORM=wayland QSG_RHI_BACKEND=opengl QT_QUICK_BACKEND=rhi \
@@ -297,7 +314,7 @@ release. The default `NoHost` exposes no browser/tools, so `ChatService` returns
 | `src/platform/` | CMake-selected Linux or portable host integration and external-link dispatch. |
 | `qml/` | Qt Quick window, sidebar, composer, settings, delegates and visual components. |
 | `shaders/`, `resources/` | Qt-compiled shaders, icon and Linux desktop entry. |
-| `tests/` | Qt contract suite and application UI smokes. |
+| `tests/` | Qt contract suite, application UI smokes and test-only headless/offscreen visual parity harness. |
 | `docs/cpp-port.md` | Engineering inventory, contracts, exclusions, warnings and portability detail. |
 | `docs/native-import.json` | Historical import commits and source hashes, not hashes of today's edited files. |
 | `LICENSE`, `NOTICE.md`, `licenses/` | Current terms and preserved historical attribution. |

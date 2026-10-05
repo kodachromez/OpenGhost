@@ -28,7 +28,11 @@ Control {
     readonly property int count: levels.length
     readonly property int value: levels.indexOf(settings.thinking)
     readonly property int last: Math.max(0, count - 1)
+    // effort-slider.js::setEfforts hides the control when no levels exist.
+    // A disabled, empty control still occupied a slot in the composer's Row.
+    visible: count > 0
     enabled: count > 0
+    onCountChanged: if (count === 0) panel.close()
     focusPolicy: Qt.TabFocus
     padding: 0
     background: null

@@ -31,9 +31,9 @@ Item {
     property real lean: 0
     readonly property real size: Math.max(32, Math.min(46, viewWidth * 0.034))
 
-    readonly property var names: ({ off: "Instant", minimal: "Minimal", low: "Low", medium: "Medium",
+    readonly property var names: ({ none: "Instant", minimal: "Minimal", low: "Low", medium: "Medium",
                                     high: "High", xhigh: "Extra high", max: "Max" })
-    readonly property var hints: ({ off: "Answers right away, without thinking", low: "A quick thought first",
+    readonly property var hints: ({ none: "Answers right away, without thinking", low: "A quick thought first",
                                     medium: "Thinks it over", high: "Thinks it through",
                                     xhigh: "Thinks longer on hard problems", max: "Thinks as long as it takes" })
     function nameOf(level) { return names[level] ?? level.charAt(0).toUpperCase() + level.slice(1) }

@@ -2,6 +2,7 @@
 #include "markdown.h"
 #include "rich.h"
 #include "tex.h"
+#include "theme.h"
 #include "window.h"
 
 #include <QElapsedTimer>
@@ -70,6 +71,9 @@ int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
         check(controller.send(QStringLiteral("Never send this")) == 0 && accepted.isEmpty(),
               "disconnected send is refused, not fabricated");
     }
+    auto *effort = findVisual(window->contentItem(), QStringLiteral("thinkingChoice"));
+    check(effort && effort->isVisible() == !controller.settings()->levels().isEmpty(),
+          "effort control is absent (not an empty toolbar slot) without advertised levels");
     check(controller.transcript()->rowCount() == 0 && controller.sessions()->rowCount() == 0,
           "no fabricated conversation");
     check(!controller.pick({QUrl::fromLocalFile(QStringLiteral("/does-not-exist"))}, 8).isEmpty(),
@@ -261,6 +265,12 @@ int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
     check(findVisual(window->contentItem(), QStringLiteral("entry-user")) &&
               findVisual(window->contentItem(), QStringLiteral("entry-note")),
           "retained user and notice delegates load");
+    auto *body = findVisual(window->contentItem(), QStringLiteral("body"));
+    check(body && qAbs(body->parentItem()->width() -
+                       (qCeil(QFontMetricsF(body->property("font").value<QFont>())
+                                  .horizontalAdvance(user.text)) +
+                        32)) < 0.01,
+          "user bubble has only the reference's horizontal padding, no phantom caret space");
     user.state = QStringLiteral("unconfirmed");
     ++user.revision;
     controller.transcript()->apply({user, note});
@@ -276,8 +286,39 @@ int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
     reply.state = QStringLiteral("done");
     controller.transcript()->apply({reply});
     QTest::qWait(500);
-    check(findVisual(window->contentItem(), QStringLiteral("entry-assistant")),
-          "retained Markdown delegate loads");
+    auto *replyItem = findVisual(window->contentItem(), QStringLiteral("entry-assistant"));
+    check(replyItem, "retained Markdown delegate loads");
+    auto *rich = replyItem
+                     ? qobject_cast<RichDocument *>(replyItem->property("rich").value<QObject *>())
+                     : nullptr;
+    check(rich && rich->seed() == message,
+          "restored Markdown palette is seeded from source like StreamView.render");
+    reply.state = QStringLiteral("live");
+    reply.text = QStringLiteral("## A growing answer");
+    controller.transcript()->reset({reply});
+    QTest::qWait(150);
+    replyItem = findVisual(window->contentItem(), QStringLiteral("entry-assistant"));
+    rich = replyItem ? qobject_cast<RichDocument *>(replyItem->property("rich").value<QObject *>())
+                     : nullptr;
+    check(rich && rich->seed() == reply.key, "live palette has a stable initial seed");
+    reply.text += QStringLiteral("\n\nMore text.");
+    reply.state = QStringLiteral("done");
+    ++reply.revision;
+    controller.transcript()->apply({reply});
+    QTest::qWait(150);
+    check(rich && rich->seed() == reply.key, "live palette does not change on completion");
+    reply.text = QStringLiteral("```mermaid\nflowchart LR\nA --> B\n```");
+    controller.transcript()->reset({reply});
+    QTest::qWait(200);
+    replyItem = findVisual(window->contentItem(), QStringLiteral("entry-assistant"));
+    rich = replyItem ? qobject_cast<RichDocument *>(replyItem->property("rich").value<QObject *>())
+                     : nullptr;
+    auto *blocks = rich ? qobject_cast<BlockModel *>(rich->blocks()) : nullptr;
+    check(blocks && blocks->data(blocks->index(0), BlockModel::GapRole).toInt() == 6,
+          "first wide diagram retains the reference's higher-specificity top margin");
+    auto *markdownView = replyItem ? findVisual(replyItem, QStringLiteral("markdown")) : nullptr;
+    check(markdownView && markdownView->property("trailingMargin").toInt() == 22,
+          "last wide diagram retains its bottom margin for toolbar collapse");
     controller.transcript()->reset({});
 
     auto *dialog = window->findChild<QObject *>(QStringLiteral("settingsDialog"));
@@ -288,7 +329,10 @@ int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
             check(findVisual(window->contentItem(),
                              QStringLiteral("settingsTab-") + QLatin1String(page)),
                   "OpenGhost settings tab exists");
-            check(dialog->setProperty("page", QString::fromLatin1(page)), "settings page switches");
+            check(QMetaObject::invokeMethod(dialog, "show",
+                                            Q_ARG(QVariant, QString::fromLatin1(page)),
+                                            Q_ARG(QVariant, true)),
+                  "settings page switches through navigation");
             QTest::qWait(60);
             if (fake && QString::fromLatin1(page) == "providers") {
                 auto *logout = findVisual(window->contentItem(), QStringLiteral("logout"));
@@ -317,6 +361,52 @@ int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
         check(!findVisual(window->contentItem(), QStringLiteral("settingsTab-notifications")),
               "no extra Notifications tab or bell animation");
         check(QMetaObject::invokeMethod(dialog, "close"), "settings closes");
+    }
+    QObject *effortStage = nullptr;
+    for (auto *object : window->findChildren<QObject *>())
+        if (QByteArray(object->metaObject()->className()).startsWith("EffortStage_"))
+            effortStage = object;
+    QVariant instant, off, hint;
+    check(effortStage &&
+              QMetaObject::invokeMethod(effortStage, "nameOf", Q_RETURN_ARG(QVariant, instant),
+                                        Q_ARG(QVariant, QVariant("none"))) &&
+              QMetaObject::invokeMethod(effortStage, "nameOf", Q_RETURN_ARG(QVariant, off),
+                                        Q_ARG(QVariant, QVariant("off"))) &&
+              QMetaObject::invokeMethod(effortStage, "hintOf", Q_RETURN_ARG(QVariant, hint),
+                                        Q_ARG(QVariant, QVariant("off"))) &&
+              instant.toString() == "Instant" && off.toString() == "Off" &&
+              hint.toString().isEmpty(),
+          "effort stage follows reference none/unknown-level labels, without aliasing off");
+    if (dialog) {
+        Account account;
+        account.providersLoaded = true;
+        for (const QString id : {"deepseek", "openai"})
+            account.providers.append(QVariantMap{{"id", id},
+                                                 {"name", id},
+                                                 {"hint", ""},
+                                                 {"connected", false},
+                                                 {"logout", false},
+                                                 {"oauth", false},
+                                                 {"apiKey", false},
+                                                 {"note", ""},
+                                                 {"error", false}});
+        controller.settings()->apply(account);
+        for (auto *object : dialog->findChildren<QObject *>()) {
+            if (!QByteArray(object->metaObject()->className()).startsWith("UsagePage_"))
+                continue;
+            QVariant first, second, name;
+            check(QMetaObject::invokeMethod(object, "tone", Q_RETURN_ARG(QVariant, first),
+                                            Q_ARG(QVariant, QStringLiteral("deepseek"))) &&
+                      QMetaObject::invokeMethod(object, "tone", Q_RETURN_ARG(QVariant, second),
+                                                Q_ARG(QVariant, QStringLiteral("openai"))) &&
+                      first.value<QColor>() == theme::current().tones[1] &&
+                      second.value<QColor>() == theme::current().tones[0],
+                  "usage colours cycle in supplied provider order, not legacy branding");
+            check(QMetaObject::invokeMethod(object, "nameOf", Q_RETURN_ARG(QVariant, name),
+                                            Q_ARG(QVariant, QStringLiteral("chatgpt"))) &&
+                      name.toString() == QStringLiteral("chatgpt"),
+                  "usage does not invent a display name for an unlisted provider");
+        }
     }
     Theme::choose(QStringLiteral("light"));
     QTest::qWait(100);

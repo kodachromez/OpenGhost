@@ -42,6 +42,10 @@ Item {
         eager = !top || index < top.index
         listed = eager
         rich.paced = !eager
+        // StreamView.render seeds restored messages from their source, not
+        // their opaque row ID. Set it once: a live reply must keep its palette
+        // as its source grows and when it completes.
+        rich.seed = entry.messageState === "live" ? entry.key : entry.body
         rich.hold = false // Parses now, unless paced and past the slice's budget.
         Theme.settle(entry)
         Qt.callLater(entry.near)
@@ -254,7 +258,10 @@ Item {
                         if (widest >= room)
                             break
                     }
-                    natural = Math.ceil(widest) + 6 // The caret and rounding.
+                    // This is display text, not an editable composer. The
+                    // reference shrink-wraps the text with only 16 px padding
+                    // on each side; a caret allowance widened every bubble.
+                    natural = Math.ceil(widest)
                 }
                 Component.onCompleted: measure()
                 Connections {
@@ -553,6 +560,7 @@ Item {
         Item {
             width: entry.column
             implicitHeight: reply.implicitHeight
+                            + (!entry.copyable && !replyMetrics.visible ? markdownView.trailingMargin : 0)
             SelectArea {
                 objectName: "selectArea"
                 anchors.fill: parent
@@ -574,6 +582,7 @@ Item {
                     height: visible ? Math.min(20000, Math.ceil(entry.body.length / 90) * 26.4) : 0
                 }
                 Markdown {
+                    id: markdownView
                     objectName: "markdown"
                     visible: rich.renderable
                     width: parent.width
@@ -625,7 +634,7 @@ Item {
                 Metrics {
                     id: replyMetrics
                     visible: entry.metrics.length > 0
-                    gap: 8 - parent.spacing
+                    gap: Math.max(8, markdownView.trailingMargin) - parent.spacing
                     width: parent.width
                     template: entry.metrics
                     tip: entry.preview
@@ -636,7 +645,7 @@ Item {
                 // below the metrics (reply-metrics.css).
                 Item {
                     visible: entry.copyable
-                    readonly property real gap: (replyMetrics.visible ? 2 : 10) - parent.spacing
+                    readonly property real gap: (replyMetrics.visible ? 2 : Math.max(10, markdownView.trailingMargin)) - parent.spacing
                     width: 28
                     height: 28 + gap
                     opacity: entry.toolsArrival

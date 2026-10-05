@@ -100,9 +100,11 @@ profile; qualify these boundaries before sensitive-data use.
 - Windows/macOS need actual configure/build/test/runtime runs, not just CMake
   branches. Validate paths/case/long names, file replacement, ACLs, system
   accessibility, native dialogs, graphics, DPI/fonts, IME and keyboard behavior.
-- No Qt deployment bundle, signing/notarization pipeline, CI matrix or full
-  visual-parity suite is supplied. CMake install copies app/assets/notices, not
-  every Qt runtime/plugin needed on a clean machine.
+- No Qt deployment bundle, signing/notarization pipeline or CI matrix is supplied.
+  The [fresh visual audit](visual-parity.md) now supplies a desktop-safe comparison
+  harness, but does **not** establish pixel parity (0/156 exact, six manual cases
+  excluded). CMake install copies app/assets/notices, not every Qt runtime/plugin
+  needed on a clean machine.
 - Future backend qualification must test lost acknowledgement/reconnect,
   incarnation/revision boundaries, exact failed-turn Retry, mini-session semantics,
   approval/host lifetimes and truthful usage/errors with that backend. The fake
@@ -137,4 +139,15 @@ including init/cleanup and the three failure-recovery rows); the full native
 contract suite passed (32 passes). A clean Release configure/build passed with
 only the two existing GCC metatype warnings. Both existing UI smokes passed via
 CTest offscreen/software with no QML load/binding warnings. Visual parity work
-was not started; no backend integration, UI feature or reference change was made.
+was not started in that usage-ledger pass; no backend integration, UI feature or
+reference change was made.
+
+## Fresh visual audit
+
+See [visual-parity.md](visual-parity.md) and its committed per-fixture CSV. The
+new headless/offscreen suite inventories 162 cases, captures 156 twice per renderer
+and explicitly excludes six manual/visible cases. No pair is pixel-exact; four
+headless effort captures additionally require GPU qualification. Safe rendering
+fixes have focused smoke assertions. Release build, three CTest checks and four
+harness tests passed; strict parity correctly exits 2. No desktop window or
+backend integration was used for this audit.

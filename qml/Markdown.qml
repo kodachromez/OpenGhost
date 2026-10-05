@@ -13,6 +13,12 @@ Column {
     property string prefix: "r"
     property real wideWidth: width // Room for wide tables and diagrams.
     property bool outer: false
+    // The wide-diagram rule also outranks :last-child's zero bottom margin.
+    // The message collapses it with the following toolbar's margin.
+    readonly property real trailingMargin: {
+        const last = rows.count ? rows.itemAt(rows.count - 1) : null
+        return last && last.wide && last.kind === "diagram" ? 22 : 0
+    }
     // The text's colour and weight here: a quote's own (.md-quote,
     // blockquote, .md-callout), else the message's.
     property color textColor: Theme.text

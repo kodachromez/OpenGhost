@@ -1,0 +1,283 @@
+// Test-only presentation injection. No backend, wire, credentials or host dialogs.
+#include "diagram.h"
+#include "rich.h"
+#include "window.h"
+#include <QDir>
+#include <QFile>
+#include <QFontInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QQmlApplicationEngine>
+#include <QQmlContext>
+#include <QQmlExpression>
+#include <QQuickItem>
+#include <QQuickWindow>
+#include <QSGRendererInterface>
+#include <QtTest>
+
+namespace
+{
+QQuickItem *visual(QQuickItem *item, const QString &name)
+{
+    if (item->objectName() == name)
+        return item;
+    for (auto *child : item->childItems())
+        if (auto *found = visual(child, name))
+            return found;
+    return nullptr;
+}
+} // namespace
+int parityTest(QQmlApplicationEngine &engine, WindowController &controller, const QString &manifest,
+               const QString &output)
+{
+    if (QGuiApplication::platformName() != "offscreen") {
+        qCritical("Parity refuses a visible platform");
+        return 1;
+    }
+    QFile file(manifest);
+    if (!file.open(QIODevice::ReadOnly))
+        return 1;
+    const auto fixtures = QJsonDocument::fromJson(file.readAll()).object()["fixtures"].toArray();
+    auto *window = qobject_cast<QQuickWindow *>(engine.rootObjects().value(0));
+    if (!window)
+        return 1;
+    auto run = [&](const QString &source) {
+        QQmlExpression expression(qmlContext(window), window, source);
+        auto result = expression.evaluate();
+        if (expression.hasError())
+            qFatal("Parity QML: %s", qPrintable(expression.error().toString()));
+        return result;
+    };
+    QTest::qWait(200);
+    // These are presentation snapshots, not semantic backend fixtures. An
+    // explicit picker choice must not ask the disconnected service to replace
+    // the injected catalog while a screenshot is settling.
+    QObject::disconnect(controller.settings(), &Settings::chosen, nullptr, nullptr);
+    QObject::disconnect(controller.sessions(), &SessionModel::queryChanged, &controller, nullptr);
+    qInfo() << "Parity renderer" << window->rendererInterface()->graphicsApi() << "font"
+            << QFontInfo(QGuiApplication::font()).family() << "DPR" << window->devicePixelRatio();
+    if (QFontInfo(QGuiApplication::font()).family() != "Noto Sans" ||
+        QFontInfo(QFont("monospace")).family() != "Noto Sans Mono")
+        qFatal("Parity requires Noto Sans and monospace resolved to Noto Sans Mono");
+    if (window->rendererInterface()->graphicsApi() != QSGRendererInterface::OpenGL)
+        qFatal("Parity requires offscreen OpenGL (including shaders), not a software scenegraph "
+               "fallback");
+    QDir().mkpath(output);
+    // Replace only the settings page's presentation ledger, never a service.
+    // Each fixture gets a fresh in-memory ledger, preventing cross-case counts.
+    std::unique_ptr<openghost::UsageStore> usage;
+    for (int pass = 0; pass < 2; ++pass) {
+        for (auto value : fixtures) {
+            const auto f = value.toObject();
+            if (f["manual"].toBool())
+                continue;
+            const QString id = f["id"].toString();
+            window->setWidth(f["width"].toInt(1280));
+            window->setHeight(f["height"].toInt(840));
+            run("splashLoader.active=false; Theme.reducedMotion=true; Selection.clear();");
+            auto *effortPanel = window->findChild<QObject *>("effortPanel");
+            if (effortPanel)
+                QMetaObject::invokeMethod(effortPanel, "close");
+            QTest::qWait(30);
+            Theme::setSystemDark(f["systemDark"].toBool(true));
+            Theme::choose(f["theme"].toString("dark"));
+            run("settingsDialog.close(); modelStage.close(); modeDock.close(false); "
+                "approvalModel.clear(); composerFiles.clear(); "
+                "window.notice = ''; window.working = false; window.sidebarOpen = true; "
+                "sidebar.renamingId=''; sidebar.confirmingId=''; "
+                "composer.text = ''; transcript.follow = false; window.approvalDetails = false;");
+            if (auto *search = visual(window->contentItem(), "search")) {
+                search->setProperty("text", "");
+                search->setProperty("focus", false);
+            }
+            auto previousUsage = std::move(usage);
+            usage = std::make_unique<openghost::UsageStore>();
+            auto *dialog = window->findChild<QObject *>("settingsDialog");
+            for (auto *object : dialog->findChildren<QObject *>()) {
+                if (QByteArray(object->metaObject()->className()).startsWith("UsagePage_"))
+                    object->setProperty(
+                        "frontend",
+                        QVariantMap{{"usage", QVariant::fromValue(usage.get())},
+                                    {"settings", QVariant::fromValue(controller.settings())}});
+            }
+            for (auto c : f["usageCounts"].toArray()) {
+                auto value = c.toObject();
+                openghost::Usage count;
+                count.provider = value["provider"].toString();
+                count.model = value["model"].toString();
+                count.input = value["input"].toDouble();
+                count.output = value["output"].toDouble();
+                count.cached = value["cached"].toDouble();
+                count.requests = value["requests"].toDouble();
+                usage->record(count);
+            }
+            if (f["usage"].toBool()) {
+                openghost::Usage count;
+                count.provider = "fixture";
+                count.model = "example";
+                count.modelName = "Example";
+                count.input = 1200;
+                count.output = 340;
+                count.cached = 400;
+                count.requests = 2;
+                usage->record(count);
+            }
+            controller.sessions()->apply({});
+            controller.transcript()->reset({});
+            QTest::qWait(30);
+            QVector<Entry> rows;
+            for (auto r : f["rows"].toArray()) {
+                auto row = r.toObject();
+                Entry e;
+                const auto role = row["role"].toString();
+                e.kind = role == "user"        ? Entry::User
+                         : role == "assistant" ? Entry::Assistant
+                                               : Entry::Note;
+                e.key = row["key"].toString("parity");
+                e.text = row["text"].toString();
+                e.state = row["state"].toString("done");
+                e.copyable = row["copyable"].toBool(role == "assistant");
+                e.preview = row["preview"].toString();
+                e.metrics = row["metrics"].toString();
+                e.started = 1000000;
+                e.completed = 1002400;
+                e.join = row["joined"].toBool() ? Entry::Joined : Entry::Apart;
+                for (auto a : row["attachments"].toArray()) {
+                    auto aObj = a.toObject();
+                    e.attachments.append({aObj["name"].toString(), aObj["mime"].toString(),
+                                          aObj["size"].toInteger()});
+                }
+                rows.append(e);
+            }
+            controller.transcript()->reset(rows);
+            Account account;
+            account.providersLoaded = true;
+            account.providersError = "No backend is connected.";
+            for (auto m : f["models"].toArray()) {
+                auto model = m.toObject();
+                ModelInfo info;
+                info.provider = model["provider"].toString();
+                info.id = model["id"].toString();
+                info.name = model["name"].toString();
+                info.available = true;
+                info.imageInput = true;
+                info.levels = {"off", "low", "medium", "high"};
+                info.defaultThinking = "medium";
+                account.models.append(info);
+            }
+            if (!account.models.isEmpty())
+                account.defaults = {account.models[0].provider, account.models[0].id, "medium",
+                                    false};
+            if (f.contains("providers")) {
+                account.providersError.clear();
+                account.providers = f["providers"].toArray().toVariantList();
+                account.login = f["login"].toObject().toVariantMap();
+            }
+            controller.settings()->apply(account);
+            controller.settings()->use(account.defaults);
+            QVector<Session> sessions;
+            for (auto s : f["sessions"].toArray()) {
+                auto row = s.toObject();
+                sessions.append({row["id"].toString(), row["title"].toString(),
+                                 row["folder"].toString(), QDateTime::currentMSecsSinceEpoch(),
+                                 QDateTime::currentMSecsSinceEpoch(), row["pinned"].toBool()});
+            }
+            controller.sessions()->apply(sessions);
+            run("composer.text = " +
+                QString::fromUtf8(QJsonDocument(QJsonArray{f["draft"].toString()})
+                                      .toJson(QJsonDocument::Compact)) +
+                "[0];");
+            if (f.contains("cards")) {
+                const auto json = QString::fromUtf8(
+                    QJsonDocument(f["cards"].toArray()).toJson(QJsonDocument::Compact));
+                run("{ const cards=" + json +
+                    "; for(let i=0;i<cards.length;i++) "
+                    "composerFiles.append({token:'fixture'+i,name:cards[i].name,size:cards[i].size,"
+                    "picture:false}); }");
+            }
+            if (f.contains("approval")) {
+                const auto json = QString::fromUtf8(
+                    QJsonDocument(f["approval"].toObject()).toJson(QJsonDocument::Compact));
+                run("approvalModel.append({requestId:'fixture', approval:{requestId:'fixture', "
+                    "card:" +
+                    json + ",answered:false},leaving:false});");
+                window->setProperty("approvalDetails", f["details"].toBool());
+            }
+            if (f.contains("diagram") && !diagram::render(f["diagram"].toString(), {}, {}).ok)
+                qFatal("Native diagram fixture did not compile: %s", qPrintable(id));
+            if (f.contains("native"))
+                run(f["native"].toString());
+            for (auto p : f["properties"].toArray()) {
+                const auto property = p.toObject();
+                auto *item = visual(window->contentItem(), property["object"].toString());
+                if (!item || !item->setProperty(qPrintable(property["name"].toString()),
+                                                property["value"].toVariant()))
+                    qFatal("Missing fixture property target: %s", qPrintable(id));
+            }
+            if (f["motion"].toBool()) {
+                run("Theme.reducedMotion=false;");
+                if (f["splash"].toBool())
+                    run("splashLoader.active=true;");
+            }
+            QTest::qWait(f["wait"].toInt(450));
+            run("transcript.follow = false; transcript.positionViewAtBeginning(); composer.focus = "
+                "false;");
+            if (f.contains("nativeAfter"))
+                run(f["nativeAfter"].toString());
+            for (auto p : f["propertiesAfter"].toArray()) {
+                const auto property = p.toObject();
+                auto *item = visual(window->contentItem(), property["object"].toString());
+                if (!item || !item->setProperty(qPrintable(property["name"].toString()),
+                                                property["value"].toVariant()))
+                    qFatal("Missing settled fixture property: %s", qPrintable(id));
+            }
+            if (f.contains("invoke")) {
+                auto action = f["invoke"].toObject();
+                auto *item = visual(window->contentItem(), action["object"].toString());
+                if (!item ||
+                    !QMetaObject::invokeMethod(item, qPrintable(action["method"].toString())))
+                    qFatal("Missing fixture action target: %s", qPrintable(id));
+            }
+            QTest::qWait(f["afterWait"].toInt(100));
+            if (dialog && dialog->property("visible").toBool()) {
+                const QStringList pages{"general", "providers", "usage", "appearance"};
+                auto *glide = visual(window->contentItem(), "settingsGlide");
+                const int index = pages.indexOf(dialog->property("page").toString());
+                if (!glide || index < 0 || qAbs(glide->y() - index * 38) > 0.01)
+                    qFatal("Settings fixture did not settle its actual navigation: %s",
+                           qPrintable(id));
+            }
+            const auto image = window->grabWindow();
+            if (image.isNull() || !image.save(output + "/" + id + (pass ? ".repeat.png" : ".png")))
+                qFatal("Could not capture %s", qPrintable(id));
+            QJsonObject geometry{
+                {"model", controller.settings()->model()},
+                {"levels", QJsonArray::fromStringList(controller.settings()->levels())},
+                {"effortPanel", effortPanel && effortPanel->property("visible").toBool()}};
+            if (id.startsWith("effort-") && controller.settings()->levels().size() != 4)
+                qFatal("Fixture catalog was lost while opening effort");
+            if (!id.startsWith("effort-") && effortPanel &&
+                effortPanel->property("visible").toBool())
+                qFatal("Previous fixture left its effort popup open");
+            for (const QString name : {"sidebar", "composerFrame", "transcript", "welcome"}) {
+                if (auto *item = visual(window->contentItem(), name)) {
+                    auto point = item->mapToScene(QPointF());
+                    geometry[name] =
+                        QJsonArray{point.x(), point.y(), item->width(), item->height()};
+                }
+            }
+            QFile meta(output + "/" + id + (pass ? ".repeat.json" : ".json"));
+            if (!meta.open(QIODevice::WriteOnly))
+                return 1;
+            meta.write(QJsonDocument(geometry).toJson());
+            qInfo().noquote() << "captured" << pass << id;
+        }
+    }
+    // The window outlives this function. Its last injected ledger must too.
+    if (usage) {
+        usage->setParent(&controller);
+        usage.release();
+    }
+    return engine.property("smokeWarnings").toBool() ? 1 : 0;
+}
