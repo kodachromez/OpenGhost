@@ -2,9 +2,9 @@
 
 #include "presentation.h"
 
-// The next run's model choice over OpenGhost's catalog. Explicit choices also request
-// saved defaults through the client; adopting session metadata never does.
-// OpenGhost's backend owns persistence. The selection never changes a running turn.
+// Presentation of the backend catalog and the frontend's model/effort preference.
+// Explicit choices go to ChatService; adopting canonical session metadata does
+// not emit a preference change. No transport or credential handling lives here.
 class Settings final : public QObject
 {
     Q_OBJECT
@@ -35,7 +35,7 @@ class Settings final : public QObject
 
     // OpenGhost's latest catalog, defaults and provider state.
     void apply(const Account &account);
-    // A conversation's or OpenGhost's default model: selected as given, thinking resolved.
+    // Canonical display selection, including empty/unadvertised thinking.
     void use(const Selection &selection);
     Selection selection() const;
 
@@ -89,7 +89,6 @@ class Settings final : public QObject
     QStringList m_providerIds; // Providers with an available model.
     Selection m_selected;      // Empty model: none chosen.
     QString m_provider;        // The provider whose models the menu lists.
-    QString m_carry;           // Thinking carried across a provider switch.
     QString m_notice;          // A local refusal, shown until the next change.
     bool m_invalid = false;
     bool m_used = false; // OpenGhost's defaults were adopted once.

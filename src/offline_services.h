@@ -1,5 +1,6 @@
 #pragma once
 
+#include "frontend/preferences.h"
 #include <QDate>
 #include <QImage>
 #include <QObject>
@@ -7,11 +8,11 @@
 #include <QVariantList>
 #include <QVariantMap>
 
-// Explicit absent services for the copied settings pages. These are not a
-// backend, do not read any existing stores, and never report an operation as saved.
+// Small QML settings projections. Instructions use the frontend preference
+// store; file preparation and the usage ledger remain explicitly absent.
 inline QString backendUnavailable()
 {
-    return QStringLiteral("Backend not connected — this build is a standalone UI shell.");
+    return QStringLiteral("This operation is not connected in the native frontend yet.");
 }
 
 class GeneralPreview final : public QObject
@@ -27,17 +28,31 @@ class GeneralPreview final : public QObject
     Q_PROPERTY(int pictures READ pictures CONSTANT)
     Q_PROPERTY(int maxPictures READ maxPictures CONSTANT)
   public:
-    using QObject::QObject;
-    bool available() const { return false; }
+    explicit GeneralPreview(openghost::PreferencesStore *store, QObject *parent = nullptr)
+        : QObject(parent), m_store(store)
+    {
+        connect(store, &openghost::PreferencesStore::changed, this,
+                &GeneralPreview::instructionsChanged);
+        connect(store, &openghost::PreferencesStore::saveFailed, this, &GeneralPreview::saveFailed);
+    }
+    bool available() const { return true; }
     bool adding() const { return false; }
-    QString instructions() const { return {}; }
-    void setInstructions(const QString &) { emit saveFailed(backendUnavailable()); }
+    QString instructions() const { return m_store->value().userContext.instructions; }
+    void setInstructions(const QString &text)
+    {
+        auto preferences = m_store->value();
+        preferences.userContext.instructions = text;
+        m_store->save(preferences);
+    }
     QVariantList files() const { return {}; }
     int maxInstructions() const { return 8000; }
     int maxFiles() const { return 20; }
     int pictures() const { return 0; }
     int maxPictures() const { return 0; }
-    Q_INVOKABLE QString add(const QList<QUrl> &) { return backendUnavailable(); }
+    Q_INVOKABLE QString add(const QList<QUrl> &)
+    {
+        return QStringLiteral("Pinned file preparation is not implemented yet.");
+    }
     Q_INVOKABLE void remove(const QString &) { emit saveFailed(backendUnavailable()); }
     Q_INVOKABLE QString tip(const QString &) const { return {}; }
     Q_INVOKABLE bool hasThumbnail(const QString &) const { return false; }
@@ -48,6 +63,9 @@ class GeneralPreview final : public QObject
     void thumbnailsChanged();
     void added(QString error);
     void saveFailed(QString error);
+
+  private:
+    openghost::PreferencesStore *m_store;
 };
 
 class UsagePreview final : public QObject

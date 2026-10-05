@@ -27,6 +27,15 @@ target_include_directories(native_rich PUBLIC src)
 target_link_libraries(native_rich PUBLIC Qt6::Gui)
 native_warnings(native_rich)
 
+# The semantic boundary and frontend state link ONLY QtCore. A future wire
+# adapter will implement Backend over ByteTransport, never inside the window.
+add_library(native_contract STATIC src/backend/types.h src/backend/backend.h
+    src/backend/transport.h src/backend/fake_backend.cpp
+    src/frontend/preferences.cpp src/frontend/chat_service.cpp)
+target_include_directories(native_contract PUBLIC src)
+target_link_libraries(native_contract PUBLIC Qt6::Core)
+native_warnings(native_contract)
+
 add_library(native_window STATIC src/model.cpp src/settings.cpp src/window.cpp src/motion.cpp
     src/appearance.cpp src/presentation.cpp src/offline_services.h src/platform/desktop.cpp)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -41,7 +50,7 @@ qt_add_qml_module(native_window URI OpenGhost.Native VERSION 1.0 NO_PLUGIN RESOU
         src/exposure.h src/exposure.cpp src/wave.h src/wave.cpp
         src/selection.h src/selection.cpp
         src/diagramview.h src/diagramview.cpp)
-target_link_libraries(native_window PUBLIC native_rich Qt6::Gui Qt6::Network
+target_link_libraries(native_window PUBLIC native_contract native_rich Qt6::Gui Qt6::Network
     Qt6::Quick Qt6::QuickControls2)
 native_warnings(native_window)
 qt_add_shaders(native_window "ui_shaders" PREFIX / FILES
@@ -74,8 +83,14 @@ if(OPENGHOST_BUILD_SMOKE_TEST)
     target_sources(openghost-native PRIVATE tests/smoke.cpp)
     target_link_libraries(openghost-native PRIVATE Qt6::Test)
     target_compile_definitions(openghost-native PRIVATE OPENGHOST_SMOKE_TEST)
+    add_executable(native_contract_test tests/contract.cpp src/settings.cpp)
+    target_link_libraries(native_contract_test PRIVATE native_contract Qt6::Test)
+    native_warnings(native_contract_test)
+    add_test(NAME native_contract_test COMMAND native_contract_test)
+    set_tests_properties(native_contract_test PROPERTIES TIMEOUT 15)
     add_test(NAME native_ui_smoke COMMAND openghost-native --smoke-test)
-    set_tests_properties(native_ui_smoke PROPERTIES TIMEOUT 30
+    add_test(NAME native_fake_ui_smoke COMMAND openghost-native --smoke-test --fake-backend)
+    set_tests_properties(native_ui_smoke native_fake_ui_smoke PROPERTIES TIMEOUT 30
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_QPA_PLATFORMTHEME=generic;QT_FORCE_STDERR_LOGGING=1;OPENGHOST_REDUCED_MOTION=0")
 endif()
 

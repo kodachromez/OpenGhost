@@ -15,26 +15,22 @@ void Settings::apply(const Account &account)
             m_providerIds << model.provider;
     }
     m_notice.clear();
-    // OpenGhost's defaults select the first model; later catalogs only re-resolve.
+    // Adopt a saved frontend preference once; later catalogs preserve canonical display state.
     if (!m_used && !account.defaults.model.isEmpty() && m_selected.model.isEmpty() && !m_invalid) {
         m_used = true;
         use(account.defaults);
         return;
     }
-    resolveThinking();
     emit changed();
 }
 
 void Settings::use(const Selection &selection)
 {
-    if (selection.provider.isEmpty() || selection.model.isEmpty())
-        return;
     m_used = true;
     m_selected = {selection.provider, selection.model, selection.thinking};
     m_provider = selection.provider;
     m_invalid = false;
-    m_carry.clear();
-    resolveThinking();
+    // Canonical session configuration may set/clear even unadvertised levels.
     emit changed();
 }
 
@@ -54,17 +50,15 @@ const ModelInfo *Settings::find(const QString &provider, const QString &id) cons
     return nullptr;
 }
 
-// The exact wanted level when advertised, else OpenGhost's saved default, else
-// medium, else the first level. Never a nearby level.
+// OpenGhost: supported user preference, then supported advertised default.
+// Never infer medium or the first level.
 QString Settings::resolve(const ModelInfo &model, const QString &wanted) const
 {
-    for (const auto &level : {wanted, m_account.defaults.thinking}) {
+    for (const auto &level : {wanted, model.defaultThinking}) {
         if (!level.isEmpty() && model.levels.contains(level))
             return level;
     }
-    if (model.levels.contains(QLatin1String("medium")))
-        return QStringLiteral("medium");
-    return model.levels.value(0);
+    return {};
 }
 
 // Keeps the selection on an advertised level once its model is known.
@@ -81,9 +75,6 @@ QString Settings::name(const QString &provider) const
         if (map.value("id").toString() == provider)
             return map.value("name").toString();
     }
-    // The backend's own provider is named before the provider list loads.
-    if (provider == QLatin1String("claude-code"))
-        return QStringLiteral("Claude Code");
     return provider;
 }
 
@@ -166,7 +157,7 @@ QString Settings::defaultsText() const
     const auto &saved = m_account.defaults;
     // The Settings Default row's hint (openghost/i18n.js settings.default.*).
     if (saved.model.isEmpty())
-        return QStringLiteral("No backend model defaults are connected.");
+        return QStringLiteral("No preferred model selected yet.");
     QStringList parts{name(saved.provider), saved.model};
     if (!saved.thinking.isEmpty())
         parts << saved.thinking;
@@ -183,9 +174,6 @@ void Settings::chooseProvider(const QString &provider)
         emit changed();
         return;
     }
-    // The thinking level carries over only where the chosen model has it.
-    if (!m_selected.thinking.isEmpty())
-        m_carry = m_selected.thinking;
     m_provider = provider;
     m_selected = {};
     m_invalid = true;
@@ -201,12 +189,10 @@ void Settings::choose(const QString &provider, const QString &id)
     const auto *model = find(provider, id);
     if (!model || !model->available)
         return;
-    // Re-picking the current selection changes nothing, so it saves nothing:
-    // an adopted chat's model becomes the default only through Save.
+    // Re-picking the current selection is not a new explicit preference.
     if (!m_invalid && model->provider == m_selected.provider && model->id == m_selected.model)
         return;
-    const QString wanted = m_selected.thinking.isEmpty() ? m_carry : m_selected.thinking;
-    m_carry.clear();
+    const QString wanted = m_account.defaults.thinking;
     m_provider = model->provider;
     m_selected = {model->provider, model->id, wanted};
     m_invalid = false;

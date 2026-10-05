@@ -9,8 +9,10 @@ stays; the source port's custom appearance and extra features do not.
 The standalone C++17/Qt 6.11/CMake executable builds and opens without any Rust
 backend, backend executable, workspace grant, credentials or Node installation.
 The copied QML window, sidebar, composer, settings, splash and native renderers
-are used directly. A small disconnected `WindowController` supplies their
-existing bindings; it is not an RPC client or a simulated agent.
+are used directly. The first extraction supplied disconnected bindings. The
+second step now supplies a **QtCore-only semantic backend boundary**, frontend
+state service, local preferences and an explicit `--fake-backend` fixture.
+Default launch remains disconnected; there is no Rust, process or RPC adapter.
 
 The clean fork was made on branch `cpp-native-extraction` at
 `/home/brian/openghost-native-qt`, because the supplied Rust-backend worktree and
@@ -97,22 +99,126 @@ Historical names remain only in source provenance and attribution records.
 - No Electron, Chromium, WebEngine, Node or React dependency in the native
   project. Qt QML's own JavaScript expressions are not Node or a browser.
 
-## Remaining presentation contracts
+## Native boundary and reference inventory (second step)
 
-The visible shell now follows the reference's four settings sections and 1.3
-appearance. Some **presentation interfaces**, not backend implementations, still
-reflect the source port:
+Source of truth: the frozen [backend contract](../reference/openghost/docs/backend-interface.md),
+`backend-client.js`, `backend-protocol.js`, `chat.js`, `settings.js`, `library.js`,
+`user-context.js`, `usage.js`, `desktop/preload.js`, and
+[browser lifecycle](../reference/openghost/docs/browser-host-tools.md). No source-port
+RPC, client, backend projection or process code was copied for this step.
 
-- `Entry`, `Attachment`, `Session`, `Selection`, `Account` and model roles; the
-  account prompt/provider-row fields and permission identifiers are not ABP DTOs.
-- Existing QML action names and acknowledgement/draft bookkeeping. These must be
-  mapped deliberately to the dissected frontend's ABP semantics, not assumed to
-  match because method names look similar.
-- Attachment count/preview assumptions, title limits, provider colors and fallback
-  names, plus the native renderer's pre-existing bounded-rendering limits.
+### Commands and reverse calls
 
-These contracts still need deliberate ABP integration; renaming retained code to
-OpenGhost does not make it a wire-compatible backend adapter.
+Every backend method used by that frontend has a semantic C++ request/reply in
+[`src/backend/types.h`](../src/backend/types.h). These are **not JSON serializers**.
+IDs are opaque strings; absent values remain optional (including canonical
+thinking's absent / null / string distinction). Tool arguments and schemas use
+JSON objects because their shapes are backend/host-defined, not because the UI
+speaks RPC.
+
+| Original method | Native contract | Fake / UI status |
+| --- | --- | --- |
+| `initialize`, `shutdown` | `Initialize`, `Initialized`, `Capabilities`, `BackendInfo`, `Shutdown` | Fake handshake/shutdown; fake startup selected only in `main.cpp` |
+| `models.list`, `auth.providers` | `ModelsList`, `ProvidersList`, `Model`, `Provider`, `ProviderStatus`, `AuthMethod` | Two explicitly fake models, one provider with no auth methods; existing picker/provider view |
+| `auth.setKey`, `auth.login`, `auth.cancel`, `auth.logout` | `SetKey`, `Login`, `CancelLogin`, `Logout` | Types only; fake refuses `unsupported`, no credentials accessed |
+| `account.limits` | `GetAccountLimits`, `AccountLimits`, `LimitWindow` | Types only; fake does not invent billing/limits |
+| `turn.start` | `StartTurn`, `SessionParams`, `Input`, `StartAccepted` | Text-only fake; asynchronous identity-checked acceptance, not completion |
+| `turn.cancel` | `CancelTurn` | Escape freezes locally immediately, then cancels known fake turn |
+| `turn.retry`, `turn.steer` | `RetryTurn` (no input), `SteerTurn`, separate acceptance types | Represented, not exercised by UI/fake; explicit unsupported, never automatic resend |
+| `session.get` | `GetSession`, `SessionRecovery`, `ExistingSession`, `RecoveredTurn` | In-process fake journal/revision read, missing never creates; UI opens its local cached chat and checks incarnation |
+| `session.configure` | `ConfigureSession`, `SessionConfigured` | Existing-chat model/effort changes and Ask/Auto/Full; failure retains previous selection, canonical reply applied |
+| `session.compact`, `session.delete` | `CompactSession`, `Compacted`, `DeleteSession` | Compact unsupported; fake deletion implemented/tested, UI deletion still disconnected |
+| reverse `approval.request` | `ApprovalRequest`, `ApprovalPresentation`, `ApprovalAnswer` | DTOs only; frontend currently answers unsupported rather than claiming consent |
+| reverse `host.tool` | `HostToolSchema`, `HostToolRequest`, `HostToolResult` | DTOs only, including text/image result blocks and tool-level error vs RPC error |
+| `host.browser.changed`, `$/cancelRequest` | `Backend::browserChanged`, `cancelRequest`, `reverseCancelled` | Semantic hooks only; no wire notification implementation |
+
+There is deliberately **no** backend `session.create`, list, import, rename,
+edit-message, save-settings/defaults, or generic context-update method. The
+reference's chat index, display annotations and preferences belong to the
+frontend. Creating a chat is a local draft; its first `turn.start` uses a null
+incarnation. Opening calls `session.get`, never reconstructs model input from
+rendered messages. Rename is a local annotation.
+
+### Events, streaming and identity
+
+`SessionEvent` has session/sequence identity and optional turn/message/client
+identities separate from its typed payload. The following reference events all
+have payload types:
+
+- `turn.started`, `turn.completed` (done/cancelled/error, finish reason, `Error`).
+- `message.started`, `message.delta`, `message.completed`, `reasoning.delta`.
+- `tool.started`, `tool.progress`, `tool.completed`, `approval.resolved`.
+- `compaction.started`, `compaction.completed`, `input.accepted`, `session.updated`.
+- `usage`: incremental input/cache-read/cache-write/output/request counts and
+  optional context used/window, not invented token estimates or billing totals.
+
+Global `auth.changed`, `models.changed`, `log` have a separate `GlobalEvent`
+variant; connection loss is `Backend::closed(Error)`. Auth/model notifications
+are invalidations requiring fresh reads, not ordered authoritative snapshots.
+
+The exercised text projection keeps message-start order, interleaved buffers,
+append deltas and first-final sealing; a final text replaces the entire buffer,
+including empty text. Duplicate/backwards sequences, unknown-message and
+conflicting-turn output are ignored. Turn terminal/Stop cannot reopen output.
+Retry's required state is inventoried but not yet exercised: never-dispatched
+input retains its full prepared payload and retries with start; uncertain dispatch
+requires `session.get` keyed by the original client turn; accepted terminal failure
+retries with an exact failed remote turn ID and a new client ID, without new input.
+No case may substitute cached attachment previews for the original payload.
+
+Reasoning and tool progress do not become transcript rows; tool start can pulse
+the existing working ghost, not a tool/subagent card. The fake intentionally
+emits `turn.started` before its acceptance reply to exercise that ordering.
+
+### Data and ownership
+
+| Data/state the original expects | Native representation / owner |
+| --- | --- |
+| Session incarnation, high-water sequence, accepted client/remote turn IDs, recovery display journal | Boundary types; in-memory `FakeBackend` sessions; frontend `ChatRecord` tracks its own display state |
+| Frontend chat identity/title/rename/timestamps/model/mode, active turn/message buffers, local drafts and annotations | `frontend/chat_service.*`, existing QML draft cache/list models; not backend history |
+| Full attachment input vs lossy cache previews | Separate `Attachment` and `DisplayAttachment`, `Input` and `DisplayInput`; no conversion of previews back into input |
+| Standing instructions and pinned payloads | `UserContext` / `ContextFile`; instructions saved locally and sent on starts, pinned-file preparation not yet implemented |
+| Preferred model, preferred effort, permission mode | `Preferences` / `PreferencesStore`, separate from canonical session configuration; implicit/default effort never saved as an explicit preference |
+| Backend model capabilities and availability | Exact provider/model pair, optional context/vision/default thinking and advertised levels; no guessed medium/first effort, no fallback for removed models |
+| Browser availability, lifecycle/control/open state, tab IDs/revisions, sign-in observations | `BrowserState` / `HostContext`; absent browser is null, observations are not verified auth |
+| Errors and permitted actions | Extensible named `Error` code/message/provider/action/retryable/status; no silent conversion of unknown outcome to not-started |
+| Usage windows, balances/credits, per-event counts | Boundary types; local ledger and accounting projection not yet implemented |
+| Appearance | Existing frontend-local Qt appearance store, unchanged |
+
+`Entry`, `Session`, `Selection`, `Account` and QML roles remain **display-only**
+values in `presentation.h`. `WindowController` translates semantic state into
+these values; the fake never includes or calls any rendering class.
+
+### Layering and execution
+
+```text
+QML -> WindowController -> ChatService / PreferencesStore
+                              | semantic commands/events
+                              v
+                           Backend <- FakeBackend (explicit injection)
+                              ^
+                       future ABP adapter (absent)
+                              |
+                       ByteTransport (interface only)
+```
+
+`native_contract` links **QtCore only**. `Backend` is an asynchronous,
+same-owner-thread interface with local request IDs and typed results/events.
+Calls do not reply inline; command cancellation is distinct from turn Stop.
+The byte transport interface is in `backend/transport.h`, with no process,
+network or platform implementation. The future adapter must implement JSONL,
+64-MiB bounds, exact string/integer RPC-ID matching, protocol validation,
+request deadlines (60 seconds / login 15 minutes / compact 10 minutes), reverse
+request lifetimes and connection replacement. None of this belongs in QML.
+
+The fake uses a Qt timer (or deterministic `advance()` in tests), no worker,
+subprocess, provider SDK, credentials, files or network. It checks create-only
+and versioned starts, deduplicates identical client IDs, rejects conflicting
+reuse and concurrent same-session starts, journals display events before
+emitting them, supports cancellation and keeps completed turns addressable.
+Its `sessions.recovery` capability describes **this process only**: neither fake
+acceptance nor the frontend display cache is durable across application exit.
+It is a development fixture, **not a conforming production ABP backend**.
 
 This is a buildable extraction, **not yet a complete functional or pixel-exact
 1.3 clone**. The inherited native port still lacks parts of the reference,
@@ -121,28 +227,63 @@ operations, and the visual diagram form editor. They have not been invented in
 this first pass. Existing text/antialiasing, shadow and drawing differences also
 remain; this task did not rerun the original full pixel-comparison suite.
 
-## What still depends on the old backend
+## Exercising the fake and remaining gaps
 
-**No backend is needed to build or launch.** The following UI paths are
-explicitly disconnected:
+```sh
+./build/openghost-native --fake-backend
+```
 
-- Catalog/auth/defaults; send/cancel/steer; session listing/history/rename/delete,
-  approvals and mode changes.
-- Attachment upload, stored-image retrieval and per-run usage/metrics.
+Choose Fake Echo or Fake Brief in the existing model picker (a fresh draft uses
+the first catalog model). Send through the existing composer; acceptance clears
+only its unchanged submitted draft. The assistant streams visibly. Escape stops
+it; there is still no Stop button. New Chat and sidebar Open keep separate
+in-memory conversations. Switch an idle chat's model, edit General instructions,
+and change the existing mode picker. Explicit model/effort/mode preferences and
+instructions survive restart in `preferences.json` alongside `appearance.json`
+under Qt's app-specific `AppConfigLocation`. No prior Electron/native profile is
+read or migrated. Writes use portable `QSaveFile`; invalid/unreadable files are
+not overwritten with defaults, and failed writes do not publish saved state.
 
-`src/window.*` returns no accepted submission, does not append chat messages,
-starts no subprocess, reads no credentials and sends no network requests.
-Unavailable operations cannot clear a draft or claim a saved result. The only
-working OS-facing helpers are native window behavior, text clipboard/selection,
-allowlisted user-clicked external links, and theme preferences.
+Without `--fake-backend`, no catalog, accepted input or conversation is fabricated.
+General/appearance preferences still work locally. Unimplemented file picking,
+auth, deletion and other operations refuse rather than simulate success.
 
-The original General/Usage local stores were also **not** brought over: they
-share the source port's POSIX/file-transfer helpers. Their QML is present, but General is
-read-only and Usage has no connected data. This does not mean these frontend
-preferences should become agent logic: their eventual ownership should match the
-[dissected frontend contract](../reference/openghost/docs/backend-interface.md).
-Appearance alone persists through Qt's app-specific path, separate from previous
-native and Electron profiles. No old profile migration is attempted.
+**Boundary vocabulary is not end-to-end implementation. Remaining flows:** production durable chat
+index/checkpoints and snapshot replay/live-race buffering; uncertain-start
+reconciliation and all three Retry cases; the 256-event early queue; steering
+and queued input during model switching; compaction; approval/reverse-call
+ownership and cancellation; provider mutations/catalog invalidation refresh;
+attachment preparation/previews; usage ledger, late/replayed accounting and
+context meter; detailed finish-reason/empty-response/error actions. The fake
+refuses retry, steer, compact, auth/limits and attachment/browser inputs. Its
+open path validates known cached identity and revision, not a general crash-recovery
+engine; uncertain chats remain display-only rather than being blessed by an idle
+snapshot.
+The UI currently disables Send while streaming rather than claiming steering.
+
+**Original frontend state/services not yet given complete native representations:**
+
+- Persisted library/folder/home-space layout and collapse/pin metadata, chat-lock
+  encryption/unlock state, legacy display-cache migration, stats/compact/moved
+  display entries, mini-chat lifecycle/clear/move state (only `SideContext` exists).
+- Persistent pending-input/retry-preparation checkpoints, reply-part accounting
+  tail and local usage ledger schema (event/limits DTOs exist, not those stores).
+- Concrete browser tool argument/result schemas beyond the generic schema/JSON
+  fields: navigate/snapshot/click/type/select/press/scroll/screenshot/read/wait/tabs,
+  page/ref/read identities, serialized execution/hand-back queue and downloads.
+  Browser state and generic host-tool envelopes are represented, not a browser engine.
+- Desktop host file/path/folder/PDF extraction and release APIs, pinned payload
+  storage, media/video-info embedding and browser event bridge. Native window,
+  clipboard, links and appearance remain the existing implementations.
+- Source-port provider prompt/selector presentation still needs replacing for
+  real auth. Attachment UI still has inherited 8-file/picture assumptions rather
+  than the reference's 20 prepared composer attachments. No file UI is enabled by
+  the fake; no new resource/attachment policy is implied.
+
+The original frontend's local display/cache contracts are not ABP history and
+must not become an invented backend API. These are follow-ups, not intended
+behavior redesigns. No real backend should be connected to this partial state
+service until durability, reconciliation and refusal semantics are completed.
 
 ## Platform boundaries and remaining Windows/macOS work
 
@@ -189,11 +330,32 @@ Windows/macOS and full visual/behavior parity were not tested. No Rust, Electron
 Node, provider login or live model tests were run. Commands are in the root
 [README](../README.md).
 
+## Second-step focused checks
+
+On Linux, Release CMake build plus only `native_contract_test`,
+`native_ui_smoke` (disconnected) and `native_fake_ui_smoke`:
+
+- Contract: async settlement, no disconnected acceptance, initial catalog choice,
+  identity/version/dedup refusal, ordered recovery journals, cancellation before
+  dispatch and during streaming, unsupported input with no session creation,
+  terminal sealing and message interleaving, concurrent chat isolation, open,
+  model-switch failure, malformed acceptance, canonical thinking, local settings
+  round-trip/oversize/corruption/write failure, and user-context forwarding.
+- Fake UI smoke: real QML submit and acknowledgement draft clearing, streamed
+  transcript, Escape Stop/frozen text, model switch, instructions/mode, New Chat,
+  sidebar history reopening and completion; plus existing rendering/settings
+  checks in both modes. Two dormant bindings exposed by populated provider/chat
+  rows were corrected (logout visibility and the busy ghost's existing accent).
+- Temporary preferences/appearance stores; no user profile, live credential,
+  model, Rust, Node or Electron tests. No Windows/macOS runtime qualification.
+- No QML load/binding warnings in either smoke. GCC 16 emitted
+  `-Wmaybe-uninitialized` diagnostics in Qt-generated metatype copying of the
+  nested `Result` variant; these were not suppressed. The Release build succeeded.
+
 ## Next smallest migration step
 
-Keep the copied UI/renderers fixed. Add a narrow **read-only ABP adapter** for
-`initialize`, `auth.providers` and `models.list`, tested against a local scripted
-peer using the dissected frontend's contract. Translate those answers into the
-existing settings presentation model, replacing its unavailable state. Do not
-copy the source port's RPC, add an agent, or enable sending until durable turn/session
-identity and acknowledgement handling have been migrated explicitly.
+Keep rendering fixed. Finish frontend-local checkpoint/recovery and retry/steer
+projection against a deterministic semantic peer, including events-before-ack,
+terminal-before-ack and replay/live races. A subsequent read-only ABP adapter can
+implement `Backend` over `ByteTransport`, with independent envelope/transport
+tests. No Rust or real backend has been connected in this step.

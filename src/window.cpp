@@ -52,22 +52,142 @@ void selectControlsStyle()
         QQuickStyle::setStyle(QStringLiteral("Fusion"));
 }
 
-WindowController::WindowController(QObject *parent) : QObject(parent)
+WindowController::WindowController(QObject *parent) : WindowController(nullptr, {}, parent) {}
+
+WindowController::WindowController(openghost::Backend *backend, QString preferencesPath,
+                                   QObject *parent)
+    : QObject(parent), m_preferences(std::move(preferencesPath)), m_chat(backend, &m_preferences),
+      m_general(&m_preferences)
 {
     registerNativeTypes();
+    connect(&m_chat, &openghost::ChatService::changed, this, &WindowController::sync);
+    connect(&m_chat, &openghost::ChatService::catalogChanged, this, &WindowController::catalog);
+    connect(&m_chat, &openghost::ChatService::accepted, this, &WindowController::accepted);
+    connect(&m_chat, &openghost::ChatService::answered, this, &WindowController::answered);
+    connect(&m_chat, &openghost::ChatService::worked, this, &WindowController::worked);
+    connect(&m_chat, &openghost::ChatService::replaced, this, [this](const QString &left) {
+        m_transcript.reset({});
+        m_rendered.clear();
+        sync();
+        emit conversationReplaced(left);
+    });
+    connect(&m_settings, &Settings::chosen, this, [this](const Selection &selection) {
+        const auto &old = m_chat.current().selection;
+        const bool effort = old.model == selection.model && old.provider == selection.provider;
+        m_chat.choose({selection.provider, selection.model,
+                       selection.thinking.isEmpty() ? std::nullopt
+                                                    : std::optional<QString>(selection.thinking)},
+                      effort);
+    });
+    connect(&m_preferences, &openghost::PreferencesStore::saveFailed, this,
+            [this](const QString &error) {
+                m_notice = error;
+                emit changed();
+            });
+    connect(&m_preferences, &openghost::PreferencesStore::changed, this,
+            &WindowController::catalog);
+    connect(&m_sessions, &SessionModel::queryChanged, this, &WindowController::sync);
+    m_notice = m_preferences.error();
+    catalog();
+    sync();
+    m_chat.initialize();
+}
+
+void WindowController::catalog()
+{
     Account account;
-    account.catalogError = account.providersError = backendUnavailable();
-    account.providersLoaded = true; // No discovery is pending; the error is terminal.
+    for (const auto &model : m_chat.models())
+        account.models.append({model.provider, model.id, model.name, model.thinkingLevels, true,
+                               model.vision.value_or(false),
+                               model.defaultThinking.value_or(QString())});
+    for (const auto &provider : m_chat.providers())
+        account.providers.append(QVariantMap{
+            {"id", provider.id},
+            {"name", provider.name},
+            {"hint", QStringLiteral("Development fixture only. No credentials or network.")},
+            {"connected", provider.status.connected},
+            {"logout", false},
+            {"oauth", false},
+            {"apiKey", false},
+            {"note", QString()},
+            {"error", false}});
+    account.providersLoaded = true;
+    if (account.models.isEmpty())
+        account.catalogError = account.providersError = m_chat.status();
+    const auto &prefs = m_preferences.value();
+    account.defaults = {prefs.model.provider, prefs.model.model,
+                        prefs.preferredThinking.value_or(QString())};
     m_settings.apply(account);
 }
 
-void WindowController::close() { emit closeRequested(); }
-
-void WindowController::newChat()
+void WindowController::sync()
 {
-    m_transcript.reset({});
-    emit conversationReplaced({});
+    const auto &chat = m_chat.current();
+    m_settings.use({chat.selection.provider, chat.selection.model,
+                    chat.selection.thinking.value_or(QString())});
+    QVector<Entry> rows;
+    QHash<QString, Entry> rendered;
+    for (const auto &row : chat.rows) {
+        Entry entry;
+        entry.kind = row.role == openghost::DisplayRow::Role::User        ? Entry::User
+                     : row.role == openghost::DisplayRow::Role::Assistant ? Entry::Assistant
+                                                                          : Entry::Note;
+        entry.key = row.key;
+        entry.text = row.text;
+        entry.state = row.state;
+        entry.copyable = entry.kind == Entry::Assistant && !row.text.isEmpty();
+        const auto previous = m_rendered.constFind(entry.key);
+        entry.revision =
+            previous == m_rendered.cend()
+                ? 1
+                : previous->revision +
+                      (previous->text != entry.text || previous->state != entry.state ||
+                       previous->kind != entry.kind || previous->copyable != entry.copyable);
+        rows.append(entry);
+        rendered.insert(entry.key, entry);
+    }
+    m_rendered = std::move(rendered);
+    m_transcript.apply(rows);
+    QVector<Session> sessions;
+    for (const auto &record : m_chat.chats())
+        if (m_sessions.query().isEmpty() ||
+            record.title.contains(m_sessions.query(), Qt::CaseInsensitive))
+            sessions.append({record.id, record.title, {}, record.updated, record.created});
+    m_sessions.apply(sessions);
+    emit changed();
 }
+
+QVariantMap WindowController::modes() const
+{
+    return {{"known", true},
+            {"permissions",
+             QStringList{QStringLiteral("ask"), QStringLiteral("auto"), QStringLiteral("full")}},
+            {"permission", openghost::modeName(m_chat.current().mode)}};
+}
+void WindowController::setPermissionMode(const QString &name)
+{
+    if (const auto mode = openghost::parseMode(name))
+        m_chat.setMode(*mode);
+}
+quint64 WindowController::send(const QString &text, const QVariantList &files)
+{
+    if (!files.isEmpty()) {
+        unavailable();
+        return 0;
+    }
+    m_notice.clear();
+    return m_chat.send(text);
+}
+void WindowController::copyEntry(const QString &key)
+{
+    for (const auto &row : m_chat.current().rows)
+        if (row.key == key) {
+            copy(row.text);
+            return;
+        }
+}
+void WindowController::close() { emit closeRequested(); }
+void WindowController::newChat() { m_chat.newChat(); }
 
 // These clipboard and selection helpers are retained from window.cpp.
 bool WindowController::pasteRefused() const

@@ -6,8 +6,8 @@ import QtQuick.Shapes
 import OpenGhost.Native
 
 // Settings → General (OpenGhost's settings-general.js): standing instructions
-// and files kept at hand for new chats. The disconnected preview is read-only;
-// storage and application to future chats require a separate integration.
+// and files kept at hand for chats. Instructions use the local preference store;
+// pinned file preparation remains unavailable.
 Column {
     id: page
     required property var store
@@ -118,7 +118,7 @@ Column {
     PageText {
         objectName: "generalLead"
         width: parent.width
-        text: "General settings are not connected yet. Nothing here is saved or sent."
+        text: "What OpenGhost keeps in mind in every chat."
         size: 13.5
         line: 20
         color: Theme.secondary

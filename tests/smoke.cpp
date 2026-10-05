@@ -24,7 +24,7 @@ QQuickItem *findVisual(QQuickItem *item, const QString &name)
 }
 } // namespace
 
-// One bounded, offline integration check of the copied UI, not a fake agent.
+// Bounded offline rendering and optional fake-backend integration check.
 int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
 {
     int failures = 0;
@@ -61,9 +61,12 @@ int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
           "transcript exposes only retained message roles");
 
     QSignalSpy accepted(&controller, &WindowController::accepted);
-    check(!controller.property("ready").toBool(), "backend is unavailable");
-    check(controller.send(QStringLiteral("Never send this")) == 0 && accepted.isEmpty(),
-          "disconnected send is refused, not fabricated");
+    const bool fake = QCoreApplication::arguments().contains(QStringLiteral("--fake-backend"));
+    if (!fake) {
+        check(!controller.property("ready").toBool(), "backend is unavailable");
+        check(controller.send(QStringLiteral("Never send this")) == 0 && accepted.isEmpty(),
+              "disconnected send is refused, not fabricated");
+    }
     check(controller.transcript()->rowCount() == 0 && controller.sessions()->rowCount() == 0,
           "no fabricated conversation");
     check(!controller.pick({QUrl::fromLocalFile(QStringLiteral("/does-not-exist"))}, 8).isEmpty(),
@@ -73,6 +76,63 @@ int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
     QTest::qWait(5000);
     check(!window->grabWindow().isNull(), "window paints");
     check(window->contentItem()->opacity() > 0.99, "1.3 splash reveals the app");
+
+    if (fake) {
+        check(controller.ready(), "fake handshake and catalog available");
+        check(controller.settings()->choices().size() == 2, "fake models reach existing picker");
+        controller.settings()->choose(QStringLiteral("fake"), QStringLiteral("echo"));
+        auto *composer = findVisual(window->contentItem(), QStringLiteral("composer"));
+        check(composer, "real composer found");
+        if (composer) {
+            composer->setProperty("text", QStringLiteral("A native fake conversation"));
+            check(QMetaObject::invokeMethod(window, "submit"), "real submit path invoked");
+            check(!composer->property("text").toString().isEmpty(),
+                  "draft not cleared synchronously");
+            check(QTest::qWaitFor([&] { return accepted.count() == 1; }, 1000),
+                  "backend accepts once");
+            check(composer->property("text").toString().isEmpty(),
+                  "validated acceptance clears draft");
+            check(QTest::qWaitFor([&] { return controller.transcript()->rowCount() == 2; }, 1000),
+                  "stream starts assistant row");
+            const QString first = controller.session();
+            check(!first.isEmpty() && controller.sessions()->rowCount() == 1,
+                  "first send creates sidebar chat");
+            composer->forceActiveFocus();
+            QTest::keyClick(window, Qt::Key_Escape);
+            check(!controller.busy(), "Escape freezes output immediately; no Stop button");
+            const auto before = controller.transcript()->data(controller.transcript()->index(1),
+                                                              TranscriptModel::BodyRole);
+            QTest::qWait(150);
+            check(controller.transcript()->data(controller.transcript()->index(1),
+                                                TranscriptModel::BodyRole) == before,
+                  "stopped output never resumes");
+            controller.settings()->choose(QStringLiteral("fake"), QStringLiteral("brief"));
+            check(QTest::qWaitFor([&] { return !controller.admitting(); }, 1000),
+                  "model configure settles");
+            check(controller.settings()->model() == QStringLiteral("brief"),
+                  "canonical model reaches picker");
+            controller.general()->setInstructions(
+                QStringLiteral("Remember this local preference."));
+            controller.setPermissionMode(QStringLiteral("auto"));
+            check(QTest::qWaitFor([&] { return !controller.admitting(); }, 1000), "mode saves");
+            controller.newChat();
+            check(controller.session().isEmpty() && controller.transcript()->rowCount() == 0,
+                  "new chat is local draft");
+            composer->setProperty("text", QStringLiteral("Second chat"));
+            QMetaObject::invokeMethod(window, "submit");
+            check(QTest::qWaitFor([&] { return accepted.count() == 2; }, 1000),
+                  "second chat accepted");
+            check(QTest::qWaitFor([&] { return !controller.busy(); }, 3000),
+                  "fake streams through completion");
+            check(controller.sessions()->rowCount() == 2, "two chats in sidebar");
+            controller.open(first);
+            check(QTest::qWaitFor([&] { return !controller.admitting(); }, 1000),
+                  "opening reconciles fake session");
+            check(controller.session() == first && controller.transcript()->rowCount() == 2,
+                  "open restores prior display");
+            controller.newChat();
+        }
+    }
 
     const QString message = QStringLiteral(
         "# Native rendering\n\n**Markdown** and $x^2$.\n\n"
@@ -143,6 +203,6 @@ int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
     window->close();
     check(closing.count() == 1, "native close reaches the application");
     if (!failures)
-        qInfo() << "PASS: standalone OpenGhost 1.3 UI smoke";
+        qInfo() << "PASS: OpenGhost 1.3 UI smoke" << (fake ? "with fake backend" : "disconnected");
     return failures ? 1 : 0;
 }

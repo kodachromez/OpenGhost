@@ -1871,7 +1871,7 @@ Pane {
                         opacity: Math.min(1, busy.presence)
                         running: busy.visible
                         reducedMotion: Theme.reducedMotion
-                        color: Theme.ghostColor
+                        color: Theme.accent
                         eyeColor: Theme.appBg
                     }
                 }

@@ -63,16 +63,17 @@ struct ModelInfo {
     QStringList levels;
     bool available = false;
     bool imageInput = false;
+    QString defaultThinking; // Only used when advertised among levels.
 };
 
-// Settings and provider presentation. OpenGhost's backend owns credentials,
-// the catalog and saved defaults; this holds only its latest answers. A login
+// Settings and provider presentation. The backend owns credentials/catalog;
+// model/effort preferences belong to the frontend, not a defaults RPC. A login
 // answer is never held here.
 struct Account {
     QVector<ModelInfo> models;
     QString catalogError;
-    Selection defaults; // OpenGhost's effective defaults; empty fields when unset.
-    // Rows for the provider page: id, name, hint, connected, disconnectable,
+    Selection defaults; // Frontend model/effort preference; empty fields when unset.
+    // Rows for the provider page: id, name, hint, connected, logout,
     // oauth, apiKey, note, error.
     QVariantList providers;
     bool providersLoaded = false;

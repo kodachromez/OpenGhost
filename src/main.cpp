@@ -1,6 +1,8 @@
 #include "appearance.h"
+#include "backend/fake_backend.h"
 #include "platform/platform.h"
 #include "window.h"
+#include <memory>
 
 #include <QCommandLineParser>
 #include <QGuiApplication>
@@ -19,13 +21,16 @@ int main(int argc, char *argv[])
     QGuiApplication app(argc, argv);
     platform::afterApplication();
     app.setApplicationName(QStringLiteral("openghost-native"));
-    app.setApplicationDisplayName(QStringLiteral("OpenGhost Native (UI shell)"));
+    app.setApplicationDisplayName(QStringLiteral("OpenGhost Native"));
     app.setApplicationVersion(QStringLiteral("0.1"));
     app.setWindowIcon(QIcon(QStringLiteral(":/openghost.png")));
     app.setQuitOnLastWindowClosed(false);
     QCommandLineParser parser;
     parser.setApplicationDescription(
-        QStringLiteral("Standalone native frontend; no backend connected."));
+        QStringLiteral("Standalone native frontend. No Rust backend or transport."));
+    parser.addOption(
+        {QStringLiteral("fake-backend"),
+         QStringLiteral("Use the in-memory fake backend (no model, tools or credentials).")});
     parser.addHelpOption();
     parser.addVersionOption();
 #ifdef OPENGHOST_SMOKE_TEST
@@ -35,18 +40,26 @@ int main(int argc, char *argv[])
     parser.process(app);
     selectControlsStyle();
     QString appearancePath;
+    QString preferencesPath;
 #ifdef OPENGHOST_SMOKE_TEST
     QTemporaryDir testSettings;
     if (parser.isSet(QStringLiteral("smoke-test"))) {
         if (!testSettings.isValid())
             return 1;
         appearancePath = testSettings.path() + QStringLiteral("/appearance.json");
+        preferencesPath = testSettings.path() + QStringLiteral("/preferences.json");
     } else
 #endif
-        appearancePath = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation) +
-                         QStringLiteral("/appearance.json");
+    {
+        const QString config = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
+        appearancePath = config + QStringLiteral("/appearance.json");
+        preferencesPath = config + QStringLiteral("/preferences.json");
+    }
     keepAppearance(appearancePath);
-    WindowController controller;
+    std::unique_ptr<openghost::Backend> backend;
+    if (parser.isSet(QStringLiteral("fake-backend")))
+        backend = std::make_unique<openghost::FakeBackend>();
+    WindowController controller(backend.get(), preferencesPath);
     QObject::connect(&controller, &WindowController::closeRequested, &app, &QCoreApplication::quit);
     QQmlApplicationEngine engine;
 #ifdef OPENGHOST_SMOKE_TEST

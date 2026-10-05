@@ -5,9 +5,11 @@ frontend**. It reuses the existing native Qt implementation without the source
 port's custom appearance or extra features; this is not a UI rewrite.
 See [NOTICE.md](NOTICE.md) for attribution.
 
-This first pass launches independently, with **no backend connected**. It does
-not start a process, authenticate, send messages, or fabricate responses.
-Appearance settings work; backend-dependent controls refuse or remain disabled.
+Default launch is **disconnected**. Use `--fake-backend` to exercise chats,
+streaming, Escape Stop and model switching against an explicitly labelled,
+in-memory C++ fixture. It runs no model, tools, credentials, network or process.
+General instructions, model/effort/mode preferences and appearance save locally.
+There is no Rust/backend transport integration yet.
 
 ## Build and launch
 
@@ -19,7 +21,8 @@ No Cargo, Node, Electron, Chromium, WebEngine or React is used by the native bui
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel 4
-./build/openghost-native
+./build/openghost-native                 # disconnected
+./build/openghost-native --fake-backend  # explicit in-memory demo
 ```
 
 On multi-configuration generators use `--config Release`; on macOS the target
@@ -27,20 +30,25 @@ is an app bundle. Windows/macOS build wiring exists but is not yet qualified.
 Qt must be discoverable through its normal CMake prefix/toolchain configuration.
 
 ```sh
-# One small, offline launch/settings/renderer smoke check (~6 seconds).
+# Focused contract tests plus disconnected/fake UI smoke checks.
 cmake -S . -B build -DOPENGHOST_BUILD_SMOKE_TEST=ON
 cmake --build build --parallel 4
-ctest --test-dir build --output-on-failure
+ctest --test-dir build -R '^(native_contract_test|native_ui_smoke|native_fake_ui_smoke)$' --output-on-failure
 ```
 
-The smoke check uses a temporary appearance store. The normal app keeps only
-`appearance.json` under Qt's `AppConfigLocation` for `openghost-native`; it does
-not read credentials, conversations or preferences from any previous profile.
+Smoke checks isolate appearance and preferences in temporary directories. The
+normal app keeps `appearance.json` and `preferences.json` under Qt's
+`AppConfigLocation` for `openghost-native`; it reads no previous profile. Fake
+chats disappear on exit. Unimplemented capabilities explicitly refuse; the fake
+is not a durable or production-conforming backend.
 
 ## Layout
 
 - `qml/`, `src/`, `shaders/`, `resources/`: copied native presentation and its
-  small standalone/disconnected integration layer.
+  small presentation adapter.
+- `src/backend/`: typed semantic contract, explicit fake, and transport interface
+  (no wire/process implementation).
+- `src/frontend/`: frontend-owned chat state and portable local preferences.
 - `src/platform/`: OS integration, selected by CMake.
 - [`reference/openghost/`](reference/openghost/): the **unchanged dissected 1.3
   frontend**, retained for visual/behavior comparison only. Its Electron/JS
