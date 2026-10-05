@@ -95,7 +95,7 @@ foreach(name Main ChatEntry LiveText Sidebar SettingsDialog Markdown Block Inlin
     list(APPEND qml_files qml/${name}.qml)
 endforeach()
 if(OPENGHOST_BROWSER)
-    foreach(name BrowserPanel BrowserGuest)
+    foreach(name BrowserPanel BrowserGuest BrowserPopup)
         set_source_files_properties(qml/${name}.qml PROPERTIES QT_RESOURCE_ALIAS ${name}.qml)
         list(APPEND qml_files qml/${name}.qml)
     endforeach()

@@ -3,6 +3,7 @@
 #include "frontend/browser.h"
 #include "frontend/browser_tools.h"
 #include <QGuiApplication>
+#include <QPointer>
 #include <QQmlComponent>
 #include <QQmlEngine>
 #include <QQuickWindow>
@@ -10,6 +11,7 @@
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTemporaryDir>
+#include <QTimer>
 #include <QWheelEvent>
 #include <QtTest>
 #include <QtWebEngineQuick/qtwebenginequickglobal.h>
@@ -60,6 +62,12 @@ class BrowserAutomationTest : public QObject
         }
         return spy.first().first();
     }
+    static QString json(const QString &value)
+    {
+        return QString::fromUtf8(QJsonDocument(QJsonArray{value}).toJson(QJsonDocument::Compact))
+            .mid(1)
+            .chopped(1);
+    }
     QString page(const QString &html, const QString &name = "page.html")
     {
         QFile file(files.filePath(name));
@@ -68,6 +76,26 @@ class BrowserAutomationTest : public QObject
         file.write(html.toUtf8());
         file.close();
         return QUrl::fromLocalFile(file.fileName()).toString();
+    }
+    // Loopback HTTP: path -> {headers, body}. Unknown paths are 404.
+    void serve(QTcpServer &server, QHash<QByteArray, QPair<QByteArray, QByteArray>> routes)
+    {
+        QVERIFY(server.listen(QHostAddress::LocalHost));
+        connect(&server, &QTcpServer::newConnection, &server, [&server, routes] {
+            while (auto *socket = server.nextPendingConnection()) {
+                connect(socket, &QTcpSocket::readyRead, &server, [socket, routes] {
+                    const auto line = socket->readAll().split('\n').first().split(' ');
+                    const auto path = line.value(1).split('?').first();
+                    const auto route = routes.value(path, {"Content-Type: text/plain", ""});
+                    socket->write((routes.contains(path) ? "HTTP/1.1 200 OK\r\n"
+                                                         : "HTTP/1.1 404 Not Found\r\n") +
+                                  route.first +
+                                  "\r\nContent-Length: " + QByteArray::number(route.second.size()) +
+                                  "\r\nConnection: close\r\n\r\n" + route.second);
+                    socket->disconnectFromHost();
+                });
+            }
+        });
     }
     void open(const QString &html)
     {
@@ -111,7 +139,8 @@ class BrowserAutomationTest : public QObject
     void init()
     {
         results.clear();
-        browser = std::make_unique<Browser>();
+        browser =
+            std::make_unique<Browser>(QString(), QString(), nullptr, files.filePath("downloads"));
         browser->setAutomation(std::make_unique<QtBrowserAutomation>());
         browser->setOpen(true);
         connect(browser.get(), &Browser::finished, this,
@@ -375,7 +404,7 @@ class BrowserAutomationTest : public QObject
         QCOMPARE(read.data->value("end").toInt(), 40000);
         QVERIFY(text(read).contains("Source HTML truncated at 4 Mi UTF-16 code units."));
     }
-    void viewportPixelsFullCaptureRefusalAndRefScroll()
+    void viewportPixelsAndRefScroll()
     {
         open("<title>Pixels</title><body style='margin:0;background:rgb(10,200,30)'><div "
              "style='height:2400px'></div><button>Bottom</button>"
@@ -395,8 +424,7 @@ class BrowserAutomationTest : public QObject
         const auto color = pixels.pixelColor(100, 100);
         QVERIFY2(std::abs(color.green() - 200) < 6, qPrintable(color.name()));
         QVERIFY(!shot.data->value("truncated").toBool());
-        QCOMPARE(code(run("browser_screenshot", {{"full_page", true}})), "unavailable");
-        QCOMPARE(js("scrollY").toInt(), 0); // no stitch/resize substitute
+        QCOMPARE(js("scrollY").toInt(), 0);
         const auto full = run("browser_snapshot", {{"full", true}});
         const auto refs = full.data->value("refs").toObject();
         QVERIFY(!refs.isEmpty());
@@ -413,6 +441,277 @@ class BrowserAutomationTest : public QObject
         QCOMPARE(code(run("browser_scroll",
                           {{"pageId", revealed.data->value("pageId")}, {"ref", 999999}})),
                  "stale_ref");
+    }
+    // Three 1000 px bands; the test window's viewport is 1400×600.
+    QString bands()
+    {
+        return "<title>Tall</title><body style='margin:0'>"
+               "<div style='height:1000px;background:rgb(10,200,30)'></div>"
+               "<div style='height:1000px;background:rgb(20,40,220)'></div>"
+               "<div style='height:1000px;background:rgb(220,30,30)'></div>"
+               "<script>window.events=[];addEventListener('resize',()=>events.push('resize'));"
+               "</script>";
+    }
+    QQuickItem *guest() const
+    {
+        return qobject_cast<QQuickItem *>(window->property("activeGuest").value<QObject *>());
+    }
+    QObject *cover() const
+    {
+        return guest() ? guest()->property("captureCover").value<QObject *>() : nullptr;
+    }
+    static bool near(QColor color, int r, int g, int b)
+    {
+        return std::abs(color.red() - r) < 24 && std::abs(color.green() - g) < 24 &&
+               std::abs(color.blue() - b) < 24;
+    }
+    void fullPageFromTheTopWithoutDisturbingThePanel()
+    {
+        open(bands());
+        js("scrollTo(0,1500)");
+        QTRY_COMPARE(js("scrollY").toInt(), 1500);
+        QTest::qWait(100);
+        // Sample what the window shows while the guest is stretched.
+        QImage during;
+        QTimer watch;
+        connect(&watch, &QTimer::timeout, this, [&] {
+            if (during.isNull() && guest() && guest()->height() > window->height() + 1) {
+                QVERIFY(cover());
+                during = window->grabWindow();
+            }
+        });
+        watch.start(5);
+        auto shot = run("browser_screenshot", {{"full_page", true}});
+        watch.stop();
+        QVERIFY2(!shot.isError, qPrintable(text(shot)));
+        QVERIFY(text(shot).contains("Screenshot of the page from the top: Tall, 1280×2194;"));
+        QCOMPARE(shot.data->value("pageWidth").toInt(), 1400);
+        QCOMPARE(shot.data->value("pageHeight").toInt(), 2400); // four viewports
+        QCOMPARE(shot.data->value("height").toInt(), 2194);
+        QVERIFY(shot.data->value("truncated").toBool()); // 3000 px of content
+        QVERIFY(std::abs(shot.data->value("scale").toDouble() - 1280.0 / 1400) < 1e-9);
+        const auto image = std::get<HostToolResult::Image>(shot.content[1]);
+        const auto pixels = QImage::fromData(
+            QByteArray::fromBase64(image.dataUrl.section(',', 1).toLatin1()), "JPEG");
+        QCOMPARE(pixels.size(), QSize(1280, 2194));
+        const double scale = 1280.0 / 1400;
+        QVERIFY2(near(pixels.pixelColor(100, int(300 * scale)), 10, 200, 30),
+                 qPrintable(pixels.pixelColor(100, int(300 * scale)).name()));
+        QVERIFY(near(pixels.pixelColor(100, int(1500 * scale)), 20, 40, 220));
+        QVERIFY(near(pixels.pixelColor(100, int(2300 * scale)), 220, 30, 30));
+        // The visible panel kept the scrolled page (blue) while the guest drew
+        // from the top (green) at the capture size.
+        QVERIFY2(!during.isNull(), "the guest was never stretched");
+        const auto shown = during.pixelColor(during.width() / 2, during.height() / 2);
+        QVERIFY2(near(shown, 20, 40, 220), qPrintable(shown.name()));
+        // Every temporary page and view change is undone before the result.
+        QCOMPARE(guest()->height(), window->height());
+        QCOMPARE(js("innerHeight").toInt(), 600);
+        QCOMPARE(js("scrollY").toInt(), 1500);
+        QTRY_VERIFY(!cover());
+        // Viewport capture still starts at the scroll position.
+        auto viewport = run("browser_screenshot");
+        QVERIFY(!viewport.data->value("truncated").toBool());
+        QCOMPARE(viewport.data->value("pageHeight").toInt(), 600);
+        QCOMPARE(js("scrollY").toInt(), 1500);
+    }
+    void coveredGuestCapturesOnlyItsOwnPixels()
+    {
+        open(bands());
+        window->setProperty("covered", true);
+        for (const bool full : {false, true}) {
+            auto shot = run("browser_screenshot", {{"full_page", full}});
+            QVERIFY2(!shot.isError, qPrintable(text(shot)));
+            const auto image = std::get<HostToolResult::Image>(shot.content[1]);
+            const auto pixels = QImage::fromData(
+                QByteArray::fromBase64(image.dataUrl.section(',', 1).toLatin1()), "JPEG");
+            QVERIFY(near(pixels.pixelColor(100, 100), 10, 200, 30));
+            if (full)
+                QVERIFY(near(pixels.pixelColor(100, pixels.height() - 20), 220, 30, 30));
+        }
+        window->setProperty("covered", false);
+        QTRY_VERIFY(!cover());
+    }
+    void fullPageCancellationPageChangeAndRendererLossRestore()
+    {
+        const auto stretched = [&] {
+            return QTest::qWaitFor(
+                [&] { return guest() && guest()->height() > window->height() + 1; }, 5000);
+        };
+        open(bands());
+        js("scrollTo(0,700)");
+        QTRY_COMPARE(js("scrollY").toInt(), 700);
+        const auto cancelled = start("browser_screenshot", {{"full_page", true}});
+        QVERIFY(stretched());
+        QVERIFY(cover());
+        browser->cancel(cancelled);
+        QTRY_COMPARE(guest()->height(), window->height());
+        QTRY_VERIFY(!cover());
+        QTRY_COMPARE(js("scrollY").toInt(), 700);
+        QTest::qWait(200);
+        QVERIFY(!results.contains(cancelled)); // no late image after cancellation
+        // Cancelled as soon as the panel is covered, before the guest changes.
+        const auto early = start("browser_screenshot", {{"full_page", true}});
+        QVERIFY(QTest::qWaitFor([&] { return cover(); }, 5000));
+        browser->cancel(early);
+        QTRY_VERIFY(!cover());
+        QTRY_COMPARE(js("scrollY").toInt(), 700);
+        QCOMPARE(guest()->height(), window->height());
+        QTest::qWait(200);
+        QVERIFY(!results.contains(early));
+        // A page replaced mid-capture fails; its own scroll position is kept.
+        const auto replaced = start("browser_screenshot", {{"full_page", true}});
+        QVERIFY(stretched());
+        js("location.href=" + json(page(bands(), "other.html")));
+        QVERIFY(QTest::qWaitFor([&] { return results.contains(replaced); }, 10000));
+        QCOMPARE(code(results[replaced]), "stale_page");
+        QTRY_COMPARE(guest()->height(), window->height());
+        QTRY_VERIFY(!cover());
+        QTRY_COMPARE(js("location.pathname.endsWith('other.html')").toBool(), true);
+        QCOMPARE(js("scrollY").toInt(), 0);
+        // Renderer loss mid-capture settles once and leaves no cover behind.
+        js("scrollTo(0,900)");
+        const auto lost = start("browser_screenshot", {{"full_page", true}});
+        QVERIFY2(stretched(), qPrintable(results.contains(lost) ? text(results[lost]) : ""));
+        QVERIFY(cover());
+        QCOMPARE(::kill(pid_t(guest()->property("renderProcessPid").toLongLong()), SIGKILL), 0);
+        QVERIFY(QTest::qWaitFor([&] { return results.contains(lost); }, 10000));
+        QVERIFY2(QStringList({"guest_crashed", "tab_gone"}).contains(code(results[lost])),
+                 qPrintable(code(results[lost])));
+        QTRY_VERIFY(!cover());
+        auto recovered = run("browser_screenshot", {{"full_page", true}});
+        QVERIFY2(!recovered.isError, qPrintable(text(recovered)));
+        QTRY_VERIFY(!cover());
+        QCOMPARE(guest()->height(), window->height());
+    }
+    void downloadsSavedUniquelyAndAttributedToTheirStep()
+    {
+        QTcpServer server;
+        serve(server, {{"/",
+                        {"Content-Type: text/html",
+                         "<title>Files</title><a id=d href='/notes.txt' download>notes</a>"}},
+                       {"/notes.txt",
+                        {"Content-Type: text/plain\r\nContent-Disposition: attachment; "
+                         "filename=notes.txt",
+                         "downloaded bytes"}}});
+        const auto root = QString("http://127.0.0.1:%1/").arg(server.serverPort());
+        QVERIFY(!run("browser_navigate", {{"url", root}}).isError);
+        QSignalSpy toasts(browser.get(), &Browser::downloaded);
+        const QDir saved(files.filePath("downloads"));
+        // Started while browser_wait runs on this guest: that step's download.
+        const auto waiting = start("browser_wait", {{"seconds", 2.5}});
+        QTest::qWait(300);
+        js("document.getElementById('d').click()");
+        QVERIFY(QTest::qWaitFor([&] { return results.contains(waiting); }, 10000));
+        const auto waited = results.take(waiting);
+        QVERIFY2(!waited.isError, qPrintable(text(waited)));
+        const auto listed = waited.data->value("downloads").toArray();
+        QCOMPARE(listed.size(), 1);
+        const auto file = saved.absoluteFilePath("notes.txt");
+        QCOMPARE(listed[0].toObject()["file"].toString(), file);
+        QVERIFY(!listed[0].toObject()["operationId"].toString().isEmpty());
+        QVERIFY(text(waited).contains("\nDownloaded: " + file + "\n"));
+        QFile bytes(file);
+        QVERIFY(bytes.open(QIODevice::ReadOnly));
+        QCOMPARE(bytes.readAll(), QByteArray("downloaded bytes"));
+        QTRY_COMPARE(toasts.size(), 1);
+        QCOMPARE(toasts.first().first().toString(), QString("notes.txt"));
+        // Outside a step: saved beside the first without replacing it, and
+        // never claimed by a later step.
+        js("document.getElementById('d').click()");
+        QTRY_COMPARE(toasts.size(), 2);
+        QCOMPARE(toasts.last().first().toString(), QString("notes (1).txt"));
+        QVERIFY(QFileInfo::exists(saved.absoluteFilePath("notes (1).txt")));
+        auto later = run("browser_snapshot");
+        QCOMPARE(later.data->value("downloads").toArray().size(), 0);
+        QVERIFY(!text(later).contains("Downloaded:"));
+    }
+    void pageMenuPopupsAndGuestOpenedTabs()
+    {
+        const auto target = page("<title>Target</title><h1>Target</h1>", "target.html");
+        open("<title>Opener</title><a id=l href='" + target +
+             "' style='position:absolute;left:0;top:0;width:200px;height:40px'>Target link</a>");
+        const auto opener = browser->activeHandle();
+        // A right click on the link opens the reference's page menu.
+        QTest::mouseClick(window, Qt::RightButton, {}, QPoint(30, 20));
+        auto *menu = guest()->findChild<QObject *>("browserPageMenu");
+        QVERIFY(menu);
+        QTRY_VERIFY(menu->property("opened").toBool());
+        QStringList labels;
+        for (int k = 0; k < menu->property("count").toInt(); ++k) {
+            QQuickItem *item = nullptr;
+            QMetaObject::invokeMethod(menu, "itemAt", Q_RETURN_ARG(QQuickItem *, item),
+                                      Q_ARG(int, k));
+            labels << (item ? item->property("text").toString() : QString());
+        }
+        QCOMPARE(labels, QStringList({"Open link in new tab", "Copy link address", "", "Back",
+                                      "Forward", "Reload", "", "Inspect"}));
+        QMetaObject::invokeMethod(menu, "close");
+        QMetaObject::invokeMethod(guest(), "pageAction", Q_ARG(QVariant, "openLink"));
+        QCOMPARE(browser->tabList().size(), 2);
+        QCOMPARE(browser->tabList().at(1).url, target);
+        QCOMPARE(browser->activeHandle(), browser->tabList().at(1).handle);
+        browser->select(opener);
+        QTRY_COMPARE(window->property("activeGuest").value<QObject *>(),
+                     static_cast<QObject *>(guest()));
+        // window.open without features: a panel tab; a script URL: refused.
+        js("window.open(" + json(target + "?tab") + ",'_blank')");
+        QTRY_COMPARE(browser->tabList().size(), 3);
+        QCOMPARE(browser->tabList().at(1).url, target + "?tab");
+        browser->select(opener);
+        js("window.open('javascript:1','_blank')");
+        QTest::qWait(300);
+        QCOMPARE(browser->tabList().size(), 3);
+        // A popup with window features: its own 520×700 window, not a tab.
+        const auto before = QGuiApplication::topLevelWindows().size();
+        js("window.open(" + json(target + "?popup") + ",'p','width=300,height=200')");
+        QQuickWindow *popup = nullptr;
+        QVERIFY(QTest::qWaitFor([&] {
+            for (auto *top : QGuiApplication::topLevelWindows())
+                if (top->objectName() == "browserPopup")
+                    popup = qobject_cast<QQuickWindow *>(top);
+            return popup;
+        }));
+        QCOMPARE(QGuiApplication::topLevelWindows().size(), before + 1);
+        QCOMPARE(popup->size(), QSize(520, 700));
+        auto *popupView = popup->property("view").value<QObject *>();
+        QTRY_COMPARE(popupView->property("url").toUrl().toString(), target + "?popup");
+        QTRY_COMPARE(popup->title(), QString("Target"));
+        QCOMPARE(browser->tabList().size(), 3);
+        // The page closing its popup closes the window.
+        QPointer<QQuickWindow> closing = popup;
+        QMetaObject::invokeMethod(popupView, "runJavaScript", Q_ARG(QString, "window.close()"));
+        QTRY_VERIFY(!closing);
+    }
+    void signInHintsComeOnlyFromTheIsolatedObserver()
+    {
+        QTcpServer server;
+        serve(server, {{"/",
+                        {"Content-Type: text/html",
+                         "<title>Login</title><form action='/' method=get><input "
+                         "type=password name=p><button id=b>Sign in</button></form>"}}});
+        const auto root = QString("http://127.0.0.1:%1/").arg(server.serverPort());
+        QVERIFY(!run("browser_navigate", {{"url", root}}).isError);
+        // The page's own world has neither the channel nor its library.
+        QCOMPARE(js("typeof qt + typeof QWebChannel").toString(), QString("undefinedundefined"));
+        QCOMPARE(js("typeof qt.webChannelTransport", 1).toString(), QString("object"));
+        // An empty password is not a sign-in.
+        js("document.getElementById('b').addEventListener('click',e=>e.preventDefault());"
+           "document.getElementById('b').click()");
+        QTest::qWait(300);
+        QVERIFY(browser->accounts().isEmpty());
+        QSignalSpy changed(browser.get(), &HostServices::browserChanged);
+        js("document.querySelector('input').value='secret';document.getElementById('b').click()");
+        QTRY_COMPARE(browser->accounts().size(), 1);
+        QCOMPARE(browser->accounts().first().host, QString("127.0.0.1"));
+        QVERIFY(!changed.isEmpty());
+        const auto state = browser->snapshot();
+        QCOMPARE(state.signedIn.size(), 1);
+        QVERIFY(!state.signedInVerified);
+        // Once per document: another submission adds nothing new.
+        js("document.getElementById('b').click()");
+        QTest::qWait(300);
+        QCOMPARE(browser->accounts().size(), 1);
     }
     void handBackNeverReplaysAndCrashRecovery()
     {

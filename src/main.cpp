@@ -81,7 +81,7 @@ int main(int argc, char *argv[])
     QString appearancePath;
     QString preferencesPath;
     QString dataPath;
-    QString browserPath, browserStorage;
+    QString browserPath, browserStorage, browserDownloads;
 #ifdef OPENGHOST_SMOKE_TEST
     QTemporaryDir testSettings;
     if (parser.isSet(QStringLiteral("smoke-test")) ||
@@ -93,6 +93,7 @@ int main(int argc, char *argv[])
         dataPath = testSettings.path() + QStringLiteral("/library");
         browserPath = testSettings.path() + QStringLiteral("/browser.json");
         browserStorage = testSettings.path() + QStringLiteral("/browser");
+        browserDownloads = testSettings.path() + QStringLiteral("/downloads");
     } else
 #endif
     {
@@ -104,6 +105,8 @@ int main(int argc, char *argv[])
         browserPath = config + QStringLiteral("/browser.json");
         browserStorage = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) +
                          QStringLiteral("/browser");
+        // Pages' downloads go where the reference's do (app.getPath('downloads')).
+        browserDownloads = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
         // Display caches, recovery markers, chat index and usage ledger: local
         // frontend state, never backend history or credentials. The fake's
         // sessions die with the process, so its chats never enter the profile.
@@ -125,10 +128,12 @@ int main(int argc, char *argv[])
     std::unique_ptr<openghost::Browser> browser;
 #ifdef OPENGHOST_BROWSER
     // The desktop panel exists with or without an agent backend.
-    browser = std::make_unique<openghost::Browser>(browserPath, browserStorage);
+    browser = std::make_unique<openghost::Browser>(browserPath, browserStorage, nullptr,
+                                                   browserDownloads);
     browser->setAutomation(std::make_unique<openghost::QtBrowserAutomation>());
 #else
     Q_UNUSED(browserStorage)
+    Q_UNUSED(browserDownloads)
 #endif
     WindowController controller(backend.get(), preferencesPath, dataPath, browser.get());
     QObject::connect(&controller, &WindowController::closeRequested, &app, &QCoreApplication::quit);

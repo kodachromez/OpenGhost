@@ -4,6 +4,7 @@
 #include <QPointer>
 #include <QQuickItem>
 #include <QSet>
+#include <memory>
 
 namespace openghost
 {
@@ -14,18 +15,21 @@ class QtBrowserAutomation final : public BrowserAutomation
     Q_OBJECT
   public:
     using BrowserAutomation::BrowserAutomation;
+    ~QtBrowserAutomation() override;
     void attach(const QString &, int, QObject *) override;
     void query(quint64, const Target &, Query, const QJsonObject &, qint64, Done) override;
     void navigate(const Target &, const QString &, const QString &) override;
     void capture(quint64, const Target &, const QJsonObject &, bool, Done) override;
     void input(quint64, const Target &, const Input &, Done) override;
-    void cancel(quint64 call) override { m_pending.remove(call); }
+    void cancel(quint64 call) override;
     QPointer<QObject> focused() const override;
     QString giveBack(QObject *back) override;
     static QQuickItem *receiver(QQuickItem *view);
     bool eventFilter(QObject *watched, QEvent *event) override;
     Q_INVOKABLE void scriptResult(const QString &tab, int incarnation, const QString &call,
                                   const QVariant &result);
+    // The site profile's downloadRequested (desktop/browser.js will-download).
+    Q_INVOKABLE void download(QObject *request);
   signals:
     void script(const QString &tab, int incarnation, const QString &call, const QString &source);
     void navigation(const QString &tab, int incarnation, const QString &verb, const QString &url);
@@ -39,12 +43,28 @@ class QtBrowserAutomation final : public BrowserAutomation
         Target target;
         Done done;
     };
+    struct Capture;
+    using Shot = std::shared_ptr<Capture>;
     QHash<QString, Guest> m_guests;
     QHash<quint64, Pending> m_pending;
     quint64 m_clock = quint64(1) << 40;
+    QHash<quint64, Shot> m_captures;
+    QHash<QString, std::function<void(const QJsonObject &)>> m_steps;
+    quint64 m_downloads = 0;
     QQuickItem *item(const Target &) const;
     QQuickItem *emulateFocus(QQuickItem *view);
     QSet<QObject *> m_emulated;
     void complete(quint64, QJsonObject);
+    void stretched(const Shot &);
+    void grab(const Shot &);
+    void restoreCapture(const Shot &);
+    void restored(const Shot &);
+    void thaw(const Shot &);
+    void finishCapture(quint64 call);
+    void frames(const Shot &, int count, int ms, std::function<void()> next,
+                bool restoring = false);
+    void captureScript(const Shot &, const QString &body,
+                       std::function<void(const QJsonObject &)> next,
+                       std::function<void()> stale = {});
 };
 } // namespace openghost

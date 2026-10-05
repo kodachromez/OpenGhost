@@ -8,7 +8,11 @@ Window {
     width: 1400
     height: 600
     visible: true
-    WebEngineProfile { id: profile; offTheRecord: true }
+    WebEngineProfile {
+        id: profile
+        offTheRecord: true
+        onDownloadRequested: download => root.browser.automation.download(download)
+    }
     property var activeGuest: null
     signal evaluated(var result)
     function evaluate(source, world) {
@@ -52,6 +56,14 @@ Window {
         visible: root.shield
         acceptedButtons: Qt.AllButtons
         onWheel: wheel => wheel.accepted = true
+    }
+    // App chrome painted over the page (the chat card over a closed panel).
+    property bool covered: false
+    Rectangle {
+        anchors.fill: parent
+        z: 11
+        color: "magenta"
+        visible: root.covered
     }
     Component {
         id: component

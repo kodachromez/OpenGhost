@@ -1,6 +1,8 @@
 #include "browser-tools/fixtures.h"
 #include "frontend/browser.h"
 #include "frontend/browser_tools.h"
+#include <QDir>
+#include <QTemporaryDir>
 #include <QtTest>
 using namespace openghost;
 
@@ -43,6 +45,12 @@ class DelayedAutomation final : public BrowserAutomation
     {
         inputs.append({id, input, std::move(done)});
     }
+    // The engine's download reports, played by the test.
+    QString startDownload(quint64 id, const QString &tab, int incarnation, const QString &name)
+    {
+        return m_downloadStarting(id, tab, incarnation, name);
+    }
+    void endDownload(quint64 id, bool completed) { m_downloadEnded(id, completed); }
     void cancel(quint64 call) override
     {
         cancelled << call;
@@ -61,6 +69,7 @@ class BrowserOperationsTest : public QObject
     Q_OBJECT
     std::unique_ptr<Browser> browser;
     DelayedAutomation *engine = nullptr;
+    QTemporaryDir downloads;
     QString tab;
     RequestId serial = 0;
     QHash<RequestId, HostToolResult> results;
@@ -76,7 +85,7 @@ class BrowserOperationsTest : public QObject
     void init()
     {
         results.clear();
-        browser = std::make_unique<Browser>();
+        browser = std::make_unique<Browser>(QString(), QString(), nullptr, downloads.path());
         auto adapter = std::make_unique<DelayedAutomation>();
         engine = adapter.get();
         browser->setAutomation(std::move(adapter));
@@ -211,6 +220,71 @@ class BrowserOperationsTest : public QObject
         QTRY_VERIFY(results.contains(other));
         QCOMPARE(results[other].status, HostToolResult::Status::HandedBack);
         QCOMPARE(browser->tabList().size(), 1); // old close never replayed
+    }
+    void downloadsBelongToTheStepRunningAtTheirStart()
+    {
+        const int inc = browser->tab(tab)->incarnation;
+        QSignalSpy toasts(browser.get(), &Browser::downloaded);
+        // Outside any step: saved and announced, but owned by no step.
+        const auto idle = engine->startDownload(1, tab, inc, "report.txt");
+        QCOMPARE(idle, QDir(downloads.path()).absoluteFilePath("report.txt"));
+        engine->endDownload(1, true);
+        QCOMPARE(toasts.size(), 1);
+        QCOMPARE(toasts.first().first().toString(), QString("report.txt"));
+        // During a step: the step's snapshot reports it, exactly once.
+        QFile existing(idle);
+        QVERIFY(existing.open(QIODevice::WriteOnly));
+        existing.close();
+        const auto owned = start();
+        QTRY_COMPARE(engine->calls.size(), 1);
+        const auto file = engine->startDownload(2, tab, inc, "report.txt");
+        QCOMPARE(file, QDir(downloads.path()).absoluteFilePath("report (1).txt"));
+        // A concurrent download never gets a file still being written.
+        const auto other = engine->startDownload(3, tab, inc, "report.txt");
+        QCOMPARE(other, QDir(downloads.path()).absoluteFilePath("report (2).txt"));
+        engine->endDownload(3, false); // cancelled/failed: no record, no toast
+        engine->endDownload(2, true);
+        engine->endDownload(2, true); // a repeated report changes nothing
+        QCOMPARE(toasts.size(), 2);
+        engine->calls.first().done(DelayedAutomation::snapshot());
+        QTRY_VERIFY(results.contains(owned));
+        const auto data = *results[owned].data;
+        const auto listed = data["downloads"].toArray();
+        QCOMPARE(listed.size(), 1);
+        QCOMPARE(listed[0].toObject()["file"].toString(), file);
+        QVERIFY(!listed[0].toObject()["operationId"].toString().isEmpty());
+        QVERIFY(listed[0].toObject()["at"].toDouble() > 0);
+        const auto text = std::get<HostToolResult::Text>(results[owned].content.first()).text;
+        QVERIFY(text.contains("\nDownloaded: " + file + "\n"));
+        QVERIFY(!text.contains("report.txt\n") && !text.contains("(2)"));
+        // A later step, or a step of another chat, never claims it.
+        const auto later = start("browser_snapshot", {}, "two");
+        QTRY_COMPARE(engine->calls.size(), 2);
+        engine->calls.last().done(DelayedAutomation::snapshot());
+        QTRY_VERIFY(results.contains(later));
+        QCOMPARE(results[later].data->value("downloads").toArray().size(), 0);
+        // Ownership ends with the turn: a download still running then is no
+        // longer the step's when it completes.
+        const auto ending = start("browser_snapshot", {}, "three");
+        QTRY_COMPARE(engine->calls.size(), 3);
+        const auto late = engine->startDownload(4, tab, inc, "late.bin");
+        browser->turnEnded("three");
+        engine->endDownload(4, true);
+        QVERIFY(!results.contains(ending));
+        QCOMPARE(browser->tab(tab)->downloads.last().file, late);
+        QVERIFY(browser->tab(tab)->downloads.last().operation.isEmpty());
+        // Popups (no panel guest), unsafe names and an unconfigured folder.
+        QCOMPARE(engine->startDownload(5, {}, 0, "../x/.."),
+                 QDir(downloads.path()).absoluteFilePath("download"));
+        engine->endDownload(5, true);
+        QCOMPARE(toasts.size(), 3); // late.bin; the popup's download is not announced
+        QCOMPARE(engine->startDownload(6, tab, inc, ".bashrc"),
+                 QDir(downloads.path()).absoluteFilePath(".bashrc"));
+        Browser unconfigured;
+        auto adapter = std::make_unique<DelayedAutomation>();
+        auto *bare = adapter.get();
+        unconfigured.setAutomation(std::move(adapter));
+        QCOMPARE(bare->startDownload(1, {}, 0, "x.txt"), QString());
     }
     void frozenUtf16SurrogatesAndInvalidationAfterPartialReveal()
     {

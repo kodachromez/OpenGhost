@@ -152,6 +152,60 @@ owner functions: `inputSequenceStopsOnCancelAndLateAcknowledgement`,
 (`nativeWheelDeliveryPrototype`, `trustedInputPrototypeNotToolImplementation`)
 were replaced by these tool tests. No UI smoke or visual parity run.
 
+## Non-input browser landing (based exactly on `4b9218c`)
+
+Separate worktree/branch `feat/browser-noninput-gaps` from
+`4b9218c8ff04e4f8415f579823330ab0fc03850a`. Schemas, the input tools, the
+reference tree and the browser-input worktree are unchanged. No CDP, debug
+port, Rust, RPC or FFI. The `BrowserAutomation` boundary is kept; it only gains
+`observeDownloads`, the engine's exactly-once download start/end report.
+
+| Gap | Implementation (public Qt only) | Focused tests |
+| --- | --- | --- |
+| Tall / full-page screenshot | `QtBrowserAutomation::capture`: reference region (CSS viewport width × min(content, 4 viewports) from the origin), `pageHeight` = capture height, `truncated`, JPEG 82 ≤1280. A tall or scrolled page: freeze the slot with a non-live `ShaderEffectSource` copy, scroll to the origin (isolated world), give the guest the capture height (`BrowserGuest.stretchCapture`), wait until the renderer reports that size and two animation plus two window frames, grab, then unstretch, restore the scroll in the same document only, and uncover | `fullPageFromTheTopWithoutDisturbingThePanel` (band pixels, visible panel sampled mid-capture, size/scroll/cover restored) |
+| Off-viewport capture | The grab renders the guest item alone, so pixels beyond the viewport and guests under app chrome (a closed panel under the chat card) are captured; nothing above the guest is | `coveredGuestCapturesOnlyItsOwnPixels` |
+| Cancellation / page change / renderer loss | `cancel` restores (not just drops completion); every step is document-guarded and answer-bounded (2 s); a destroyed guest finishes the capture; the owner's 12 s capture deadline cancels | `fullPageCancellationPageChangeAndRendererLossRestore` (cancel before and after stretch, navigation mid-capture → `stale_page`, renderer kill) |
+| Bounds | 16384 px per edge (device-independent) and 64 Mi CSS pixels, else `unavailable`; output ≤1280 wide | — |
+| Popups / new windows | `BrowserGuest.onNewWindowRequested`: popups → `BrowserPopup.qml` (520×700, `openIn`, same profile); tabs → `Browser::openFrom` next to the opener (background kept in background); other schemes refused | `guestOpenedTabsFollowTheirOpener`, `pageMenuPopupsAndGuestOpenedTabs` |
+| Page context menu | `Browser::menu` + Qt Quick Controls `Menu`; actions via engine web actions; Inspect opens in-process DevTools for the user only | `pageMenuMatchesTheReference`, `pageMenuPopupsAndGuestOpenedTabs` |
+| Sign-in observation | preload check in ApplicationWorld, reporting through a `WebChannel` limited to ApplicationWorld; host-only, ≤30, saved, unverified | `signInHintsAreHostOnlyBoundedAndSaved`, `signInHintsComeOnlyFromTheIsolatedObserver` |
+| Downloads + attribution | profile `downloadRequested` → engine report → `Browser` picks a unique file, attributes it to `BrowserTools::running(tab)`'s operation, records completed ones per guest, toasts; turn end releases ownership | `downloadsBelongToTheStepRunningAtTheirStart`, `downloadsSavedUniquelyAndAttributedToTheirStep` |
+| Cursor / ripple overlay | **Not done:** the reference drives it only from click/type pointer events, i.e. the input tools | — |
+
+Page-observable difference left in T08: the temporary resize and the scroll to
+the origin and back fire resize/scroll events and briefly change viewport
+units. `browser_navigate` to a URL that becomes a download is not specially
+mapped (native settles on the unchanged page; reference `loadURL` rejection
+behavior was not re-qualified here).
+
+Validation for this landing (build directories under `~/.cache`, not the worktree):
+
+```sh
+cmake -S . -B ~/.cache/og-noninput/on -DCMAKE_BUILD_TYPE=Release -DOPENGHOST_BUILD_SMOKE_TEST=ON
+cmake --build ~/.cache/og-noninput/on --target openghost-native native_browser_test \
+  native_browser_operations_test native_browser_automation_test native_contract_test -j8
+ctest --test-dir ~/.cache/og-noninput/on \
+  -R '^native_browser(_operations|_automation)?_test$' --output-on-failure
+~/.cache/og-noninput/on/native_contract_test hostToolsRoutedAndReleased \
+  hostHandBackRejectsAlreadyQueuedMessage browserToolFixtures browserResultFixtures
+cmake -S . -B ~/.cache/og-noninput/off -DCMAKE_BUILD_TYPE=Release \
+  -DOPENGHOST_BUILD_SMOKE_TEST=ON -DOPENGHOST_BROWSER=OFF
+cmake --build ~/.cache/og-noninput/off --target openghost-native native_browser_test \
+  native_browser_operations_test native_contract_test -j6
+ldd ~/.cache/og-noninput/off/openghost-native   # no WebEngine
+git diff --check
+```
+
+Results (QtTest passes, including init/cleanup): ON `native_browser_test` 15,
+`native_browser_operations_test` 10 and `native_browser_automation_test` 19 (the full-page and full real-guest
+suites were repeated 3–5 times without failure); 25 selected contract cases
+pass in each of ON and OFF; OFF browser/owner tests 15 and 10 pass with no
+WebEngine linked. The UI smokes (run, not the visual parity suite) fail the same
+five browser checks as an untouched build of `4b9218c` (see the audit's
+non-input section: `data:` pages never become DOM-ready); no new smoke failure.
+Unchanged Node oracles: `tests/browser-tools/reference.test.cjs` 27 and
+`reference/openghost/test/browser-lifecycle.test.js` 16 pass.
+
 ## Native automation landing (based exactly on `ce4cbce`)
 
 Historical record of `4b9218c`; its input rows are superseded above.
@@ -176,7 +230,7 @@ native host implementation, **not a connected agent/backend qualification**.
 | `browser_navigate` | Working URL/local/search normalization, native history/reload, load/failure/stop, settled SS | Local files and loopback failure tests |
 | `browser_wait` | Working timed/text/open-shadow waits, quiet settling and `wait_timeout` | Real guest + late-callback tests |
 | `browser_read` | Working capped frozen HTML-derived text, exact reference converter, UTF-16 slices, read identity/expiry | Real DOM parser, 4 Mi cap, surrogate and frozen-read tests |
-| `browser_screenshot` | **PARTIAL:** real guest-only viewport JPEG (82), width ≤1280, scale/size metadata; `full_page` also works when the page fits at the top | Tall/scrolled full-page requests explicitly return `unavailable`; never resize/scroll/stitch and claim reference capture |
+| `browser_screenshot` | **PARTIAL:** real guest-only viewport JPEG (82), width ≤1280, scale/size metadata; `full_page` also works when the page fits at the top | Tall/scrolled full-page requests explicitly return `unavailable`; never resize/scroll/stitch and claim reference capture. *Superseded by the non-input landing above.* |
 | `browser_scroll` | **PARTIAL:** reference `ref` reveal with required pageId, stale-ref refusal, settle and dirty identity | Direction/amount native wheel is explicitly `unavailable`; no `scrollBy` or synthetic wheel fallback |
 | `browser_click`, `browser_press`, `browser_type`, `browser_select` | Not implemented or advertised | Target/occlusion/focus/sequence qualification remains; no fake DOM input |
 
@@ -218,6 +272,7 @@ native host implementation, **not a connected agent/backend qualification**.
 - Frozen text/ref/page/operation state is ephemeral and never serialized into
   browser layout or chat display. Download production/attribution and sign-in
   hints remain absent (B14/B17/H09); snapshots truthfully return no downloads.
+  *(Since landed: see the non-input landing above.)*
 - `OPENGHOST_BROWSER=OFF` composes `NoHost` and links no WebEngine. The QtCore
   abstraction/owner tests still build; engine/resource implementation is ON-only.
 
@@ -240,7 +295,8 @@ not qualified. This is **not proof all public Qt input paths are impossible**.
 
 `QQuickItem::grabToImage` produces verified viewport pixels, not off-viewport
 content. A tall full-page capture from the top without scrolling/resizing remains
-unavailable. Scroll stitching, printing, or resizing would change fixed/sticky
+unavailable. *(The non-input landing above implements it with a temporary,
+restored resize under a frozen panel copy; no CDP.)* Scroll stitching, printing, or resizing would change fixed/sticky
 layout, scroll callbacks or print styles. No such substitute is labelled parity.
 If future work proves CDP necessary for this gap, it must remain an internal
 `BrowserAutomation` implementation; this landing does not open a debug endpoint.
