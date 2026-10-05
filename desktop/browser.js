@@ -545,25 +545,66 @@ async function press(guest, combo, mayNavigate = false) {
  await command(guest, 'Input.dispatchKeyEvent', { ...base, type: 'keyUp' });
 }
 
+function navigationError(error) {
+ const aborted = error.code === -3 || error.errno === -3 || error.code === 'ERR_ABORTED' || /\bERR_ABORTED\b/.test(error.message);
+ return aborted
+  ? plain('Navigation was aborted (ERR_ABORTED); the requested page did not finish loading.', 'navigation_aborted')
+  : plain(`The page could not be opened: ${error.message}`, 'navigation_failed');
+}
+
 async function navigate(guest, target) {
- const history = guest.navigationHistory;
+ const op = operations.getStore(), history = guest.navigationHistory;
+ const control = ['back', 'forward', 'reload'].includes(target);
  if (target === 'back' || target === 'forward') {
   const can = target === 'back' ? history.canGoBack() : history.canGoForward();
   if (!can) throw plain(`There is no page to go ${target} to`);
-  if (target === 'back') history.goBack(); else history.goForward();
-  await settle(guest, true);
-  return '';
  }
- if (target === 'reload') { guest.reload(); await settle(guest, true); return ''; }
- const url = normalize(target);
- let failure = '';
- check();
- await timed(guest.loadURL(url), WAIT.load, 'The page did not load in time').catch(error => {
-  check(); // Never swallow cancellation or a deadline.
-  if (error.code && error.code !== 'ERR_ABORTED') failure = `The page could not be opened: ${error.code}.`;
- });
- await settle(guest);
- return failure;
+ const listeners = [];
+ const on = (event, listener) => { guest.on(event, listener); listeners.push([event, listener]); };
+ const watchFailure = () => {
+  const failed = (event, code, description, url, mainFrame) => {
+   // Subframe failures do not establish failure of the requested main document.
+   if (mainFrame) op.stop(navigationError({ code, message: description }));
+  };
+  on('did-fail-load', failed);
+  on('did-fail-provisional-load', failed);
+  on('will-prevent-unload', () => op.stop(plain('Navigation was prevented by the current page.', 'navigation_aborted')));
+ };
+ try {
+  check();
+  if (control) {
+   // Void APIs require actual completion, not merely stopped loading/partial DOM.
+   watchFailure();
+   const loaded = new Promise(resolve => {
+    on('did-finish-load', resolve);
+    on('did-navigate-in-page', (event, url, mainFrame) => { if (mainFrame) resolve(); });
+   });
+   check();
+   if (target === 'reload') guest.reload();
+   else if (target === 'back') history.goBack();
+   else history.goForward();
+   await timed(loaded, WAIT.load, 'The page did not load in time');
+  } else {
+   const url = normalize(target);
+   try { check(); await timed(guest.loadURL(url), WAIT.load, 'The page did not load in time'); }
+   catch (error) {
+    check(); // Preserve cancellation, timeout, crash and target-change reasons.
+    throw navigationError(error);
+   }
+   // loadURL identifies this request. Earlier listeners could mistake an abort of
+   // a superseded load for failure of the newly requested navigation.
+   watchFailure();
+  }
+  await settle(guest, control);
+  op.pageId = op.found.pageId;
+  op.navigating = false;
+  return await state(guest);
+ } catch (error) {
+  try { if (!guest.isDestroyed()) guest.stop(); } catch {}
+  throw error;
+ } finally {
+  for (const [event, listener] of listeners) guest.removeListener(event, listener);
+ }
 }
 
 async function screenshot(guest, full) {
@@ -592,15 +633,7 @@ async function act(found, name, args) {
   case 'browser_navigate': {
    const raw = String(args.url || '').trim(), word = raw.toLowerCase();
    op.navigating = true;
-   try {
-    const note = await navigate(guest, ['back', 'forward', 'reload'].includes(word) ? word : raw);
-    op.pageId = found.pageId;
-    op.navigating = false;
-    return await state(guest, { note });
-   } catch (error) {
-    try { if (!guest.isDestroyed()) guest.stop(); } catch {}
-    throw error;
-   }
+   return navigate(guest, ['back', 'forward', 'reload'].includes(word) ? word : raw);
   }
   case 'browser_snapshot':
    return state(guest, { full: !!args.full });
