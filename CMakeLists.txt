@@ -41,6 +41,8 @@ add_library(native_contract STATIC src/backend/types.h src/backend/backend.h
     src/backend/backend.cpp src/backend/transport.h src/backend/fake_backend.cpp
     src/backend/pi_backend.cpp src/backend/pi_process.h src/backend/pi_process.cpp
     src/frontend/preferences.cpp src/frontend/chat_service.cpp src/frontend/plugins.cpp
+    src/frontend/frontend_plugin.h src/frontend/frontend_plugins.h src/frontend/frontend_plugins.cpp
+    src/frontend/example_plugin.h src/frontend/example_plugin.cpp
     src/frontend/usage.cpp src/frontend/store.cpp
     src/frontend/library.cpp src/frontend/host.h)
 target_include_directories(native_contract PUBLIC src)
@@ -120,8 +122,8 @@ option(OPENGHOST_BUILD_SMOKE_TEST "Build the standalone UI smoke check" OFF)
 if(OPENGHOST_BUILD_SMOKE_TEST)
     enable_testing()
     find_package(Qt6 6.11 REQUIRED COMPONENTS Test GuiPrivate)
-    target_sources(openghost-cpp PRIVATE tests/smoke.cpp tests/plugin_smoke.cpp tests/parity/native.cpp
-        tests/splash_frames.cpp)
+    target_sources(openghost-cpp PRIVATE tests/smoke.cpp tests/plugin_smoke.cpp
+        tests/frontend_plugin_smoke.cpp tests/parity/native.cpp tests/splash_frames.cpp)
     target_link_libraries(openghost-cpp PRIVATE Qt6::Test Qt6::GuiPrivate)
     target_compile_definitions(openghost-cpp PRIVATE OPENGHOST_SMOKE_TEST)
     add_executable(native_contract_test tests/contract.cpp src/settings.cpp)
@@ -150,6 +152,12 @@ if(OPENGHOST_BUILD_SMOKE_TEST)
     native_warnings(native_plugins_test)
     add_test(NAME native_plugins_test COMMAND native_plugins_test)
     set_tests_properties(native_plugins_test PROPERTIES TIMEOUT 15)
+    # The frontend plugin SDK: lifecycle, hooks, cleanup and saved choices.
+    add_executable(native_frontend_plugins_test tests/frontend_plugins.cpp)
+    target_link_libraries(native_frontend_plugins_test PRIVATE native_contract Qt6::Test)
+    native_warnings(native_frontend_plugins_test)
+    add_test(NAME native_frontend_plugins_test COMMAND native_frontend_plugins_test)
+    set_tests_properties(native_frontend_plugins_test PROPERTIES TIMEOUT 15)
 
     # Reply pictures and videos: parsing, address rules and the loader's
     # policy, metadata/cache and bounded transport (loopback only).

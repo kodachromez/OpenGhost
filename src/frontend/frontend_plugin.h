@@ -1,0 +1,102 @@
+#pragma once
+#include <QHash>
+#include <QString>
+#include <QVariantMap>
+#include <functional>
+
+// OpenGhost's frontend plugin SDK: native, in-process additions to the window's
+// presentation (rich chat rendering, the browser panel, thinking display). Pi
+// stays the backend and its plugin ecosystem; nothing here reaches a backend,
+// a provider or a tool. QtCore only, like the rest of the frontend state.
+namespace openghost
+{
+class FrontendPlugins;
+
+// Who a plugin is. `id` is stable (it keys the saved on/off choice and the
+// plugin's row decorations); name and description are shown in Settings.
+struct FrontendPluginInfo {
+    QString id, name, description;
+    bool enabledByDefault = false; // Until the user turns it on or off.
+};
+
+// Something that happened in the frontend. Plugins subscribe by name.
+struct FrontendEvent {
+    QString name;
+    QString sessionId; // The open chat's session ("" for a new chat's draft).
+    QVariantMap data;
+};
+namespace events
+{
+inline const QString ChatChanged = QStringLiteral("chat.changed");   // The open chat's rows or turn.
+inline const QString SessionOpened = QStringLiteral("session.opened"); // Another chat was opened.
+inline const QString MessageAccepted =
+    QStringLiteral("message.accepted"); // data.submission: the composer's submission number.
+inline const QString ReplyDelta = QStringLiteral("reply.delta"); // A reply's text grew.
+} // namespace events
+
+// One displayed transcript row, read-only, as the chat rendering hook sees it.
+struct ChatRowView {
+    QString sessionId, key;
+    QString role; // "user", "assistant" or "note"
+    QString text, state;
+};
+
+// Everything a plugin registers goes through its context, so disabling or
+// unregistering the plugin removes all of it. A context is valid from
+// FrontendPlugin::enable() until FrontendPlugin::disable() returns; a plugin
+// keeping its pointer must drop it in disable().
+class FrontendPluginContext final
+{
+  public:
+    using EventHandler = std::function<void(const FrontendEvent &)>;
+    // Extra presentation data for a row, shown to QML as the row's
+    // `decorations[pluginId]`. Return an empty map to leave the row alone.
+    // Called during rendering: must not change plugin state or enable plugins.
+    using RowDecorator = std::function<QVariantMap(const ChatRowView &)>;
+
+    QString pluginId() const { return m_id; }
+    // One handler per event name; subscribing again replaces it.
+    void subscribe(const QString &event, EventHandler handler);
+    void unsubscribe(const QString &event);
+    // The chat rendering hook; an empty function removes it.
+    void decorateRows(RowDecorator decorator);
+    // Ask for the open chat's rows to be decorated again (the decorator's
+    // output depends on state that changed).
+    void redecorate();
+    // Named UI targets (an action or a panel, e.g. "browser") this plugin
+    // shows or hides. Hidden by any enabled plugin wins over shown.
+    void setVisible(const QString &target, bool visible);
+    void clearVisible(const QString &target);
+    // The plugin's status() changed: republish its Settings entry.
+    void update();
+
+  private:
+    friend class FrontendPlugins;
+    FrontendPluginContext(FrontendPlugins *owner, QString id) : m_owner(owner), m_id(std::move(id))
+    {
+    }
+    int hooks() const
+    {
+        return int(m_events.size() + m_visibility.size()) + (m_decorator ? 1 : 0);
+    }
+    FrontendPlugins *m_owner;
+    QString m_id;
+    QHash<QString, EventHandler> m_events;
+    RowDecorator m_decorator;
+    QHash<QString, bool> m_visibility;
+};
+
+class FrontendPlugin
+{
+  public:
+    virtual ~FrontendPlugin() = default;
+    virtual FrontendPluginInfo info() const = 0;
+    // Turned on: register hooks through `context`.
+    virtual void enable(FrontendPluginContext &context) = 0;
+    // Turned off or unregistered. Every hook is removed afterwards anyway;
+    // release anything else the plugin holds (including the context pointer).
+    virtual void disable() {}
+    // A line under the plugin's name in Settings; "" for none.
+    virtual QString status() const { return {}; }
+};
+} // namespace openghost

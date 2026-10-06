@@ -2,6 +2,7 @@
 
 #include "frontend/attachments.h"
 #include "frontend/chat_service.h"
+#include "frontend/frontend_plugins.h"
 #include "frontend/store.h"
 #include "model.h"
 #include "offline_services.h"
@@ -50,6 +51,8 @@ class WindowController final : public QObject
     Q_PROPERTY(QString pluginsError READ pluginsError NOTIFY pluginsChanged)
     Q_PROPERTY(int pluginCount READ pluginCount NOTIFY pluginsChanged)
     Q_PROPERTY(QObject *plugins READ plugins CONSTANT)
+    // Frontend plugins (openghost::FrontendPlugins), apart from the backend's above.
+    Q_PROPERTY(QObject *frontendPlugins READ frontendPlugins CONSTANT)
   public:
     explicit WindowController(QObject *parent = nullptr);
     // `dataPath`: the frontend's local chat/usage store; empty keeps it in memory.
@@ -96,6 +99,7 @@ class WindowController final : public QObject
     QString pluginsError() const { return m_chat.plugins()->error(); }
     int pluginCount() const { return m_plugins.rowCount(); }
     PluginModel *plugins() { return &m_plugins; }
+    openghost::FrontendPlugins *frontendPlugins() { return &m_frontendPlugins; }
     Q_INVOKABLE void refreshPlugins() { m_chat.plugins()->refresh(); }
     Q_INVOKABLE void setPluginEnabled(const QString &id, bool enabled)
     {
@@ -195,6 +199,8 @@ class WindowController final : public QObject
     void catalog();
     QObject *m_browser = nullptr;
     openghost::PreferencesStore m_preferences;
+    openghost::FrontendPlugins m_frontendPlugins;
+    QString m_openSession; // The session last published as session.opened.
     std::unique_ptr<openghost::KeyStore> m_store;
     std::unique_ptr<openghost::KeyStore> m_usageStore; // only with a separate usagePath
     openghost::Library m_library;

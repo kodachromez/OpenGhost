@@ -227,6 +227,7 @@ int main(int argc, char *argv[])
 #endif
     WindowController controller(backend.get(), preferencesPath, dataPath, browser.get(),
                                 usagePath);
+    openghost::registerBuiltinPlugins(*controller.frontendPlugins());
     QObject::connect(&controller, &WindowController::closeRequested, &app, &QCoreApplication::quit);
     QQmlApplicationEngine engine;
 #ifdef OPENGHOST_SMOKE_TEST

@@ -3,6 +3,7 @@
 // Semantic OpenGhost 1.3 boundary, derived from reference/openghost, NOT wire DTOs
 // from the source Qt port. QtCore values only: no QML, widgets, agent or transport.
 #include <QJsonObject>
+#include <QMap>
 #include <QStringList>
 #include <QVector>
 #include <optional>
@@ -473,5 +474,8 @@ struct Preferences {
     std::optional<QString> preferredThinking;
     PermissionMode mode = PermissionMode::Ask;
     UserContext userContext;
+    // Frontend plugins the user turned on or off, by plugin ID (absent: the
+    // plugin's default). Choices for plugins not registered now are kept.
+    QMap<QString, bool> frontendPlugins;
 };
 } // namespace openghost

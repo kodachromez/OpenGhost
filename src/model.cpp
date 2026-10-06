@@ -27,6 +27,8 @@ QList<int> changedRoles(const Entry &a, const Entry &b)
         roles << TranscriptModel::CompletedRole;
     if (a.join != b.join)
         roles << TranscriptModel::JoinRole;
+    if (a.decorations != b.decorations)
+        roles << TranscriptModel::DecorationsRole;
     return roles;
 }
 } // namespace
@@ -87,6 +89,8 @@ QVariant TranscriptModel::data(const QModelIndex &index, int role) const
         return double(entry.completed);
     case JoinRole:
         return int(entry.join);
+    case DecorationsRole:
+        return entry.decorations;
     case AttachmentsRole: {
         QVariantList cards;
         for (const auto &card : entry.attachments)
@@ -105,7 +109,7 @@ QHash<int, QByteArray> TranscriptModel::roleNames() const
             {MessageStateRole, "messageState"}, {CopyableRole, "copyable"},
             {AttachmentsRole, "attachments"},   {MetricsRole, "metrics"},
             {StartedRole, "started"},           {CompletedRole, "completed"},
-            {JoinRole, "join"}};
+            {JoinRole, "join"},                 {DecorationsRole, "decorations"}};
 }
 
 void TranscriptModel::apply(const QVector<Entry> &rows)

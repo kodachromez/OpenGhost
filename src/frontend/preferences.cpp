@@ -65,6 +65,22 @@ std::optional<QVector<ContextFile>> filesFrom(const QJsonValue &value)
         return std::nullopt;
     return files;
 }
+// Frontend plugin choices: {"<plugin id>": true|false}; absent means none.
+std::optional<QMap<QString, bool>> pluginsFrom(const QJsonValue &value)
+{
+    QMap<QString, bool> plugins;
+    if (value.isUndefined())
+        return plugins;
+    if (!value.isObject())
+        return std::nullopt;
+    const auto o = value.toObject();
+    for (auto it = o.begin(); it != o.end(); ++it) {
+        if (it.key().isEmpty() || !it.value().isBool())
+            return std::nullopt;
+        plugins.insert(it.key(), it.value().toBool());
+    }
+    return plugins;
+}
 } // namespace
 QString modeName(PermissionMode mode)
 {
@@ -105,11 +121,13 @@ PreferencesStore::PreferencesStore(QString path, QObject *parent)
     const auto o = document.object();
     const auto mode = parseMode(o.value("mode").toString());
     const auto files = filesFrom(o.value("files"));
+    const auto plugins = pluginsFrom(o.value("plugins"));
     if (error.error != QJsonParseError::NoError || !document.isObject() ||
         o.value("version").toInt() != 1 || !mode || !o.value("instructions").isString() ||
         o.value("instructions").toString().size() > 8000 || !o.value("provider").isString() ||
         !o.value("model").isString() ||
-        (!o.value("thinking").isNull() && !o.value("thinking").isString()) || !files) {
+        (!o.value("thinking").isNull() && !o.value("thinking").isString()) || !files ||
+        !plugins) {
         m_error = QStringLiteral("Invalid native preferences; file left unchanged.");
         return;
     }
@@ -120,6 +138,7 @@ PreferencesStore::PreferencesStore(QString path, QObject *parent)
     m_value.mode = *mode;
     m_value.userContext.instructions = o.value("instructions").toString();
     m_value.userContext.files = *files;
+    m_value.frontendPlugins = *plugins;
 }
 bool PreferencesStore::fail(const QString &message)
 {
@@ -136,15 +155,22 @@ bool PreferencesStore::save(const Preferences &value)
     if (!pinnable(value.userContext.files))
         return fail(QStringLiteral("Files kept for every chat are limited to 20 text files and "
                                    "200,000 characters together."));
-    const QJsonObject object{{"version", 1},
-                             {"provider", value.model.provider},
-                             {"model", value.model.model},
-                             {"thinking", value.preferredThinking
-                                              ? QJsonValue(*value.preferredThinking)
-                                              : QJsonValue(QJsonValue::Null)},
-                             {"mode", modeName(value.mode)},
-                             {"instructions", value.userContext.instructions},
-                             {"files", filesJson(value.userContext.files)}};
+    QJsonObject object{{"version", 1},
+                       {"provider", value.model.provider},
+                       {"model", value.model.model},
+                       {"thinking", value.preferredThinking
+                                        ? QJsonValue(*value.preferredThinking)
+                                        : QJsonValue(QJsonValue::Null)},
+                       {"mode", modeName(value.mode)},
+                       {"instructions", value.userContext.instructions},
+                       {"files", filesJson(value.userContext.files)}};
+    // Written only once a choice exists, so a profile without plugins is unchanged.
+    if (!value.frontendPlugins.isEmpty()) {
+        QJsonObject plugins;
+        for (auto it = value.frontendPlugins.cbegin(); it != value.frontendPlugins.cend(); ++it)
+            plugins.insert(it.key(), it.value());
+        object.insert("plugins", plugins);
+    }
     if (!m_path.isEmpty()) {
         if (!QDir().mkpath(QFileInfo(m_path).absolutePath()))
             return fail(QStringLiteral("Cannot create native preferences directory."));

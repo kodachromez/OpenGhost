@@ -4,7 +4,8 @@ import QtQuick.Effects
 import QtQuick.Shapes
 import OpenGhost.Cpp
 
-// OpenGhost's settings sheet. Runtime Plugins is capability-gated; all pages
+// OpenGhost's settings sheet. Plugins is shown for the backend's runtime plugins
+// (capability-gated) or registered frontend plugins; all pages
 // share the existing row/control styling, navigation and motion.
 Popup {
     id: dialog
@@ -16,7 +17,8 @@ Popup {
     readonly property var pages: [
         { id: "general", title: "General" },
         { id: "providers", title: "Providers" },
-        ...(frontend.runtimePlugins ? [{ id: "plugins", title: "Plugins" }] : []),
+        ...(frontend.runtimePlugins || frontend.frontendPlugins.count > 0
+            ? [{ id: "plugins", title: "Plugins" }] : []),
         { id: "usage", title: "Usage" },
         { id: "appearance", title: "Appearance" }
     ]
@@ -361,11 +363,12 @@ Popup {
                             id: pluginsPage
                             objectName: "pluginsPage"
                             width: parent.width
-                            visible: dialog.frontend.runtimePlugins && dialog.page === "plugins"
+                            visible: (dialog.frontend.runtimePlugins || dialog.frontend.frontendPlugins.count > 0)
+                                     && dialog.page === "plugins"
                             SettingsRow {
                                 first: true
-                                visible: dialog.frontend.pluginsLoading || !dialog.frontend.pluginsLoaded
-                                         || !!dialog.frontend.pluginsError || !dialog.frontend.pluginCount
+                                visible: dialog.frontend.runtimePlugins && (dialog.frontend.pluginsLoading || !dialog.frontend.pluginsLoaded
+                                         || !!dialog.frontend.pluginsError || !dialog.frontend.pluginCount)
                                 label: "Plugins"
                                 hint: dialog.frontend.pluginsLoading ? "Loading plugins…"
                                     : !dialog.frontend.pluginsLoaded ? "Plugin state unavailable"
@@ -429,6 +432,29 @@ Popup {
                                         visible: !!text
                                         text: plugin.note
                                         error: plugin.noteError
+                                    }
+                                }
+                            }
+                            // Frontend plugins: on/off applies at once and is saved locally.
+                            // Delegates follow the count, so a status update keeps focus.
+                            Repeater {
+                                model: dialog.frontend.frontendPlugins.count
+                                delegate: SettingsRow {
+                                    id: frontendPlugin
+                                    required property int index
+                                    readonly property var entry: dialog.frontend.frontendPlugins.entries[index] ?? {}
+                                    objectName: "frontendPlugin-" + (entry.pluginId ?? "")
+                                    width: pluginsPage.width
+                                    first: index === 0 && !dialog.frontend.runtimePlugins
+                                    label: entry.name ?? ""
+                                    hint: [entry.description, entry.status].filter(Boolean).join("\n")
+                                    PillButton {
+                                        objectName: "frontendPluginToggle-" + (frontendPlugin.entry.pluginId ?? "")
+                                        text: frontendPlugin.entry.enabled ? "On" : "Off"
+                                        Accessible.name: frontendPlugin.label
+                                                         + (frontendPlugin.entry.enabled ? ": turn off" : ": turn on")
+                                        onClicked: dialog.frontend.frontendPlugins.setEnabled(
+                                            frontendPlugin.entry.pluginId, !frontendPlugin.entry.enabled)
                                     }
                                 }
                             }

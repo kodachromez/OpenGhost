@@ -153,6 +153,7 @@ bool retireSplashDuringRender(QQmlApplicationEngine &engine, QQuickWindow *windo
 } // namespace
 
 int pluginSmoke(QQmlApplicationEngine &engine, QQuickWindow *window);
+int frontendPluginSmoke(QQmlApplicationEngine &engine, QQuickWindow *window);
 
 // Bounded offline rendering and optional fake-backend integration check.
 int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
@@ -942,6 +943,7 @@ int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
     QTest::qWait(100);
     check(!window->grabWindow().isNull(), "light theme paints");
     Theme::choose(QStringLiteral("dark"));
+    failures += frontendPluginSmoke(engine, window);
     failures += pluginSmoke(engine, window);
     check(!engine.property("smokeWarnings").toBool(), "no QML binding/load warnings");
     QSignalSpy closing(&controller, &WindowController::closeRequested);

@@ -136,6 +136,7 @@ class TranscriptModel final : public KeyedModel
         StartedRole,
         CompletedRole,
         JoinRole,
+        DecorationsRole,
     };
 
     using KeyedModel::KeyedModel;

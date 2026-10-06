@@ -40,6 +40,8 @@ struct Entry {
     // one reply. The view chooses the spacing.
     enum Join { Apart, Joined };
     Join join = Apart;
+    // Enabled frontend plugins' presentation data, by plugin ID; empty without any.
+    QVariantMap decorations;
     quint64 revision = 0; // Changes exactly when displayed content changes.
 };
 

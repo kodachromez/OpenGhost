@@ -74,7 +74,8 @@ WindowController::WindowController(openghost::Backend *backend, QString preferen
                                    QString dataPath, openghost::HostServices *host,
                                    QString usagePath, QObject *parent)
     : QObject(parent), m_browser(qobject_cast<openghost::Browser *>(host)),
-      m_preferences(std::move(preferencesPath)), m_store(keyStore(dataPath)),
+      m_preferences(std::move(preferencesPath)), m_frontendPlugins(&m_preferences),
+      m_store(keyStore(dataPath)),
       m_usageStore(usagePath.isEmpty() ? nullptr : keyStore(usagePath)),
       m_library(m_store.get()), m_chat(backend, &m_preferences, &m_library, host),
       m_general(&m_preferences), m_usage(m_usageStore ? m_usageStore.get() : m_store.get())
@@ -87,6 +88,24 @@ WindowController::WindowController(openghost::Backend *backend, QString preferen
     connect(m_chat.plugins(), &openghost::Plugins::supportChanged, this,
             &WindowController::runtimePluginsChanged);
     connect(&m_chat, &openghost::ChatService::changed, this, &WindowController::sync);
+    // Frontend plugin events, after the window has taken each change.
+    connect(&m_chat, &openghost::ChatService::changed, this, [this] {
+        const auto id = m_chat.current().id;
+        if (id != m_openSession) {
+            m_openSession = id;
+            m_frontendPlugins.publish({openghost::events::SessionOpened, id, {}});
+        }
+        m_frontendPlugins.publish({openghost::events::ChatChanged, id, {}});
+    });
+    connect(&m_chat, &openghost::ChatService::accepted, this, [this](quint64 submission) {
+        m_frontendPlugins.publish({openghost::events::MessageAccepted, m_chat.current().id,
+                                   {{"submission", double(submission)}}});
+    });
+    connect(&m_chat, &openghost::ChatService::answered, this, [this] {
+        m_frontendPlugins.publish({openghost::events::ReplyDelta, m_chat.current().id, {}});
+    });
+    connect(&m_frontendPlugins, &openghost::FrontendPlugins::rowsChanged, this,
+            &WindowController::sync);
     connect(&m_chat, &openghost::ChatService::catalogChanged, this, &WindowController::catalog);
     connect(&m_chat, &openghost::ChatService::accepted, this, &WindowController::accepted);
     connect(&m_chat, &openghost::ChatService::removed, this, &WindowController::sessionRemoved);
@@ -242,6 +261,7 @@ void WindowController::sync()
                     chat.selection.thinking.value_or(QString())});
     QVector<Entry> rows;
     QHash<QString, Entry> rendered;
+    const bool decorating = m_frontendPlugins.decorating();
     for (const auto &row : chat.rows) {
         if (row.hidden || row.role == openghost::DisplayRow::Role::Preserved ||
             row.role == openghost::DisplayRow::Role::Moved)
@@ -277,6 +297,11 @@ void WindowController::sync()
                                       a.size.value_or(-1)});
         }
         entry.copyable = entry.kind == Entry::Assistant && !row.text.isEmpty();
+        if (decorating) {
+            static const char *const roles[] = {"user", "assistant", "note"};
+            entry.decorations = m_frontendPlugins.decorate(
+                {chat.id, row.key, QString::fromLatin1(roles[entry.kind]), row.text, row.state});
+        }
         const auto previous = m_rendered.constFind(entry.key);
         entry.revision =
             previous == m_rendered.cend()
@@ -287,7 +312,8 @@ void WindowController::sync()
                        previous->attachments != entry.attachments ||
                        previous->metrics != entry.metrics || previous->preview != entry.preview ||
                        previous->started != entry.started ||
-                       previous->completed != entry.completed);
+                       previous->completed != entry.completed ||
+                       previous->decorations != entry.decorations);
         rows.append(entry);
         rendered.insert(entry.key, entry);
     }
