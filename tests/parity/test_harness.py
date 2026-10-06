@@ -49,7 +49,7 @@ class HarnessTests(unittest.TestCase):
         self.assertNotIn('attachment-image', media)  # separate, still-unported boundary
 
     def test_pre_application_visible_refusal(self):
-        binary = Path(__file__).resolve().parents[2] / 'build-release/openghost-native'
+        binary = Path(__file__).resolve().parents[2] / 'build-release/openghost-cpp'
         for argument in ['--parity-manifest', '--parity-manifest=/nonexistent']:
             # No DISPLAY/Wayland to connect to even if the guard regresses.
             env = dict(os.environ, QT_QPA_PLATFORM='xcb', DISPLAY='', WAYLAND_DISPLAY='')

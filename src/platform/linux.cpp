@@ -17,7 +17,7 @@ void platform::beforeApplication()
     selectedPortal = qEnvironmentVariableIsEmpty("QT_QPA_PLATFORMTHEME");
     if (selectedPortal)
         qputenv("QT_QPA_PLATFORMTHEME", "xdgdesktopportal");
-    QGuiApplication::setDesktopFileName(QStringLiteral("openghost-native"));
+    QGuiApplication::setDesktopFileName(QStringLiteral("openghost-cpp"));
 }
 
 bool platform::systemReducedMotion()

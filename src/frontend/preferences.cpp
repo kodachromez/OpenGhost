@@ -88,7 +88,7 @@ bool PreferencesStore::save(const Preferences &value)
         QSaveFile file(m_path);
         const auto bytes = QJsonDocument(object).toJson();
         if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() || !file.commit())
-            return fail(QStringLiteral("Native preferences could not be saved."));
+            return fail(QStringLiteral("OpenGhost C++ preferences could not be saved."));
     }
     m_value = value;
     emit changed();

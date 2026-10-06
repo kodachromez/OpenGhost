@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=OpenGhost C++
+Comment=OpenGhost C++ Qt frontend
+Exec=openghost-cpp
+Icon=openghost-cpp
+Terminal=false
+Categories=Development;

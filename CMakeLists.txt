@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(OpenGhostNative VERSION 0.1 LANGUAGES CXX)
+project(OpenGhostCpp VERSION 0.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -84,11 +84,11 @@ qt_add_shaders(native_window "ui_shaders" PREFIX / FILES
     shaders/blur.frag shaders/oil.frag shaders/glass.frag shaders/veil.frag shaders/tone.frag
     shaders/frame.frag shaders/mist.frag)
 
-qt_add_executable(openghost-native src/main.cpp)
-set_target_properties(openghost-native PROPERTIES WIN32_EXECUTABLE TRUE MACOSX_BUNDLE TRUE
-    MACOSX_BUNDLE_GUI_IDENTIFIER "org.openghost.native-ui")
-target_link_libraries(openghost-native PRIVATE native_window Qt6::Qml Qt6::QuickDialogs2)
-native_warnings(openghost-native)
+qt_add_executable(openghost-cpp src/main.cpp)
+set_target_properties(openghost-cpp PROPERTIES WIN32_EXECUTABLE TRUE MACOSX_BUNDLE TRUE
+    MACOSX_BUNDLE_GUI_IDENTIFIER "org.openghost.cpp")
+target_link_libraries(openghost-cpp PRIVATE native_window Qt6::Qml Qt6::QuickDialogs2)
+native_warnings(openghost-cpp)
 foreach(name Main ChatEntry LiveText Sidebar SettingsDialog Markdown Block InlineText CodeBlock
         TableBlock DiagramBlock WorkingGhost WelcomeGhost Splash EffortControl Metrics
         IconButton Spring ModelGlyph ModelButton ModelStage EffortStage Feather UsagePage
@@ -103,21 +103,21 @@ if(OPENGHOST_BROWSER)
         set_source_files_properties(qml/${name}.qml PROPERTIES QT_RESOURCE_ALIAS ${name}.qml)
         list(APPEND qml_files qml/${name}.qml)
     endforeach()
-    target_link_libraries(openghost-native PRIVATE native_browser_automation)
-    target_compile_definitions(openghost-native PRIVATE OPENGHOST_BROWSER)
+    target_link_libraries(openghost-cpp PRIVATE native_browser_automation)
+    target_compile_definitions(openghost-cpp PRIVATE OPENGHOST_BROWSER)
 endif()
-qt_add_qml_module(openghost-native URI OpenGhost.Ui VERSION 1.0 RESOURCE_PREFIX /
+qt_add_qml_module(openghost-cpp URI OpenGhost.Ui VERSION 1.0 RESOURCE_PREFIX /
     QML_FILES ${qml_files} IMPORTS OpenGhost.Native)
-qt_add_resources(openghost-native icon PREFIX / BASE resources FILES resources/openghost.png)
+qt_add_resources(openghost-cpp icon PREFIX / BASE resources FILES resources/openghost.png)
 
 # Small opt-in launch/rendering check. No Python, Node, Rust or live backend needed.
 option(OPENGHOST_BUILD_SMOKE_TEST "Build the standalone UI smoke check" OFF)
 if(OPENGHOST_BUILD_SMOKE_TEST)
     enable_testing()
     find_package(Qt6 6.11 REQUIRED COMPONENTS Test)
-    target_sources(openghost-native PRIVATE tests/smoke.cpp tests/plugin_smoke.cpp tests/parity/native.cpp)
-    target_link_libraries(openghost-native PRIVATE Qt6::Test)
-    target_compile_definitions(openghost-native PRIVATE OPENGHOST_SMOKE_TEST)
+    target_sources(openghost-cpp PRIVATE tests/smoke.cpp tests/plugin_smoke.cpp tests/parity/native.cpp)
+    target_link_libraries(openghost-cpp PRIVATE Qt6::Test)
+    target_compile_definitions(openghost-cpp PRIVATE OPENGHOST_SMOKE_TEST)
     add_executable(native_contract_test tests/contract.cpp src/settings.cpp)
     target_link_libraries(native_contract_test PRIVATE native_contract Qt6::Test)
     native_warnings(native_contract_test)
@@ -137,8 +137,8 @@ if(OPENGHOST_BUILD_SMOKE_TEST)
     add_test(NAME native_media_test COMMAND native_media_test)
     set_tests_properties(native_media_test PROPERTIES TIMEOUT 30
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
-    add_test(NAME native_ui_smoke COMMAND openghost-native --smoke-test)
-    add_test(NAME native_fake_ui_smoke COMMAND openghost-native --smoke-test --fake-backend)
+    add_test(NAME native_ui_smoke COMMAND openghost-cpp --smoke-test)
+    add_test(NAME native_fake_ui_smoke COMMAND openghost-cpp --smoke-test --fake-backend)
     set_tests_properties(native_ui_smoke native_fake_ui_smoke PROPERTIES TIMEOUT 30
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_QPA_PLATFORMTHEME=generic;QT_FORCE_STDERR_LOGGING=1;OPENGHOST_REDUCED_MOTION=0")
     # The browser panel's state machine, and its real guests in the UI smoke.
@@ -160,17 +160,17 @@ if(OPENGHOST_BUILD_SMOKE_TEST)
             ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_QPA_PLATFORMTHEME=generic;QT_FORCE_STDERR_LOGGING=1")
     endif()
     set_tests_properties(native_browser_test PROPERTIES TIMEOUT 15)
-    target_sources(openghost-native PRIVATE tests/browser_smoke.cpp)
+    target_sources(openghost-cpp PRIVATE tests/browser_smoke.cpp)
     set_tests_properties(native_ui_smoke native_fake_ui_smoke PROPERTIES TIMEOUT 60)
 endif()
 
 include(GNUInstallDirs)
-install(FILES LICENSE NOTICE.md DESTINATION ${CMAKE_INSTALL_DATADIR}/openghost-native)
-install(DIRECTORY licenses/ DESTINATION ${CMAKE_INSTALL_DATADIR}/openghost-native/licenses)
-install(TARGETS openghost-native BUNDLE DESTINATION . RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-install(FILES resources/openghost.png RENAME openghost-native.png
+install(FILES LICENSE NOTICE.md DESTINATION ${CMAKE_INSTALL_DATADIR}/openghost-cpp)
+install(DIRECTORY licenses/ DESTINATION ${CMAKE_INSTALL_DATADIR}/openghost-cpp/licenses)
+install(TARGETS openghost-cpp BUNDLE DESTINATION . RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(FILES resources/openghost.png RENAME openghost-cpp.png
     DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/512x512/apps)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    install(FILES resources/openghost-native.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+    install(FILES resources/openghost-cpp.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
 endif()
 # reference/openghost is deliberately never built, imported or installed.

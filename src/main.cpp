@@ -52,14 +52,15 @@ int main(int argc, char *argv[])
 #endif
     QGuiApplication app(argc, argv);
     platform::afterApplication();
+    // Kept from before the OpenGhost C++ rename: it names the existing profile paths.
     app.setApplicationName(QStringLiteral("openghost-native"));
-    app.setApplicationDisplayName(QStringLiteral("OpenGhost Native"));
+    app.setApplicationDisplayName(QStringLiteral("OpenGhost C++"));
     app.setApplicationVersion(QStringLiteral("0.1"));
     app.setWindowIcon(QIcon(QStringLiteral(":/openghost.png")));
     app.setQuitOnLastWindowClosed(false);
     QCommandLineParser parser;
     parser.setApplicationDescription(
-        QStringLiteral("Standalone native frontend. No Rust backend or transport."));
+        QStringLiteral("Standalone OpenGhost C++ frontend. No Rust backend or transport."));
     parser.addOption(
         {QStringLiteral("fake-backend"),
          QStringLiteral("Use the in-memory fake backend (no model, tools or credentials).")});

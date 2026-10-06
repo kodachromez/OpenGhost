@@ -1,6 +1,6 @@
-# Native C++ / Qt port notes
+# OpenGhost C++ port notes
 
-This is the engineering inventory for the standalone native OpenGhost frontend.
+This is the engineering inventory for the standalone OpenGhost C++ frontend.
 Start with the [README](../README.md) for build/run/test commands, feature status
 and storage locations. [Repository readiness](repository-readiness.md) records
 current audit findings and qualification limits.

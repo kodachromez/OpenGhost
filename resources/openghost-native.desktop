@@ -1,8 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=OpenGhost Native (UI shell)
-Comment=Native Qt frontend extraction; no backend connected
-Exec=openghost-native
-Icon=openghost-native
-Terminal=false
-Categories=Development;

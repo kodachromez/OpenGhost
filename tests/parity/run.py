@@ -26,7 +26,7 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[2]
 parser = argparse.ArgumentParser()
-parser.add_argument('--binary', type=Path, default=ROOT/'build-release/openghost-native')
+parser.add_argument('--binary', type=Path, default=ROOT/'build-release/openghost-cpp')
 parser.add_argument('--output', type=Path, default=ROOT/'build-release/visual-parity')
 parser.add_argument('--manifest', type=Path, help='Optional custom manifest (default: all shared fixtures)')
 parser.add_argument('--media', action='store_true', help='All reply-media fixtures plus sent-image boundary; not the unrelated suite')

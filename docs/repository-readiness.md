@@ -1,6 +1,6 @@
 # Standalone repository readiness
 
-Original audit: the native frontend on `cpp-native-extraction`, following the local
+Original audit: the OpenGhost C++ frontend on `cpp-native-extraction`, following the local
 state implementation in `185ed65`; documentation recorded in `4542756`. The focused
 usage-ledger follow-up below fixes one finding without adding backend integration
 or UI features. The frozen `reference/openghost/` and all licensing/provenance

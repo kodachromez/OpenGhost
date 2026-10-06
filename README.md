@@ -1,4 +1,4 @@
-# OpenGhost Native
+# OpenGhost C++
 
 A standalone **native Qt 6 / QML / C++17 implementation of the OpenGhost
 frontend**, targeting the dissected OpenGhost 1.3 presentation and behavior.
@@ -39,9 +39,9 @@ The JavaScript expressions in QML are part of Qt, not a browser/Node runtime.
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel 4
-./build/openghost-native                 # disconnected
-./build/openghost-native --fake-backend  # explicit simulation
-./build/openghost-native --help
+./build/openghost-cpp                 # disconnected
+./build/openghost-cpp --fake-backend  # explicit simulation
+./build/openghost-cpp --help
 ```
 
 For multi-configuration generators, build with `--config Release`; the executable
@@ -121,7 +121,7 @@ can exercise the GPU path without CTest's offscreen override:
 ```sh
 QT_QPA_PLATFORM=wayland QSG_RHI_BACKEND=opengl QT_QUICK_BACKEND=rhi \
   QT_FORCE_STDERR_LOGGING=1 OPENGHOST_REDUCED_MOTION=0 \
-  ./build-release/openghost-native --smoke-test --fake-backend
+  ./build-release/openghost-cpp --smoke-test --fake-backend
 ```
 
 An uninstalled Linux development binary can emit a nonfatal portal app-ID
@@ -265,7 +265,8 @@ Neither a toggle nor its failure restarts anything.
 
 ## Local persistence and recovery
 
-Qt selects the app-specific locations for application name `openghost-native`:
+Qt selects the app-specific locations for application name `openghost-native`
+(kept from before the OpenGhost C++ rename so existing profiles still load):
 
 | Location | Contents |
 | --- | --- |

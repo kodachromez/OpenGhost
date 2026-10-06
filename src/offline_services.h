@@ -14,7 +14,7 @@
 // frontend-owned ledger, backed by the selected file or memory store.
 inline QString backendUnavailable()
 {
-    return QStringLiteral("This operation is not connected in the native frontend yet.");
+    return QStringLiteral("This operation is not connected in OpenGhost C++ yet.");
 }
 
 class GeneralPreview final : public QObject

@@ -110,18 +110,18 @@ Build directories outside the worktree, Release, Qt 6.11.2/GCC 16.2.1:
 
 ```sh
 cmake -S . -B ~/.cache/og-mutating-on -DCMAKE_BUILD_TYPE=Release -DOPENGHOST_BUILD_SMOKE_TEST=ON
-cmake --build ~/.cache/og-mutating-on --target openghost-native native_browser_test \
+cmake --build ~/.cache/og-mutating-on --target openghost-cpp native_browser_test \
   native_browser_operations_test native_browser_automation_test native_contract_test
 ctest --test-dir ~/.cache/og-mutating-on \
   -R '^native_browser(_operations|_automation)?_test$' --output-on-failure
 ~/.cache/og-mutating-on/native_contract_test
 cmake -S . -B ~/.cache/og-mutating-off -DCMAKE_BUILD_TYPE=Release \
   -DOPENGHOST_BUILD_SMOKE_TEST=ON -DOPENGHOST_BROWSER=OFF
-cmake --build ~/.cache/og-mutating-off --target openghost-native native_browser_test \
+cmake --build ~/.cache/og-mutating-off --target openghost-cpp native_browser_test \
   native_browser_operations_test native_contract_test
 ctest --test-dir ~/.cache/og-mutating-off -R '^native_browser(_operations)?_test$'
 ~/.cache/og-mutating-off/native_contract_test
-ldd ~/.cache/og-mutating-off/openghost-native | grep -i webengine   # none
+ldd ~/.cache/og-mutating-off/openghost-cpp | grep -i webengine   # none
 node --test tests/browser-tools/reference.test.cjs
 node --test reference/openghost/test/browser-lifecycle.test.js
 git diff --check
@@ -182,7 +182,7 @@ Validation for this landing (build directories under `~/.cache`, not the worktre
 
 ```sh
 cmake -S . -B ~/.cache/og-noninput/on -DCMAKE_BUILD_TYPE=Release -DOPENGHOST_BUILD_SMOKE_TEST=ON
-cmake --build ~/.cache/og-noninput/on --target openghost-native native_browser_test \
+cmake --build ~/.cache/og-noninput/on --target openghost-cpp native_browser_test \
   native_browser_operations_test native_browser_automation_test native_contract_test -j8
 ctest --test-dir ~/.cache/og-noninput/on \
   -R '^native_browser(_operations|_automation)?_test$' --output-on-failure
@@ -190,9 +190,9 @@ ctest --test-dir ~/.cache/og-noninput/on \
   hostHandBackRejectsAlreadyQueuedMessage browserToolFixtures browserResultFixtures
 cmake -S . -B ~/.cache/og-noninput/off -DCMAKE_BUILD_TYPE=Release \
   -DOPENGHOST_BUILD_SMOKE_TEST=ON -DOPENGHOST_BROWSER=OFF
-cmake --build ~/.cache/og-noninput/off --target openghost-native native_browser_test \
+cmake --build ~/.cache/og-noninput/off --target openghost-cpp native_browser_test \
   native_browser_operations_test native_contract_test -j6
-ldd ~/.cache/og-noninput/off/openghost-native   # no WebEngine
+ldd ~/.cache/og-noninput/off/openghost-cpp   # no WebEngine
 git diff --check
 ```
 
@@ -310,7 +310,7 @@ Only browser-focused tests run, not UI smoke/visual parity or live providers:
 ```sh
 cmake -S . -B /tmp/og-native-automation-on -DCMAKE_BUILD_TYPE=Release \
   -DOPENGHOST_BUILD_SMOKE_TEST=ON
-cmake --build /tmp/og-native-automation-on --target openghost-native \
+cmake --build /tmp/og-native-automation-on --target openghost-cpp \
   native_browser_test native_browser_operations_test native_browser_automation_test native_contract_test -j3
 ctest --test-dir /tmp/og-native-automation-on \
   -R '^native_browser(_operations|_automation)?_test$' --output-on-failure
@@ -319,14 +319,14 @@ ctest --test-dir /tmp/og-native-automation-on \
   browserToolFixtures browserResultFixtures
 cmake -S . -B /tmp/og-native-automation-off -DCMAKE_BUILD_TYPE=Release \
   -DOPENGHOST_BUILD_SMOKE_TEST=ON -DOPENGHOST_BROWSER=OFF
-cmake --build /tmp/og-native-automation-off --target openghost-native \
+cmake --build /tmp/og-native-automation-off --target openghost-cpp \
   native_browser_test native_browser_operations_test native_contract_test -j3
 ctest --test-dir /tmp/og-native-automation-off \
   -R '^native_browser(_operations)?_test$' --output-on-failure
 /tmp/og-native-automation-off/native_contract_test \
   hostToolsRoutedAndReleased hostHandBackRejectsAlreadyQueuedMessage \
   browserToolFixtures browserResultFixtures
-ldd /tmp/og-native-automation-off/openghost-native
+ldd /tmp/og-native-automation-off/openghost-cpp
 node --test tests/browser-tools/reference.test.cjs
 node --test reference/openghost/test/browser-lifecycle.test.js
 git diff --check
@@ -1110,7 +1110,7 @@ cmake -S . -B /tmp/og-browser-tools-build -DCMAKE_BUILD_TYPE=Release \
 cmake --build /tmp/og-browser-tools-build --target native_contract_test -j2
 ctest --test-dir /tmp/og-browser-tools-build -R '^native_contract_test$' --output-on-failure
 # Optional existing UI regression checks (not browser qualification):
-cmake --build /tmp/og-browser-tools-build --target openghost-native -j2
+cmake --build /tmp/og-browser-tools-build --target openghost-cpp -j2
 ctest --test-dir /tmp/og-browser-tools-build -R '^native_(fake_)?ui_smoke$' --output-on-failure
 # Run the binary directly to see each of the 11 QSKIP reasons.
 /tmp/og-browser-tools-build/native_contract_test productionBrowserToolsPending

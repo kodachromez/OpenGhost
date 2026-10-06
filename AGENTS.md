@@ -1,4 +1,4 @@
-# Native frontend fork
+# OpenGhost C++ frontend fork
 
 - Clone the dissected OpenGhost 1.3 frontend in `reference/openghost/`; it is the
   visual/behavior authority. Do not edit that frozen reference as part of a port.

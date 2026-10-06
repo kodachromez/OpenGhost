@@ -181,7 +181,7 @@ class WindowController final : public QObject
   private:
     void unavailable()
     {
-        m_notice = QStringLiteral("This operation is not connected in the native frontend yet.");
+        m_notice = QStringLiteral("This operation is not connected in OpenGhost C++ yet.");
         emit changed();
     }
     void sync();
