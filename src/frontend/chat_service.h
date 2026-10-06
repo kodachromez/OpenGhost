@@ -154,7 +154,10 @@ class ChatService final : public QObject
     void remove(const QString &id);
     void refresh();
     // `flow` names the sign-in form it belongs to; authFinished hands it back, so a
-    // cancelled or replaced sign-in's late end never touches a newer form.
+    // cancelled or replaced sign-in's late end never touches a newer form. Each call
+    // is the provider's latest attempt until the next: only the latest attempt's
+    // result (or an answer to it) sets or clears the provider's error and status.
+    // An older one still settles (authFinished) and rereads the catalog.
     void authenticate(const Command &command, const QString &flow = {});
     void answerLogin(const AnswerLogin &answer); // Not an auth mutation: no authFinished.
     void approve(RequestId id, bool allow);
@@ -231,6 +234,8 @@ class ChatService final : public QObject
     QVector<Model> m_models;
     QVector<Provider> m_providers;
     QHash<QString, Error> m_authErrors;
+    QHash<QString, quint64> m_authAttempt; // provider -> its latest auth attempt
+    quint64 m_authAttempts = 0;
     QVector<PendingApproval> m_approvals;
     QVector<PendingApproval> m_earlyApprovals;
     QSet<QString> m_reverseSeen;

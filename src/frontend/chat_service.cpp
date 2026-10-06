@@ -1834,13 +1834,17 @@ void ChatService::authenticate(const Command &command, const QString &flow)
         emit authFinished(flow);
         return;
     }
-    call(command, [this, provider, flow](const Result &result) {
-        if (const auto *error = std::get_if<Error>(&result)) {
-            m_authErrors.insert(provider, *error);
-            problem(*error);
-        } else {
-            m_authErrors.remove(provider);
-            m_status.clear();
+    const auto attempt = ++m_authAttempts;
+    m_authAttempt.insert(provider, attempt);
+    call(command, [this, provider, flow, attempt](const Result &result) {
+        if (m_authAttempt.value(provider) == attempt) {
+            if (const auto *error = std::get_if<Error>(&result)) {
+                m_authErrors.insert(provider, *error);
+                problem(*error);
+            } else {
+                m_authErrors.remove(provider);
+                m_status.clear();
+            }
         }
         refresh();
         emit authFinished(flow);
@@ -1850,10 +1854,15 @@ void ChatService::answerLogin(const AnswerLogin &answer)
 {
     if (!m_ready || answer.provider.isEmpty())
         return;
-    call(answer, [this, provider = answer.provider](const Result &result) {
+    // The answer belongs to the attempt it answered: a failure after a newer one
+    // began (a new sign-in, a cancel or a logout) is that attempt's no longer.
+    const auto attempt = m_authAttempt.value(answer.provider);
+    call(answer, [this, provider = answer.provider, attempt](const Result &result) {
         if (const auto *error = std::get_if<Error>(&result)) {
-            m_authErrors.insert(provider, *error);
-            problem(*error);
+            if (m_authAttempt.value(provider) == attempt) {
+                m_authErrors.insert(provider, *error);
+                problem(*error);
+            }
             refresh();
         }
     });

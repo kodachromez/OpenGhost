@@ -32,7 +32,7 @@ namespace openghost
 //
 // Ask / Auto / Full are enforced inside Pi by the bridge (its tool_call handler and
 // src/backend/pi/openghost-policy.js), set on the chat's child before every run and
-// when the chat changes mode. A call that needs approval is Pi's own extension UI
+// as soon as the chat changes mode (idle or not); a later update always wins. A call that needs approval is Pi's own extension UI
 // confirm, shown as an approval card (a reverse request) and answered once; Stop,
 // the turn's end or Pi taking it back withdraws the card. Any other extension
 // dialog is cancelled at once and said, as are extension errors: nothing waits on
@@ -103,12 +103,14 @@ class PiBackend final : public Backend
         QHash<QString, QPair<QString, bool>> recorded; // client -> turn, retry: taken before
         std::optional<QJsonObject> context; // what this child's bridge holds
         std::optional<PermissionMode> mode; // the access mode this child's bridge holds
-        int auth = 0;                       // the credential generation its Pi has read
+        quint64 modeSent = 0;                // the latest mode update sent to this child
+        int auth = 0;                       // the configuration generation its Pi has read
         QVector<RequestId> deletes;          // DeleteSession calls awaiting erasure
     };
     // A tool call waiting on the user: Pi's confirm dialog, shown as a card.
     struct Approval {
         QString session, turn, dialog, approvalId;
+        PiProcess *pi = nullptr; // the child whose dialog this is: only it is answered
     };
     void dispatch(RequestId id, const Command &command);
     Result execute(const Command &command);
@@ -146,7 +148,7 @@ class PiBackend final : public Backend
     void withdrawApprovals(const QString &session, bool answer);
     void report(const QString &level, const QString &message);
     void extensionRecord(const QString &type, const QJsonObject &record);
-    void setMode(PiProcess *pi, PermissionMode mode,
+    void setMode(const QString &session, PermissionMode mode,
                  std::function<void(std::optional<Error>)> done);
     void runEvent(const QString &session, const QString &type, const QJsonObject &object);
     Sequence next(Chat &chat);
@@ -164,11 +166,18 @@ class PiBackend final : public Backend
     QHash<QString, QString> m_flows;   // provider -> its current sign-in's token
     QHash<RequestId, QString> m_flowOf; // Login/SetKey/CancelLogin request -> its flow
     QHash<QString, LoginStep> m_steps; // provider -> its current sign-in step
+    // provider -> the prompt its current sign-in waits on, as Pi asked it. It stays
+    // open through Pi's notifications until answered, withdrawn, replaced, cancelled
+    // or ended.
+    QHash<QString, LoginStep> m_prompts;
     QSet<RequestId> m_pendingStarts, m_withdrawn; // cancellation before dispatch/load
     int m_tokens = 0;
-    int m_auth = 1;     // credential generation: bumped when Pi's credentials change
-    QString m_authSeen; // the providers' configured/stored state last read
+    // Pi's configuration generation: bumped whenever the control child rereads
+    // models.json and credentials, or a sign-in/logout changes them. A chat's Pi
+    // that read an older one rereads before its next run.
+    int m_auth = 1;
     QHash<RequestId, Approval> m_approvals;   // reverse request -> its Pi dialog
     RequestId m_reverse = RequestId(1) << 48; // reverse request IDs, apart from callers'
+    quint64 m_modeSeq = 0; // access mode updates, in the order they were asked for
 };
 } // namespace openghost

@@ -5,8 +5,9 @@
 # delay, switch (an extension changes the model); anything else is echoed. While "slow" runs, steers queue; a steer
 # approve: a tool call the bridge asks the user about (unless the access mode is
 # full); foreign: another extension's select dialog; ext-error: an extension fails.
-# Sign-in (bridge login) asks one prompt; provider "w" takes it back at once, and
-# cancelling reports a stale step of the cancelled flow before its end.
+# Sign-in (bridge login) asks one prompt; provider "w" takes it back at once,
+# "n"/"sel"/"sec" send progress and info while it is open, and cancelling reports a
+# stale step of the cancelled flow before its end.
 # containing "now" delivers the queue in order. FAKE_PI_LOG records commands
 # (with their prompt images) and, per run, the standing instructions and pinned
 # files its system prompt carried. Model "v" sees images; "m" and "m2" do not.
@@ -245,14 +246,28 @@ def bridged(cid, request):
         provider = request.get("provider")
         prompt = "p-" + token
         logins[provider] = (token, prompt)
-        status(token + ":prompt", {"promptId": prompt, "type": "text", "message": "Code?"})
+        # "n", "sel" and "sec": a text, select or secret prompt, then Pi's own
+        # progress and info notifications while it is still unanswered.
+        kind = {"sel": "select", "sec": "secret"}.get(provider, "text")
+        asked = {"promptId": prompt, "type": kind, "message": "Code?"}
+        if kind == "select":
+            asked["options"] = [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}]
+        if kind == "text" and provider == "n":
+            asked["placeholder"] = "123456"
+        status(token + ":prompt", asked)
         if provider == "w":
             status(token + ":withdrawn", {"promptId": prompt})
+        if provider in ("n", "sel", "sec"):
+            status(token + ":event", {"type": "progress", "message": "Still waiting for your code"})
+            status(token + ":event", {"type": "info", "message": "Help",
+                                      "links": [{"url": "https://example.invalid/help", "label": "Help"}]})
         return respond(cid, "prompt", data={"disposition": "handled"})
     elif op == "answer":
         for provider, (flow, prompt) in list(logins.items()):
             if prompt == request.get("promptId"):
                 del logins[provider]
+                if provider == "n":  # Pi works on the answer before the flow ends.
+                    status(flow + ":event", {"type": "progress", "message": "Checking your code"})
                 status(flow, {"ok": True})
         status(token, {"ok": True})
     elif op == "cancel":

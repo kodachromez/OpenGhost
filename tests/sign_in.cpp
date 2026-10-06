@@ -16,7 +16,7 @@ class SignInTest final : public QObject
     void initTestCase()
     {
         qputenv("PATH", QByteArray(OPENGHOST_FAKE_PI_DIR ":") + qgetenv("PATH"));
-        qputenv("FAKE_PI_PROVIDERS", "p");
+        qputenv("FAKE_PI_PROVIDERS", "p,n");
     }
 
     void cancelThenSignInAgainKeepsTheNewForm()
@@ -47,6 +47,30 @@ class SignInTest final : public QObject
         // Answering finishes this form's own flow.
         window.answerLogin(second, form.value("promptId").toString(), QStringLiteral("123"));
         QTRY_VERIFY(settings->login().isEmpty());
+    }
+
+    // M12/F3: Pi's progress and info while its prompt is open keep the form's
+    // input; the user can still answer, and the answer ends the flow.
+    void notificationsKeepTheFormsInput()
+    {
+        PiBackend backend;
+        WindowController window(&backend, QString());
+        QTRY_VERIFY(window.ready());
+        auto *settings = window.settings();
+        window.refreshProviders();
+        QTRY_COMPARE(settings->providers().size(), 2);
+        window.login(QStringLiteral("n"), QStringLiteral("oauth"));
+        QTRY_VERIFY(!settings->login().value("links").toList().isEmpty()); // info, the last
+        const auto form = settings->login();
+        QVERIFY(!form.value("promptId").toString().isEmpty());
+        QVERIFY(form.value("input").toBool());
+        QCOMPARE(form.value("placeholder").toString(), QStringLiteral("123456"));
+        // The question, with Pi's latest notification beneath it.
+        QCOMPARE(form.value("message").toString(), QStringLiteral("Code?\nHelp"));
+        window.answerLogin(form.value("id").toString(), form.value("promptId").toString(),
+                           QStringLiteral("123456"));
+        QTRY_VERIFY(settings->login().isEmpty());
+        QVERIFY(window.status().isEmpty());
     }
 };
 

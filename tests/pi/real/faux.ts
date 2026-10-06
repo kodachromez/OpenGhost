@@ -1,12 +1,13 @@
 // Test only: a scripted model inside real Pi (Pi AI's own faux provider), so the
 // OpenGhost bridge runs in real Pi with no network or credentials. The prompt
 // picks the reply: `call <tool> <json args>` asks for that tool call, then says
-// "done" once the tool's result (or refusal) is back; anything else is echoed.
+// "done" once the tool's result (or refusal) is back; "which model" names the model
+// the request was made with; anything else is echoed.
 import { createFauxCore, fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
 
 export default function (pi) {
   const core = createFauxCore({ api: "og-faux", provider: "og-faux", models: [{ id: "faux", name: "Faux" }], tokensPerSecond: 100000 });
-  const reply = (context) => {
+  const reply = (context, _options, _state, model) => {
     const messages = context.messages;
     const last = messages.at(-1);
     if (last?.role === "toolResult") {
@@ -15,6 +16,7 @@ export default function (pi) {
     }
     const user = [...messages].reverse().find((m) => m.role === "user");
     const text = typeof user?.content === "string" ? user.content : (user?.content ?? []).map((c) => c.text ?? "").join("");
+    if (text.trim() === "which model") return fauxAssistantMessage(`model: ${model?.name}`); // the request's own
     const call = /^call (\w+) (.*)$/s.exec(text.trim());
     if (call) return fauxAssistantMessage([fauxText("calling"), fauxToolCall(call[1], JSON.parse(call[2]))], { stopReason: "toolUse" });
     return fauxAssistantMessage(`echo: ${text}`);

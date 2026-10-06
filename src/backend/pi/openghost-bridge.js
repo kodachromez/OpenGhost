@@ -10,8 +10,10 @@
 // flow, named by its token: {op: "cancel", provider, flow} cancels that flow only,
 // and a new sign-in for the provider ends the one before. {op: "refresh"} rereads
 // Pi's models.json and stored credentials (as `providers` also does first), so
-// changes made outside OpenGhost (another `pi /login`) are seen.
-// {op: "mode", mode} sets Ask / Auto / Full (src/backend/pi/openghost-policy.js).
+// changes made outside OpenGhost (another `pi /login`, an edited models.json) are
+// seen, and the session's selected model is retaken from the reread registry.
+// {op: "mode", mode, seq} sets Ask / Auto / Full (src/backend/pi/openghost-policy.js);
+// an update numbered lower than the last applied is ignored.
 // A tool call that needs approval waits on Pi's own extension UI: a confirm whose
 // title is "openghost:approval" and whose message is the request as JSON
 // {approvalId, toolCallId, tool, args, presentation}; Allow runs it, anything else
@@ -36,6 +38,7 @@ const escape = (name) => name.replace(/&/g, "&amp;").replace(/"/g, "&quot;").rep
 const APPROVAL = "openghost:approval"; // The confirm OpenGhost shows as an approval card.
 const MODES = new Set(["ask", "auto", "full"]);
 let mode = "ask"; // Until OpenGhost says otherwise: never less than asked for.
+let modeSeq = 0; // The latest mode update applied.
 const approvals = new Map(); // approvalId -> {name, input, cwd, controller, allowed}
 let nextApproval = 0;
 const logins = new Map(); // provider -> {token, controller}
@@ -194,9 +197,26 @@ export default function (pi) {
           status("", { ok: true });
         } else if (request.op === "refresh") {
           await runtime.refresh({ allowNetwork: false, signal: AbortSignal.timeout(15_000) });
+          // The session keeps the model object it selected before the reread: it
+          // takes the refreshed one, so its next request uses the new configuration.
+          // Same model, same thinking level; only an idle session is switched.
+          const current = ctx.model;
+          const fresh = current && runtime.getModel(current.provider, current.id);
+          if (fresh && fresh !== current && ctx.isIdle()) {
+            const thinking = pi.getThinkingLevel();
+            if (await pi.setModel(fresh)) pi.setThinkingLevel(thinking);
+          }
           status("", { ok: true });
         } else if (request.op === "mode") {
           if (!MODES.has(request.mode)) throw new Error(`Unknown access mode: ${request.mode}`);
+          // Updates are numbered by OpenGhost: one older than the last applied is
+          // ignored, however Pi happens to order the two requests.
+          const seq = Number.isSafeInteger(request.seq) ? request.seq : undefined;
+          if (seq !== undefined && seq < modeSeq) {
+            status("", { ok: true, mode, stale: true });
+            return;
+          }
+          if (seq !== undefined) modeSeq = seq;
           mode = request.mode;
           // Waiting approvals the new mode no longer asks for are allowed; the rest wait.
           for (const entry of approvals.values())

@@ -1070,10 +1070,14 @@ class PiTest final : public QObject
         const auto session = piName(h, h.chat.current().id);
         QVERIFY(records().contains(
             QJsonObject{{"type", "mode"}, {"mode", "full"}, {"session", session}}));
-        // Back to Ask between turns: set before the next run.
+        // Back to Ask between turns: the idle chat's Pi takes it at once, so nothing
+        // it runs before the next turn (an extension's own turn) keeps Full.
+        const auto before = records().size();
         h.chat.setMode(PermissionMode::Ask);
         QTRY_VERIFY(!h.chat.pending());
         QCOMPARE(h.chat.current().mode, PermissionMode::Ask);
+        QVERIFY(records().mid(before).contains(
+            QJsonObject{{"type", "mode"}, {"mode", "ask"}, {"session", session}}));
         QVERIFY(h.chat.send(QStringLiteral("approve")));
         QTRY_COMPARE(h.chat.approvals().size(), 1);
         // Full while the card waits: the bridge no longer asks, so the call runs and
@@ -1175,6 +1179,55 @@ class PiTest final : public QObject
         const auto waiting = steps[3][0].value<LoginStep>();
         QCOMPARE(waiting.type, QStringLiteral("waiting"));
         QVERIFY(!waiting.promptId);
+    }
+
+    // M12/F3: Pi's progress and info notifications never take an unanswered prompt
+    // away: text, select and secret prompts all stay answerable until answered,
+    // withdrawn, replaced, cancelled or ended.
+    void notificationsKeepTheOpenPrompt()
+    {
+        Harness h;
+        QTRY_VERIFY(h.chat.ready());
+        QSignalSpy steps(&h.chat, &ChatService::loginStep);
+        QSignalSpy finished(&h.chat, &ChatService::authFinished);
+        const struct {
+            const char *provider, *type;
+            bool secret;
+            int options;
+        } cases[] = {{"n", "prompt", false, 0}, {"sel", "select", false, 2}, {"sec", "prompt", true, 0}};
+        for (const auto &c : cases) {
+            const auto provider = QString::fromLatin1(c.provider);
+            const auto before = steps.count();
+            h.chat.authenticate(Login{provider}, provider);
+            QTRY_COMPARE(steps.count(), before + 3); // prompt, progress, info
+            const auto asked = steps[before][0].value<LoginStep>();
+            QVERIFY(asked.promptId);
+            for (int i = before + 1; i < before + 3; ++i) {
+                const auto step = steps[i][0].value<LoginStep>();
+                QCOMPARE(step.provider, provider);
+                QCOMPARE(step.promptId, asked.promptId); // still answerable
+                QCOMPARE(step.type, QString::fromLatin1(c.type));
+                QCOMPARE(step.secret, c.secret);
+                QCOMPARE(step.options.size(), c.options);
+                QCOMPARE(step.placeholder, asked.placeholder);
+                QVERIFY(step.message.startsWith(QStringLiteral("Code?")));
+            }
+            QVERIFY(steps[before + 1][0].value<LoginStep>().message.contains(
+                QStringLiteral("Still waiting for your code")));
+            QCOMPARE(steps[before + 2][0].value<LoginStep>().links.size(), 1);
+            const auto ends = finished.count();
+            h.chat.answerLogin(AnswerLogin{provider, *asked.promptId, QStringLiteral("a")});
+            QTRY_COMPARE(finished.count(), ends + 1); // The prompt was still Pi's: it ends the flow.
+            if (provider == QStringLiteral("n")) { // Answered: what follows asks nothing.
+                QCOMPARE(steps.count(), before + 4);
+                const auto after = steps.last()[0].value<LoginStep>();
+                QVERIFY(!after.promptId);
+                QCOMPARE(after.type, QStringLiteral("waiting"));
+                QCOMPARE(after.message, QStringLiteral("Checking your code"));
+            }
+            QCOMPARE(finished.last()[0].toString(), provider);
+            QVERIFY(h.chat.status().isEmpty());
+        }
     }
 };
 

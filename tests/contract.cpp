@@ -60,6 +60,10 @@ class InspectBackend final : public Backend
     QVector<QPair<RequestId, ReverseResult>> answers;
     bool earlyApproval = false, holdStart = false;
     std::optional<QPair<RequestId, Result>> heldStart;
+    // Sign-in, key, cancel, logout and answers wait here for the test to settle
+    // them, in whatever order a race would.
+    bool holdAuth = false;
+    QVector<QPair<RequestId, Command>> heldAuth;
     InspectBackend()
     {
         connect(&fake, &Backend::sessionEvent, this, [this](const SessionEvent &event) {
@@ -96,6 +100,14 @@ class InspectBackend final : public Backend
     void request(RequestId id, const Command &command) override
     {
         commands.append(command);
+        if (holdAuth && (std::holds_alternative<Login>(command) ||
+                         std::holds_alternative<SetKey>(command) ||
+                         std::holds_alternative<Logout>(command) ||
+                         std::holds_alternative<CancelLogin>(command) ||
+                         std::holds_alternative<AnswerLogin>(command))) {
+            heldAuth.append({id, command});
+            return;
+        }
         if (refuseConfigure && std::holds_alternative<ConfigureSession>(command)) {
             QTimer::singleShot(0, this, [this, id] {
                 emit replied(id, Error{QStringLiteral("model_unavailable"),
@@ -869,6 +881,81 @@ class ContractTest : public QObject
         chat.authenticate(SetKey{"fake", QStringLiteral("fixture")});
         QTRY_COMPARE(chat.models().size(), 2);
         QTRY_VERIFY(!chat.providers().first().status.error.has_value());
+    }
+    // M12/F5: an auth result that is no longer the provider's latest attempt (a
+    // cancelled or replaced sign-in, an answer to it, or anything before a logout)
+    // settles its request but never changes the newer attempt's error or status.
+    void staleAuthResultsNeverTouchNewerState()
+    {
+        InspectBackend backend;
+        backend.holdAuth = true;
+        PreferencesStore prefs({});
+        ChatService chat(&backend, &prefs);
+        QSignalSpy finished(&chat, &ChatService::authFinished);
+        QSignalSpy catalog(&chat, &ChatService::catalogChanged);
+        chat.initialize();
+        QTRY_VERIFY(chat.ready());
+        QTRY_VERIFY(!chat.providers().isEmpty());
+        const auto failed = [](const QString &message) {
+            return Result{Error{QStringLiteral("auth_failed"), message, {}, {}, {}, {}}};
+        };
+        const auto shown = [&chat]() -> QString {
+            for (const auto &p : chat.providers())
+                if (p.id == QStringLiteral("fake") && p.status.error) {
+                    const auto &e = *p.status.error;
+                    return std::holds_alternative<Error>(e) ? std::get<Error>(e).message
+                                                            : std::get<QString>(e);
+                }
+            return {};
+        };
+        // Settle held request `i`, then wait for a catalog read that follows it: a
+        // read made after the result was handled shows what that handling left.
+        const auto settle = [&](qsizetype i, const Result &result) {
+            const auto reads = catalog.count();
+            emit backend.replied(backend.heldAuth[i].first, result);
+            QTRY_VERIFY(catalog.count() > reads);
+        };
+
+        // Stale success must not clear a newer failure.
+        chat.authenticate(Login{"fake"}, QStringLiteral("A"));
+        chat.authenticate(CancelLogin{"fake"}, QStringLiteral("A"));
+        chat.authenticate(Login{"fake"}, QStringLiteral("B"));
+        QCOMPARE(backend.heldAuth.size(), 3);
+        settle(1, Reply{Null{}});                  // A's cancel
+        settle(2, failed(QStringLiteral("B's valid error")));
+        QTRY_COMPARE(shown(), QStringLiteral("B's valid error"));
+        QCOMPARE(chat.status(), QStringLiteral("B's valid error"));
+        settle(0, Reply{Null{}});                  // A's late end: cancelled
+        QCOMPARE(finished.last()[0].toString(), QStringLiteral("A")); // still settled
+        QCOMPARE(shown(), QStringLiteral("B's valid error"));
+        QCOMPARE(chat.status(), QStringLiteral("B's valid error"));
+
+        // Stale failure must not poison a newer success.
+        chat.authenticate(Login{"fake"}, QStringLiteral("C"));
+        chat.authenticate(Login{"fake"}, QStringLiteral("D")); // replaces C
+        settle(4, Reply{Null{}});
+        QTRY_COMPARE(shown(), QString());
+        QVERIFY(chat.status().isEmpty());
+        settle(3, failed(QStringLiteral("C's stale error")));
+        QCOMPARE(finished.last()[0].toString(), QStringLiteral("C"));
+        QCOMPARE(shown(), QString());
+        QVERIFY(chat.status().isEmpty());
+
+        // A delayed answer's failure belongs to the attempt it answered, not to a
+        // logout and new sign-in made since.
+        chat.authenticate(Login{"fake"}, QStringLiteral("E"));
+        chat.answerLogin(AnswerLogin{"fake", QStringLiteral("e-prompt"), QStringLiteral("1")});
+        chat.authenticate(Logout{"fake"});
+        chat.authenticate(Login{"fake"}, QStringLiteral("F"));
+        QCOMPARE(backend.heldAuth.size(), 9);
+        settle(7, Reply{Null{}});                  // the logout
+        settle(6, failed(QStringLiteral("E's answer was refused")));
+        settle(5, failed(QStringLiteral("E failed late")));
+        QCOMPARE(shown(), QString());
+        QVERIFY(chat.status().isEmpty());
+        settle(8, failed(QStringLiteral("F's own error")));
+        QTRY_COMPARE(shown(), QStringLiteral("F's own error"));
+        QCOMPARE(chat.status(), QStringLiteral("F's own error"));
     }
     void storeAndLibraryPersistence()
     {

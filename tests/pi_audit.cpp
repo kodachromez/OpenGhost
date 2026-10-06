@@ -67,6 +67,15 @@ class PiAuditTest : public QObject
             return r.value("type").toString() == type;
         });
     }
+    // Prompts that are the user's input, not the bridge's own `/openghost` requests.
+    int realPrompts() const
+    {
+        const auto records = commands();
+        return std::count_if(records.cbegin(), records.cend(), [](const auto &r) {
+            return r.value("type").toString() == QStringLiteral("prompt") &&
+                   !r.value("message").toString().startsWith(QStringLiteral("/openghost "));
+        });
+    }
     void mode(const char *name) { qputenv("PI_AUDIT_CASE", name); }
   private slots:
     void initTestCase()
@@ -102,7 +111,7 @@ class PiAuditTest : public QObject
         PiBackend backend;
         QVERIFY(code(ask(backend, Initialize{})).isEmpty());
         backend.request(1, start());
-        QTRY_VERIFY(count(QStringLiteral("prompt")) >= 2); // mark, then real prompt
+        QTRY_COMPARE(realPrompts(), 1); // after the bridge's mark and access mode
         QCOMPARE(code(ask(backend, GetSession{"chat", QStringLiteral("client")})),
                  QStringLiteral("acceptance_pending"));
     }

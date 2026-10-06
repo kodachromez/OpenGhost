@@ -10,13 +10,14 @@
 //   Auto: works in the chat's folder on its own; asks before risky commands,
 //         files outside the folder, and other tools.
 //   Full: never asks. Pi's tools keep the authority of the Pi process.
-// Paths are resolved as Pi's tools resolve them (an `@` prefix, `~`, file URLs),
-// and symlinks are followed, so a link inside the folder to a file outside it is
-// outside. Command analysis is 1.3's: a heuristic over the command's text, never
-// a sandbox.
-import { realpathSync } from "node:fs";
+// Paths are resolved as Pi's tools resolve them (an `@` prefix, `~`, file URLs,
+// and read's fallback names), and symlinks are followed, so a link inside the folder
+// to a file outside it is outside. Paths are compared component by component with
+// the host's own separators: on POSIX a backslash is part of a name. Command
+// analysis is 1.3's: a heuristic over the command's text, never a sandbox.
+import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join, relative as nodeRelative, resolve as nodeResolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative as nodeRelative, resolve as nodeResolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const WINDOWS = process.platform === "win32";
@@ -68,26 +69,30 @@ const OUTSIDE_POSIX = [/(^|[^\w.])\.\.\//, /\$HOME\b/, /(^|[\s'"(=,])~\//, /(^|[
 const ABSOLUTE_POWERSHELL = /(?:^|[\s'"(=,;|@])([a-zA-Z]:[\\/][^\s'"|;,)<>`]*)/g;
 const ABSOLUTE_POSIX = /(?:^|[\s'"(=,;|@])(\/(?:[^\s'"|;,)<>`]|\\ )*)/g;
 
-// Windows paths ignore case and take either slash; elsewhere they keep their case and use /.
+// Windows paths ignore case and take either slash; elsewhere they keep their case and
+// use / alone (a backslash is an ordinary character of a name).
 const PATHS = WINDOWS ? {
  sep: '\\', split: /[\\/]+/, home: /^~([\\/]|$)/, here: /^\.[\\/]/, trailing: /[\\/]+$/,
- norm: path => path.replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase(),
  absolute: path => /^[a-zA-Z]:[\\/]/.test(path) || path.startsWith('\\\\'),
  part: part => part.toLowerCase(),
  key: path => path.toLowerCase(),
 } : {
- sep: '/', split: /\/+/, home: /^~(\/|$)/, here: /^\.\//, trailing: /(?<=.)[\\/]+$/,
- norm: path => path.replace(/\\/g, '/').replace(/\/+$/, ''),
+ sep: '/', split: /\/+/, home: /^~(\/|$)/, here: /^\.\//, trailing: /(?<=.)\/+$/,
  absolute: path => path.startsWith('/'),
  part: part => part,
  key: path => path,
 };
-const norm = PATHS.norm;
 
 // The path a Pi tool uses for `path` (Pi's resolveToCwd: Unicode spaces, an `@`
 // prefix, Git Bash drive paths on Windows, `~`, file URLs), with symlinks followed
 // as far as the path exists.
 function resolve(cwd, path) {
+ const full = expand(cwd, path);
+ return full && real(full);
+}
+
+// Pi's resolveToCwd itself, before symlinks are followed.
+function expand(cwd, path) {
  let raw = String(path ?? '').replace(UNICODE_SPACES, ' ');
  if (raw.startsWith('@')) raw = raw.slice(1);
  if (WINDOWS && raw.startsWith('/') && !raw.startsWith('//') && !raw.includes('\\')) {
@@ -99,7 +104,7 @@ function resolve(cwd, path) {
  if (/^file:\/\//.test(raw)) {
   try { raw = fileURLToPath(raw); } catch { return null; }
  }
- return real(nodeResolve(cwd || '.', raw || '.'));
+ return nodeResolve(cwd || '.', raw || '.');
 }
 
 function real(path) {
@@ -113,11 +118,28 @@ function real(path) {
  }
 }
 
-function inside(cwd, path) {
- const full = resolve(cwd, path);
- if (!full || !cwd) return false;
- const root = norm(real(nodeResolve(cwd))), target = norm(full);
- return target === root || target.startsWith(`${root}${PATHS.sep}`);
+// Pi's read opens the first of these that exists (its resolveReadPath): the resolved
+// name, then its macOS screenshot-spacing, NFD, curly-quote and NFD+curly-quote
+// variants. The name and every variant Pi would find are decided on, so whichever
+// one Pi opens was authorized; a variant Pi cannot find is never opened.
+function readVariants(full) {
+ const nfd = full.normalize('NFD');
+ const variants = [full.replace(/ (AM|PM)\./gi, '\u202F$1.'), nfd, full.replace(/'/g, '\u2019'), nfd.replace(/'/g, '\u2019')];
+ return [full, ...new Set(variants.filter(variant => variant !== full && existsSync(variant)))];
+}
+
+// Whether a resolved path is the root or below it: compared by path components with
+// the host's own rules (node's path), never by text.
+function within(root, target) {
+ const rel = nodeRelative(root, target);
+ return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
+function inside(cwd, path, read = false) {
+ const full = cwd && expand(cwd, path);
+ if (!full) return false;
+ const root = real(nodeResolve(cwd));
+ return (read ? readVariants(full) : [full]).every(candidate => within(root, real(candidate)));
 }
 
 function gitArgs(args) {
@@ -136,10 +158,14 @@ function readOnlyGit(args) {
 
 function riskyShell(command, cwd, powershell) {
  const text = String(command || '');
- if ((powershell ? RISKY_POWERSHELL : RISKY_POSIX).some(re => re.test(text))) return true;
- if ((powershell ? OUTSIDE_POWERSHELL : OUTSIDE_POSIX).some(re => re.test(text))) return true;
- for (const match of text.matchAll(powershell ? ABSOLUTE_POWERSHELL : ABSOLUTE_POSIX)) if (!inside(cwd, match[1])) return true;
- return false;
+ // A POSIX shell drops an unquoted backslash (`..\/` is `../`): both spellings are judged.
+ const texts = powershell ? [text] : [...new Set([text, text.replace(/\\([\s\S])/g, '$1')])];
+ return texts.some(text => {
+  if ((powershell ? RISKY_POWERSHELL : RISKY_POSIX).some(re => re.test(text))) return true;
+  if ((powershell ? OUTSIDE_POWERSHELL : OUTSIDE_POSIX).some(re => re.test(text))) return true;
+  for (const match of text.matchAll(powershell ? ABSOLUTE_POWERSHELL : ABSOLUTE_POSIX)) if (!inside(cwd, match[1])) return true;
+  return false;
+ });
 }
 
 // What a step does, as the card shows it. The app tells it from the step itself, never from the agent's own words,
@@ -531,7 +557,7 @@ export function needsApproval(name, input, { mode, cwd }) {
  const ask = mode !== 'auto'; // Anything else is Ask: never less than asked for.
  const args = input && typeof input === 'object' ? input : {};
  switch (name) {
-  case 'read':
+  case 'read': return ask && !inside(cwd, args.path || '.', true);
   case 'ls':
   case 'grep':
   case 'find': return ask && !inside(cwd, args.path || '.');

@@ -394,12 +394,28 @@ void PiBackend::request(RequestId id, const Command &command)
         m_flowOf.insert(id,
                         m_flows[login->provider] = QStringLiteral("og-login-%1").arg(++m_tokens));
         m_steps.remove(login->provider);
+        m_prompts.remove(login->provider);
     } else if (const auto *key = std::get_if<SetKey>(&command); key && key->key) {
         m_flowOf.insert(id, m_flows[key->provider] = QStringLiteral("og-login-%1").arg(++m_tokens));
         m_steps.remove(key->provider);
+        m_prompts.remove(key->provider);
     } else if (const auto *cancel = std::get_if<CancelLogin>(&command)) {
         m_flowOf.insert(id, m_flows.take(cancel->provider));
         m_steps.remove(cancel->provider);
+        m_prompts.remove(cancel->provider);
+    } else if (const auto *answer = std::get_if<AnswerLogin>(&command)) {
+        // Answered: the prompt is closed now, so a notification Pi sends while it
+        // works on the answer never offers it again.
+        if (const auto open = m_prompts.constFind(answer->provider);
+            open != m_prompts.cend() && open->promptId == answer->promptId) {
+            m_prompts.erase(open);
+            auto &shown = m_steps[answer->provider];
+            shown.promptId.reset();
+            shown.placeholder.reset();
+            shown.secret = false;
+            shown.options.clear();
+            shown.type = shown.userCode ? QStringLiteral("device_code") : QStringLiteral("waiting");
+        }
     }
     QTimer::singleShot(0, this, [this, id, command] { dispatch(id, command); });
 }
@@ -455,6 +471,8 @@ void PiBackend::dispatch(RequestId id, const Command &command)
                     report(QStringLiteral("warning"),
                            QStringLiteral("Pi could not reread its models and credentials: ") +
                                errorOf(refreshed, QStringLiteral("no reason given.")));
+                else
+                    ++m_auth; // Every chat's Pi rereads before its next run.
                 m_control->rpc({{"type", "get_available_models"}}, [this,
                                                                     id](const QJsonObject &reply) {
                     if (!succeeded(reply) || !m_control) {
@@ -489,16 +507,11 @@ void PiBackend::dispatch(RequestId id, const Command &command)
             StepDeadline);
     } else if (std::holds_alternative<ProvidersList>(command)) {
         m_control->bridge({{"op", "providers"}}, [this, settle](const QJsonObject &reply) {
-            // Credentials changed since last read (here or outside OpenGhost): every
-            // chat's Pi rereads them before its next run.
-            if (succeeded(reply)) {
-                const auto seen =
-                    QString::fromUtf8(QJsonDocument(reply.value("providers").toArray())
-                                          .toJson(QJsonDocument::Compact));
-                if (!m_authSeen.isEmpty() && seen != m_authSeen)
-                    ++m_auth;
-                m_authSeen = seen;
-            }
+            // The control child reread models.json and credentials first. Whatever
+            // changed there (here or outside OpenGhost, status flags or not), every
+            // chat's Pi rereads before its next run.
+            if (succeeded(reply))
+                ++m_auth;
             settle(reply, QStringLiteral("Pi could not list providers."),
                    [](const QJsonObject &r) { return providersOf(r.value("providers").toArray()); });
         });
@@ -769,6 +782,16 @@ void PiBackend::retire(Chat &chat, std::function<void()> gone)
     auto *pi = std::exchange(chat.pi, nullptr);
     chat.context.reset();
     chat.mode.reset();
+    // Its cards go, declined while the closing child can still hear it.
+    QVector<RequestId> cards;
+    for (auto it = m_approvals.cbegin(); pi && it != m_approvals.cend(); ++it)
+        if (it->pi == pi)
+            cards.append(it.key());
+    for (const auto id : cards) {
+        const auto approval = m_approvals.take(id);
+        pi->send({{"type", "extension_ui_response"}, {"id", approval.dialog}, {"confirmed", false}});
+        emit reverseCancelled(id);
+    }
     if (!pi) {
         if (gone)
             gone();
@@ -1003,33 +1026,44 @@ void PiBackend::configure(RequestId id, const ConfigureSession &configure)
         const auto mode = *configure.permissionMode;
         if (chat.run)
             chat.run->mode = mode;
-        if (!chat.run || !chat.pi) { // Set before the next run (StartTurn names its mode).
+        if (!chat.pi) { // Set before the next run (StartTurn names its mode).
             SessionConfigured configured;
             configured.permissionMode = mode;
             return switchModel(configured);
         }
-        setMode(chat.pi, mode,
-                [this, id, session = configure.sessionId, mode,
-                 switchModel](std::optional<Error> error) {
+        // A child that is idle takes it too: nothing it runs later (an extension's
+        // own turn included) keeps a mode the chat has left.
+        setMode(configure.sessionId, mode,
+                [this, id, mode, switchModel](std::optional<Error> error) {
                     if (error) {
-                        m_chats[session].mode.reset(); // Unknown: set again before the next run.
                         emit replied(id, *error);
                         return;
                     }
-                    m_chats[session].mode = mode;
                     SessionConfigured configured;
                     configured.permissionMode = mode;
                     switchModel(configured);
                 });
     });
 }
-void PiBackend::setMode(PiProcess *pi, PermissionMode mode,
+// The chat's child takes `mode`. Updates are numbered: the bridge ignores one older
+// than the last it applied, and the mode recorded as held is only ever the latest
+// update's, confirmed. Until then it is unknown, so the next run sets it again.
+void PiBackend::setMode(const QString &session, PermissionMode mode,
                         std::function<void(std::optional<Error>)> done)
 {
+    auto &chat = m_chats[session];
+    auto *pi = chat.pi;
+    const auto seq = ++m_modeSeq;
+    chat.modeSent = seq;
+    chat.mode.reset();
     pi->bridge(
-        {{"op", "mode"}, {"mode", modeName(mode)}},
-        [done = std::move(done)](const QJsonObject &reply) {
-            if (succeeded(reply))
+        {{"op", "mode"}, {"mode", modeName(mode)}, {"seq", double(seq)}},
+        [this, session, pi, seq, mode, done = std::move(done)](const QJsonObject &reply) {
+            const bool ok = succeeded(reply);
+            const auto chat = m_chats.find(session);
+            if (ok && chat != m_chats.end() && chat->second.pi == pi && chat->second.modeSent == seq)
+                chat->second.mode = mode;
+            if (ok)
                 done(std::nullopt);
             else
                 done(failure(QStringLiteral("backend_error"),
@@ -1202,17 +1236,16 @@ void PiBackend::advance(const QString &session, const QString &turn)
         const auto mode = run->mode;
         if (chat.mode == mode)
             return advance(session, turn);
-        setMode(chat.pi, mode, [this, session, turn, mode](std::optional<Error> error) {
+        setMode(session, mode, [this, session, turn](std::optional<Error> error) {
             if (!running(session, turn))
                 return;
             if (error)
                 return refuse(session, *error);
-            m_chats[session].mode = mode;
             advance(session, turn);
         });
         return;
     }
-    case 2: { // Credentials changed since this Pi read them: it rereads them.
+    case 2: { // Configuration or credentials reread since this Pi read them: it rereads.
         const auto generation = m_auth;
         if (chat.auth == generation)
             return advance(session, turn);
@@ -1632,6 +1665,7 @@ void PiBackend::auth(RequestId id, const QString &provider, QJsonObject request)
         if (current) {
             m_flows.remove(provider);
             m_steps.remove(provider);
+            m_prompts.remove(provider);
         }
         const bool ok = reply.value("ok").toBool();
         if (ok) {
@@ -1684,8 +1718,10 @@ void PiBackend::step(const QString &token, const QString &kind, const QJsonObjec
     const auto prior = m_steps.value(provider);
     if (kind == QStringLiteral("withdrawn")) {
         // Pi took its prompt back (the browser finished first): no answer is wanted.
-        if (!prior.promptId || *prior.promptId != value.value("promptId").toString())
+        const auto open = m_prompts.constFind(provider);
+        if (open == m_prompts.cend() || open->promptId != value.value("promptId").toString())
             return;
+        m_prompts.erase(open);
         LoginStep waiting;
         waiting.provider = provider;
         waiting.type = prior.userCode ? QStringLiteral("device_code") : QStringLiteral("waiting");
@@ -1706,7 +1742,7 @@ void PiBackend::step(const QString &token, const QString &kind, const QJsonObjec
     step.userCode = prior.userCode;
     const auto type = value.value("type").toString();
     step.message = value.value("message").toString();
-    if (kind == QStringLiteral("prompt")) {
+    if (kind == QStringLiteral("prompt")) { // A new prompt replaces any still open.
         step.promptId = value.value("promptId").toString();
         step.type = type == QStringLiteral("select") ? QStringLiteral("select")
                                                      : QStringLiteral("prompt");
@@ -1716,6 +1752,7 @@ void PiBackend::step(const QString &token, const QString &kind, const QJsonObjec
         for (const auto &option : value.value("options").toArray())
             step.options.append({option.toObject().value("id").toString(),
                                  option.toObject().value("label").toString()});
+        m_prompts.insert(provider, step);
     } else if (type == QStringLiteral("auth_url")) {
         step.url = value.value("url").toString();
         step.message = value.value("instructions")
@@ -1733,6 +1770,18 @@ void PiBackend::step(const QString &token, const QString &kind, const QJsonObjec
     }
     if (step.userCode && step.type == QStringLiteral("waiting"))
         step.type = QStringLiteral("device_code");
+    // A notification while a prompt is open (progress, info, a sign-in page) keeps
+    // that prompt answerable: its question, with the notification beneath it.
+    if (const auto open = m_prompts.constFind(provider);
+        kind != QStringLiteral("prompt") && open != m_prompts.cend()) {
+        auto kept = *open;
+        kept.url = step.url;
+        kept.userCode = step.userCode;
+        kept.links = step.links;
+        if (!step.message.isEmpty() && step.message != kept.message)
+            kept.message += QStringLiteral("\n") + step.message;
+        step = kept;
+    }
     m_steps.insert(provider, step);
     emit globalEvent(step);
 }
@@ -1762,7 +1811,7 @@ bool PiBackend::dialog(const QString &session, PiProcess *pi, const QJsonObject 
         approval.presentation = presentationOf(ask.value("presentation"));
         const auto id = ++m_reverse;
         m_approvals.insert(
-            id, {session, run.turn, request.value("id").toString(), approval.approvalId});
+            id, {session, run.turn, request.value("id").toString(), approval.approvalId, pi});
         emit reverseRequest(id, approval);
         return true;
     }
@@ -1784,11 +1833,15 @@ void PiBackend::answer(RequestId id, const ReverseResult &result)
     const auto approval = *it;
     m_approvals.erase(it);
     const auto *decided = std::get_if<ApprovalAnswer>(&result);
-    const bool allow = decided && decided->decision == Decision::Allow;
+    // Allowed only by the user's Allow for this very card, while the child that asked
+    // and its turn still run: never another child's or a later turn's dialog.
     const auto chat = m_chats.find(approval.session);
-    if (chat != m_chats.end() && chat->second.pi)
-        chat->second.pi->send(
-            {{"type", "extension_ui_response"}, {"id", approval.dialog}, {"confirmed", allow}});
+    if (chat == m_chats.end() || chat->second.pi != approval.pi || !approval.pi)
+        return;
+    const bool allow = decided && decided->decision == Decision::Allow &&
+                       running(approval.session, approval.turn);
+    approval.pi->send(
+        {{"type", "extension_ui_response"}, {"id", approval.dialog}, {"confirmed", allow}});
 }
 // Pi took an approval back unanswered: Stop (decision null), or a new access mode
 // no longer asks for it (allow). Its card goes; an allowed one says so.
@@ -1820,7 +1873,7 @@ void PiBackend::withdrawApprovals(const QString &session, bool answer)
     for (const auto id : ids) {
         const auto approval = m_approvals.take(id);
         auto *pi = m_chats[session].pi;
-        if (answer && pi)
+        if (answer && pi && pi == approval.pi)
             pi->send(
                 {{"type", "extension_ui_response"}, {"id", approval.dialog}, {"confirmed", false}});
         emit reverseCancelled(id);
