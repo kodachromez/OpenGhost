@@ -54,8 +54,10 @@ class WindowController final : public QObject
     explicit WindowController(QObject *parent = nullptr);
     // `dataPath`: the frontend's local chat/usage store; empty keeps it in memory.
     // `host`: the desktop's host services (the browser panel), else none.
+    // `usagePath`: a usage ledger kept apart from `dataPath`; empty shares it.
     WindowController(openghost::Backend *backend, QString preferencesPath, QString dataPath = {},
-                     openghost::HostServices *host = nullptr, QObject *parent = nullptr);
+                     openghost::HostServices *host = nullptr, QString usagePath = {},
+                     QObject *parent = nullptr);
     TranscriptModel *transcript() { return &m_transcript; }
     SessionModel *sessions() { return &m_sessions; }
     Settings *settings() { return &m_settings; }
@@ -190,6 +192,7 @@ class WindowController final : public QObject
     QObject *m_browser = nullptr;
     openghost::PreferencesStore m_preferences;
     std::unique_ptr<openghost::KeyStore> m_store;
+    std::unique_ptr<openghost::KeyStore> m_usageStore; // only with a separate usagePath
     openghost::Library m_library;
     openghost::ChatService m_chat;
     QString m_notice;

@@ -56,7 +56,7 @@ void selectControlsStyle()
 }
 
 WindowController::WindowController(QObject *parent)
-    : WindowController(nullptr, {}, {}, nullptr, parent)
+    : WindowController(nullptr, {}, {}, nullptr, {}, parent)
 {
 }
 
@@ -72,11 +72,12 @@ std::unique_ptr<openghost::KeyStore> keyStore(const QString &path)
 
 WindowController::WindowController(openghost::Backend *backend, QString preferencesPath,
                                    QString dataPath, openghost::HostServices *host,
-                                   QObject *parent)
+                                   QString usagePath, QObject *parent)
     : QObject(parent), m_browser(qobject_cast<openghost::Browser *>(host)),
       m_preferences(std::move(preferencesPath)), m_store(keyStore(dataPath)),
+      m_usageStore(usagePath.isEmpty() ? nullptr : keyStore(usagePath)),
       m_library(m_store.get()), m_chat(backend, &m_preferences, &m_library, host),
-      m_general(&m_preferences), m_usage(m_store.get())
+      m_general(&m_preferences), m_usage(m_usageStore ? m_usageStore.get() : m_store.get())
 {
     registerNativeTypes();
     connect(m_chat.plugins(), &openghost::Plugins::entriesChanged, this,

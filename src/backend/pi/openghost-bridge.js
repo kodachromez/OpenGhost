@@ -6,15 +6,38 @@
 //   openghost:<token>:event   a Pi auth event (auth_url, device_code, info, progress)
 //   openghost:<token>:prompt  {promptId, type, message, placeholder?, options?}
 // A prompt is answered by {op: "answer", promptId, value} (or cancelled).
+// {op: "retry"} retries Pi's failed latest reply in place (OpenGhost's Retry).
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
 
+const RETRY = "openghost-retry"; // The custom message that starts a retry run.
 const logins = new Map(); // provider -> AbortController
 const prompts = new Map(); // promptId -> {resolve, reject}
 let nextPrompt = 0;
 
+// The latest context message on the active branch, skipping retry triggers.
+function latest(sessionManager) {
+  const branch = sessionManager.getBranch();
+  for (let i = branch.length - 1; i >= 0; i--) {
+    const entry = branch[i];
+    if (entry.type === "custom_message" && entry.customType === RETRY) continue;
+    if (entry.type === "message" || entry.type === "custom_message") return entry;
+  }
+  return undefined;
+}
+
 export default function (pi) {
+  // A retry trigger never reaches the model, nor do the failed replies it retried:
+  // the retry sees exactly the context the failed reply saw.
+  pi.on("context", (event) => {
+    const messages = [];
+    for (const message of event.messages) {
+      if (message.role !== "custom" || message.customType !== RETRY) messages.push(message);
+      else while (messages.at(-1)?.role === "assistant" && messages.at(-1).stopReason === "error") messages.pop();
+    }
+    return { messages };
+  });
   pi.registerCommand("openghost", {
-    description: "OpenGhost frontend bridge (providers, login, logout)",
+    description: "OpenGhost frontend bridge (providers, login, logout, retry)",
     handler: async (args, ctx) => {
       let request;
       try {
@@ -86,6 +109,15 @@ export default function (pi) {
         } else if (request.op === "cancel") {
           logins.get(request.provider)?.abort();
           status("", { ok: true });
+        } else if (request.op === "retry") {
+          // No new or repeated input: Pi continues its own context from where the
+          // failed reply left it, so earlier tool effects are not run again.
+          if (!ctx.isIdle()) throw new Error("Pi is still busy.");
+          const failed = latest(ctx.sessionManager);
+          if (failed?.type !== "message" || failed.message.role !== "assistant" || failed.message.stopReason !== "error")
+            throw new Error("Pi's latest reply did not fail, so there is nothing to retry.");
+          status("", { ok: true });
+          pi.sendMessage({ customType: RETRY, content: [], display: false }, { triggerTurn: true });
         } else if (request.op === "logout") {
           await runtime.logout(request.provider, { signal: AbortSignal.timeout(15_000) });
           status("", { ok: true });
