@@ -27,7 +27,16 @@ namespace openghost
 // images, sent only to a model Pi says sees images. Delete stops the chat's child
 // and removes its Pi session file. Providers, sign-in, logout and failed-turn Retry go through Pi's
 // own runtime via the bridge (src/backend/pi/openghost-bridge.js); Pi stores every
-// credential.
+// credential. Each sign-in is a flow of its own: a cancelled or superseded one's
+// steps and outcome never reach the newer one.
+//
+// Ask / Auto / Full are enforced inside Pi by the bridge (its tool_call handler and
+// src/backend/pi/openghost-policy.js), set on the chat's child before every run and
+// when the chat changes mode. A call that needs approval is Pi's own extension UI
+// confirm, shown as an approval card (a reverse request) and answered once; Stop,
+// the turn's end or Pi taking it back withdraws the card. Any other extension
+// dialog is cancelled at once and said, as are extension errors: nothing waits on
+// a question OpenGhost cannot show.
 class PiBackend final : public Backend
 {
     Q_OBJECT
@@ -38,7 +47,7 @@ class PiBackend final : public Backend
     ~PiBackend() override;
     void request(RequestId id, const Command &command) override;
     void cancelRequest(RequestId id) override;
-    void answer(RequestId, const ReverseResult &) override {}
+    void answer(RequestId id, const ReverseResult &result) override;
     void browserChanged(const BrowserState &) override {}
     QString sessionFile(const QString &session) const;
 
@@ -72,6 +81,7 @@ class PiBackend final : public Backend
         QString text;          // Pi's prompt message: the files' text, then the input's
         QJsonArray images;     // Pi's prompt images, in the input's order
         QJsonObject context;   // instructions and pinned files, for the bridge
+        PermissionMode mode = PermissionMode::Ask;
         ModelSelection chosen;
         QString message, stopReason, errorMessage, failedTurn;
         QVector<Steer> steers;
@@ -91,7 +101,13 @@ class PiBackend final : public Backend
         QString last;                        // journal key of Pi's latest accepted turn
         QHash<QString, QPair<QString, bool>> recorded; // client -> turn, retry: taken before
         std::optional<QJsonObject> context; // what this child's bridge holds
+        std::optional<PermissionMode> mode; // the access mode this child's bridge holds
+        int auth = 0;                       // the credential generation its Pi has read
         QVector<RequestId> deletes;          // DeleteSession calls awaiting erasure
+    };
+    // A tool call waiting on the user: Pi's confirm dialog, shown as a card.
+    struct Approval {
+        QString session, turn, dialog, approvalId;
     };
     void dispatch(RequestId id, const Command &command);
     Result execute(const Command &command);
@@ -124,6 +140,13 @@ class PiBackend final : public Backend
     void setModel(PiProcess *pi, const QString &provider, const QString &model,
                   std::function<void(std::optional<Error>, ModelSelection)> done);
     void step(const QString &token, const QString &kind, const QJsonObject &value);
+    bool dialog(const QString &session, PiProcess *pi, const QJsonObject &request);
+    void approvalEnded(const QString &session, const QString &approvalId, const QJsonObject &value);
+    void withdrawApprovals(const QString &session, bool answer);
+    void report(const QString &level, const QString &message);
+    void extensionRecord(const QString &type, const QJsonObject &record);
+    void setMode(PiProcess *pi, PermissionMode mode,
+                 std::function<void(std::optional<Error>)> done);
     void runEvent(const QString &session, const QString &type, const QJsonObject &object);
     Sequence next(Chat &chat);
     void publish(const QString &session, EventPayload payload, bool message = false);
@@ -137,9 +160,14 @@ class PiBackend final : public Backend
     QHash<QString, QVector<std::function<void(const Result &)>>> m_stops; // turn -> awaiting abort
     QTimer m_reaper;
     QHash<QString, QString> m_logins;  // bridge token -> provider signing in
+    QHash<QString, QString> m_flows;   // provider -> its current sign-in's token
+    QHash<RequestId, QString> m_flowOf; // Login/SetKey/CancelLogin request -> its flow
     QHash<QString, LoginStep> m_steps; // provider -> its current sign-in step
-    QSet<QString> m_cancelled;         // providers whose sign-in was cancelled
     QSet<RequestId> m_pendingStarts, m_withdrawn; // cancellation before dispatch/load
     int m_tokens = 0;
+    int m_auth = 1;     // credential generation: bumped when Pi's credentials change
+    QString m_authSeen; // the providers' configured/stored state last read
+    QHash<RequestId, Approval> m_approvals;   // reverse request -> its Pi dialog
+    RequestId m_reverse = RequestId(1) << 48; // reverse request IDs, apart from callers'
 };
 } // namespace openghost

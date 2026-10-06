@@ -91,6 +91,12 @@ to **OFF** and enables all four checks:
   attachment/approval cards, deletion and fixture auth.
   Both UI smokes also drive the production Plugins page over a scripted backend:
   button dispatch, pending controls, failures, external changes and capability loss.
+- `native_pi_real_test`: `PiBackend` against the installed `pi` (skipped without
+  one) with Pi AI's faux model in a throwaway agent directory: Ask/Auto/Full,
+  approval cards, Stop, other extensions' dialogs and errors. No network or
+  credentials. `native_pi_policy_check` (needs `node`) checks the access policy's
+  decisions directly; `native_sign_in_test` checks the sign-in form across
+  cancel/sign-in-again races against the scripted Pi.
 
 CTest uses offscreen/software rendering. Smokes isolate appearance, preferences
 and the library in temporary directories (even the fake smoke uses a temporary

@@ -838,6 +838,168 @@ class PiTest final : public QObject
         QTRY_VERIFY(h.settled());
         QCOMPARE(runs(piName(h, h.chat.current().id)).last().size(), 0);
     }
+
+    // Ask / Auto / Full reach Pi's bridge before the run; a call the bridge asks
+    // about is an approval card, answered exactly once.
+    void approvalsAreAskedAndAnsweredOnce()
+    {
+        Harness h;
+        QTRY_VERIFY(h.chat.ready());
+        QVERIFY(h.chat.send(QStringLiteral("approve")));
+        QTRY_COMPARE(h.chat.approvals().size(), 1);
+        const auto card = h.chat.approvals().first();
+        QCOMPARE(card.data.sessionId, h.chat.current().id);
+        QCOMPARE(card.data.approvalId, QStringLiteral("og-approval-1"));
+        QCOMPARE(card.data.toolCallId, QStringLiteral("call-1"));
+        QCOMPARE(card.data.tool, QStringLiteral("bash"));
+        QVERIFY(card.data.presentation);
+        QCOMPARE(card.data.presentation->effect, std::optional(QStringLiteral("change")));
+        QCOMPARE(card.data.presentation->code, std::optional(QStringLiteral("touch made.txt")));
+        QCOMPARE(card.data.presentation->places.size(), 1);
+        const auto session = piName(h, h.chat.current().id);
+        QVERIFY(commands(session).indexOf(QStringLiteral("mode ")) <
+                commands(session).indexOf(QStringLiteral("prompt approve")));
+        QVERIFY(records().contains(
+            QJsonObject{{"type", "mode"}, {"mode", "ask"}, {"session", session}}));
+        h.chat.approve(card.request, false);
+        QTRY_VERIFY(h.settled());
+        QVERIFY(h.text(DisplayRow::Role::Assistant).endsWith(QStringLiteral("\n\nblocked")));
+        QVERIFY(h.chat.approvals().isEmpty());
+        h.chat.approve(card.request, true); // Answered already: nothing more reaches Pi.
+        QVERIFY(h.chat.send(QStringLiteral("approve")));
+        QTRY_COMPARE(h.chat.approvals().size(), 1);
+        h.chat.approve(h.chat.approvals().first().request, true);
+        QTRY_VERIFY(h.settled());
+        QVERIFY(h.text(DisplayRow::Role::Assistant).endsWith(QStringLiteral("\n\nran")));
+        int answers = 0;
+        for (const auto &record : records())
+            answers += record.value("type").toString() == QStringLiteral("ui_response");
+        QCOMPARE(answers, 2);
+        // The mode the bridge already holds is not sent again.
+        int modes = 0;
+        for (const auto &record : records())
+            modes += record.value("type").toString() == QStringLiteral("mode");
+        QCOMPARE(modes, 1);
+    }
+
+    void fullNeverAsksAndModeChangesReachTheRunningPi()
+    {
+        Harness h;
+        QTRY_VERIFY(h.chat.ready());
+        h.chat.setMode(PermissionMode::Full);
+        QVERIFY(h.chat.send(QStringLiteral("approve")));
+        QTRY_VERIFY(h.settled());
+        QVERIFY(h.text(DisplayRow::Role::Assistant).endsWith(QStringLiteral("\n\nran")));
+        QVERIFY(h.chat.approvals().isEmpty());
+        const auto session = piName(h, h.chat.current().id);
+        QVERIFY(records().contains(
+            QJsonObject{{"type", "mode"}, {"mode", "full"}, {"session", session}}));
+        // Back to Ask between turns: set before the next run.
+        h.chat.setMode(PermissionMode::Ask);
+        QTRY_VERIFY(!h.chat.pending());
+        QCOMPARE(h.chat.current().mode, PermissionMode::Ask);
+        QVERIFY(h.chat.send(QStringLiteral("approve")));
+        QTRY_COMPARE(h.chat.approvals().size(), 1);
+        // Full while the card waits: the bridge no longer asks, so the call runs and
+        // the card goes without an answer.
+        h.chat.setMode(PermissionMode::Full);
+        QTRY_VERIFY(h.settled());
+        QVERIFY(h.text(DisplayRow::Role::Assistant).endsWith(QStringLiteral("\n\nran")));
+        QVERIFY(h.chat.approvals().isEmpty());
+        QCOMPARE(h.chat.current().mode, PermissionMode::Full);
+        for (const auto &record : records())
+            QVERIFY(record.value("type").toString() != QStringLiteral("ui_response"));
+    }
+
+    void stopWithdrawsTheApproval()
+    {
+        Harness h;
+        QTRY_VERIFY(h.chat.ready());
+        QVERIFY(h.chat.send(QStringLiteral("approve")));
+        QTRY_COMPARE(h.chat.approvals().size(), 1);
+        h.chat.stop();
+        QTRY_VERIFY(h.settled());
+        QVERIFY(h.chat.approvals().isEmpty());
+        QCOMPARE(h.text(DisplayRow::Role::Note), QStringLiteral("Stopped."));
+        QVERIFY(records().contains(QJsonObject{
+            {"type", "tool"}, {"ran", false}, {"session", piName(h, h.chat.current().id)}}));
+        QVERIFY(h.chat.send(QStringLiteral("hello"))); // The chat goes on.
+        QTRY_VERIFY(h.settled());
+        QCOMPARE(h.text(DisplayRow::Role::Assistant), QStringLiteral("Echo: hello"));
+    }
+
+    // Another extension's dialog would block Pi forever: declined at once, and said.
+    void otherExtensionDialogsAndErrorsAreDeclinedAndSaid()
+    {
+        Harness h;
+        QTRY_VERIFY(h.chat.ready());
+        QStringList logs;
+        QObject::connect(&h.backend, &Backend::globalEvent, [&](const GlobalEvent &event) {
+            if (const auto *log = std::get_if<Log>(&event))
+                logs.append(log->level + ' ' + log->message);
+        });
+        QVERIFY(h.chat.send(QStringLiteral("foreign")));
+        QTRY_VERIFY(h.settled());
+        QCOMPARE(h.text(DisplayRow::Role::Assistant), QStringLiteral("foreign: cancelled"));
+        QVERIFY(h.chat.status().contains(QStringLiteral("“Pick one”")));
+        QVERIFY(records().contains(QJsonObject{{"type", "ui_response"},
+                                               {"cancelled", true},
+                                               {"session", piName(h, h.chat.current().id)}}));
+        QVERIFY(h.chat.send(QStringLiteral("ext-error")));
+        QTRY_VERIFY(h.settled());
+        QCOMPARE(h.text(DisplayRow::Role::Assistant), QStringLiteral("Echo: ext-error"));
+        QVERIFY(
+            logs.contains(QStringLiteral("error A Pi extension (helper.ts) failed: helper broke")));
+        QVERIFY(logs.contains(QStringLiteral("warning helper is unhappy")));
+        QCOMPARE(h.chat.status(), QStringLiteral("helper is unhappy"));
+    }
+
+    // Each sign-in is its own flow: a cancelled one's late step and end never reach
+    // the next, and a prompt Pi takes back leaves the form waiting.
+    void signInFlowsNeverCross()
+    {
+        Harness h;
+        QTRY_VERIFY(h.chat.ready());
+        QVERIFY(h.chat.send(QStringLiteral("hello"))); // The chat's Pi, before sign-in
+        QTRY_VERIFY(h.settled());
+        QSignalSpy steps(&h.chat, &ChatService::loginStep);
+        QSignalSpy finished(&h.chat, &ChatService::authFinished);
+        h.chat.authenticate(Login{QStringLiteral("p")}, QStringLiteral("A"));
+        QTRY_COMPARE(steps.count(), 1);
+        QVERIFY(steps[0][0].value<LoginStep>().promptId->startsWith(QStringLiteral("p-")));
+        // Cancel and sign in again at once: A's stale step arrives after B began.
+        h.chat.authenticate(CancelLogin{QStringLiteral("p")}, QStringLiteral("A"));
+        h.chat.authenticate(Login{QStringLiteral("p")}, QStringLiteral("B"));
+        QTRY_COMPARE(steps.count(), 2);
+        QTRY_COMPARE(finished.count(), 2); // A's login (cancelled) and its cancel
+        QTest::qWait(200);
+        QCOMPARE(steps.count(), 2);
+        const auto b = steps[1][0].value<LoginStep>();
+        QVERIFY(b.promptId && *b.promptId != steps[0][0].value<LoginStep>().promptId &&
+                *b.promptId != QStringLiteral("late"));
+        QCOMPARE(finished[0][0].toString(), QStringLiteral("A"));
+        QCOMPARE(finished[1][0].toString(), QStringLiteral("A"));
+        QVERIFY(!h.chat.status().contains(QStringLiteral("cancelled"))); // not an error
+        h.chat.answerLogin(AnswerLogin{QStringLiteral("p"), *b.promptId, QStringLiteral("123")});
+        QTRY_COMPARE(finished.count(), 3);
+        QCOMPARE(finished[2][0].toString(), QStringLiteral("B"));
+        // New credentials: the chat's Pi rereads them before its next run.
+        QVERIFY(!records().contains(
+            QJsonObject{{"type", "refresh"}, {"session", piName(h, h.chat.current().id)}}));
+        QVERIFY(h.chat.send(QStringLiteral("again")));
+        QTRY_VERIFY(h.settled());
+        QVERIFY(records().contains(
+            QJsonObject{{"type", "refresh"}, {"session", piName(h, h.chat.current().id)}}));
+        // Settings' catalog makes the control child reread models.json and credentials.
+        QVERIFY(records().contains(QJsonObject{{"type", "refresh"}, {"session", ""}}));
+        // A prompt Pi takes back: the form waits, asking nothing.
+        h.chat.authenticate(Login{QStringLiteral("w")}, QStringLiteral("W"));
+        QTRY_COMPARE(steps.count(), 4);
+        QVERIFY(steps[2][0].value<LoginStep>().promptId);
+        const auto waiting = steps[3][0].value<LoginStep>();
+        QCOMPARE(waiting.type, QStringLiteral("waiting"));
+        QVERIFY(!waiting.promptId);
+    }
 };
 
 QTEST_GUILESS_MAIN(PiTest)

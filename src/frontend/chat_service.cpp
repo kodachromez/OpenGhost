@@ -304,6 +304,10 @@ ChatService::ChatService(Backend *backend, PreferencesStore *preferences, Librar
                 m_plugins.observe(*plugin);
             else if (const auto *step = std::get_if<LoginStep>(&event))
                 emit loginStep(*step);
+            else if (const auto *log = std::get_if<Log>(&event);
+                     log && (log->level == QStringLiteral("error") ||
+                             log->level == QStringLiteral("warning")))
+                problem({QStringLiteral("backend_log"), log->message, {}, {}, {}, {}});
             else if (std::holds_alternative<AuthChanged>(event) ||
                      std::holds_alternative<ModelsChanged>(event))
                 refresh();
@@ -1797,10 +1801,10 @@ void ChatService::refresh()
         });
     });
 }
-void ChatService::authenticate(const Command &command)
+void ChatService::authenticate(const Command &command, const QString &flow)
 {
     if (!m_ready) {
-        emit authFinished();
+        emit authFinished(flow);
         return;
     }
     QString provider;
@@ -1813,10 +1817,10 @@ void ChatService::authenticate(const Command &command)
         },
         command);
     if (provider.isEmpty()) {
-        emit authFinished();
+        emit authFinished(flow);
         return;
     }
-    call(command, [this, provider](const Result &result) {
+    call(command, [this, provider, flow](const Result &result) {
         if (const auto *error = std::get_if<Error>(&result)) {
             m_authErrors.insert(provider, *error);
             problem(*error);
@@ -1825,7 +1829,7 @@ void ChatService::authenticate(const Command &command)
             m_status.clear();
         }
         refresh();
-        emit authFinished();
+        emit authFinished(flow);
     });
 }
 void ChatService::answerLogin(const AnswerLogin &answer)

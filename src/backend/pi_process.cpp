@@ -239,6 +239,24 @@ void PiProcess::line(const QByteArray &bytes)
         }
         return;
     }
+    if (type == QStringLiteral("extension_ui_request")) {
+        const auto method = object.value("method").toString();
+        if (method == QStringLiteral("select") || method == QStringLiteral("confirm") ||
+            method == QStringLiteral("input") || method == QStringLiteral("editor")) {
+            if (!onDialog || !onDialog(object)) {
+                fprintf(stderr, "[pi] declined extension %s \"%s\"\n", qPrintable(method),
+                        qPrintable(object.value("title").toString()));
+                send({{"type", "extension_ui_response"},
+                      {"id", object.value("id").toString()},
+                      {"cancelled", true}});
+            }
+            return;
+        }
+        if (method == QStringLiteral("notify") && onExtension)
+            onExtension(QStringLiteral("notify"), object);
+    } else if (type == QStringLiteral("extension_error") && onExtension) {
+        onExtension(type, object);
+    }
     if (onRecord)
         onRecord(type, object);
 }
