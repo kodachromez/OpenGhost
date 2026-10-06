@@ -373,6 +373,11 @@ The checksums above identify the originally audited snapshot. The remediation be
 
 ### 2026-10-05 — M02, M03, M13, M14, M16
 
+**Follow-up audit:** [Pi lifecycle remediation audit](pi-lifecycle-audit.md) records
+race/identity/accounting gaps found in this remediation, the corrective regression
+tests, and the remaining qualification limits. The original FIXED labels below
+are not an unconditional real-provider or crash-safe accounting qualification.
+
 Scope was limited to these five items. Provider/auth, attachments, permissions and session persistence were not touched. Changes: `src/backend/pi_backend.{cpp,h}` (turn lifecycle), `src/backend/pi/openghost-bridge.js` (`retry` op and `context` filter), and one finish-reason note in `src/frontend/chat_service.cpp` (`handled`). The Pi usage ledger path is in `src/main.cpp` and `src/window.{cpp,h}`.
 
 | Item | Rows → status | What settles it |

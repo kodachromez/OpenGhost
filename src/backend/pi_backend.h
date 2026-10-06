@@ -54,7 +54,8 @@ class PiBackend final : public Backend
         TurnStatus status = TurnStatus::Done;
     };
     struct Steer {
-        QString client, queued; // queued: the text Pi put in its steering queue
+        QString client;
+        std::optional<QString> queued; // exact queued text, including an empty transform
         DisplayInput input;
         bool admitted = false, applied = false;
     };
@@ -72,15 +73,17 @@ class PiBackend final : public Backend
         QJsonArray images;     // Pi's prompt images, in the input's order
         QJsonObject context;   // instructions and pinned files, for the bridge
         ModelSelection chosen;
-        QString message, stopReason, errorMessage;
+        QString message, stopReason, errorMessage, failedTurn;
         QVector<Steer> steers;
         QString steering; // client input awaiting Pi's steer reply
+        std::optional<TurnCompleted> settled; // wait for an in-flight steer before ending
+        bool clearing = false;
         QStringList queue; // Pi's steering queue, as last reported
     };
     // One OpenGhost session and the Pi child running its session file.
     struct Chat {
         PiProcess *pi = nullptr;
-        bool loaded = false, loading = false, deleting = false;
+        bool loaded = false, loading = false, deleting = false, stopping = false;
         QVector<Then> waiting; // until loaded
         QString version;       // its incarnation; empty: Pi has no such session
         Sequence seq = 0;
@@ -101,6 +104,7 @@ class PiBackend final : public Backend
     void loaded(const QString &session, const QJsonArray &entries);
     void entries(const QString &session, std::function<void(std::optional<QJsonArray>, Error)> done);
     void getSession(RequestId id, const GetSession &get);
+    bool recoverJournal(const QString &session, const QString &client, const QJsonArray &entries);
     void configure(RequestId id, const ConfigureSession &configure);
     void remove(RequestId id, const QString &session);
     void erase(const QString &session);
@@ -135,6 +139,7 @@ class PiBackend final : public Backend
     QHash<QString, QString> m_logins;  // bridge token -> provider signing in
     QHash<QString, LoginStep> m_steps; // provider -> its current sign-in step
     QSet<QString> m_cancelled;         // providers whose sign-in was cancelled
+    QSet<RequestId> m_pendingStarts, m_withdrawn; // cancellation before dispatch/load
     int m_tokens = 0;
 };
 } // namespace openghost

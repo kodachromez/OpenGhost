@@ -319,6 +319,7 @@ class PiTest final : public QObject
         Harness h;
         QTRY_VERIFY(h.chat.ready());
         QVERIFY(h.chat.send(QStringLiteral("delay")));
+        QTRY_VERIFY(commands().contains(QStringLiteral("prompt delay"))); // sent, not yet admitted
         h.chat.stop();
         QVERIFY(!h.chat.busy());
         QTRY_VERIFY(commands().contains(QStringLiteral("abort ")));

@@ -32,7 +32,8 @@ PiProcess::PiProcess(QString bridgePath, QObject *parent)
     });
     connect(&m_pi, &QProcess::finished, this, [this](int code, QProcess::ExitStatus) {
         fprintf(stderr, "[pi] %lld exited with code %d\n", static_cast<long long>(pid()), code);
-        const QJsonObject exited{{"success", false}, {"ok", false}, {"error", "Pi exited."}};
+        const QJsonObject exited{{"success", false}, {"ok", false}, {"transport", true},
+                                 {"error", "Pi exited."}};
         const auto waiting = std::exchange(m_waiting, {});
         for (const auto &done : waiting)
             done(exited);
@@ -104,7 +105,8 @@ void PiProcess::rpc(QJsonObject command, Done done, int deadline)
     const auto type = command.value("type").toString();
     command.insert("id", id);
     if (!send(command)) {
-        done({{"success", false}, {"ok", false}, {"error", "Pi is not running."}});
+        done({{"success", false}, {"ok", false}, {"transport", true},
+              {"error", "Pi is not running."}});
         return;
     }
     m_waiting.insert(id, std::move(done));
@@ -134,6 +136,9 @@ QString PiProcess::bridge(QJsonObject request, Done done, int deadline)
         };
         QTimer::singleShot(deadline, this, [this, once, token, deadline] {
             m_waiting.remove(QStringLiteral("bridge:") + token);
+            m_bridgeQueue.removeIf([&](const auto &pending) {
+                return pending.first.value("token").toString() == token;
+            });
             if (const auto call = std::exchange(*once, {}))
                 call({{"ok", false},
                       {"timeout", true},
@@ -158,7 +163,7 @@ QString PiProcess::bridge(QJsonObject request, Done done, int deadline)
                                QString::fromUtf8(QJsonDocument(request).toJson(
                                    QJsonDocument::Compact))}}))
         m_waiting.take(QStringLiteral("bridge:") + token)(
-            {{"ok", false}, {"error", "Pi is not running."}});
+            {{"ok", false}, {"transport", true}, {"error", "Pi is not running."}});
     return token;
 }
 void PiProcess::close(std::function<void()> done)
@@ -182,6 +187,11 @@ void PiProcess::readStdout()
     m_buffer += m_pi.readAllStandardOutput();
     qsizetype at;
     while ((at = m_buffer.indexOf('\n')) >= 0) { // LF only
+        if (at > MaxLine) { // Check complete records too, before parsing/copying.
+            m_buffer.clear();
+            m_pi.kill();
+            return;
+        }
         const QByteArray bytes = m_buffer.left(at);
         m_buffer.remove(0, at + 1);
         line(bytes);

@@ -1077,9 +1077,20 @@ void ChatService::applyEvent(ChatRecord &chat, const SessionEvent &event, bool r
         emit changed();
         return;
     }
+    if (turn.stopped && id.turnId == turn.remoteId && id.clientTurnId == turn.clientId &&
+        id.messageId && std::holds_alternative<MessageStarted>(event.payload)) {
+        // Freeze text, not accounting: Pi may begin a new assistant attempt while
+        // Stop is in flight (tools/automatic retry). Retain its identity for usage.
+        if (std::none_of(turn.messages.cbegin(), turn.messages.cend(),
+                         [&](const auto &m) { return m.id == *id.messageId; }))
+            turn.messages.append({*id.messageId, {}, turn.replyKey, true});
+        return;
+    }
     if (turn.stopped && !turn.remoteId.isEmpty() &&
         std::holds_alternative<TurnCompleted>(event.payload) && id.turnId == turn.remoteId) {
         // The backend's own end of a stopped turn settles its recovery markers.
+        turn.completed = replay ? -1 : QDateTime::currentMSecsSinceEpoch();
+        updateMetrics(chat, turn);
         settlePending(chat, turn.clientId);
         if (!replay)
             save(chat);
@@ -1093,7 +1104,7 @@ void ChatService::applyEvent(ChatRecord &chat, const SessionEvent &event, bool r
         if (id.clientTurnId == std::optional<QString>(turn.clientId) && id.turnId &&
             !id.turnId->isEmpty() && (turn.remoteId.isEmpty() || turn.remoteId == *id.turnId)) {
             turn.remoteId = *id.turnId;
-            if (turn.started < 0)
+            if (turn.started < 0 && !replay)
                 turn.started = QDateTime::currentMSecsSinceEpoch();
             drainEarly(chat);
         }
