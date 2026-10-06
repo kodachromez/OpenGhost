@@ -2,7 +2,7 @@
 // `pi --mode rpc` (no model, network or credentials): real acceptance, final
 // errors, Stop, steering receipts, failed-turn Retry and usage; one Pi session
 // per chat (isolation, side-by-side runs, restart recovery, deletion), per-chat
-// models and standing instructions.
+// models, standing instructions and pinned files, and message attachments.
 #include "backend/pi_backend.h"
 #include "frontend/chat_service.h"
 #include "frontend/library.h"
@@ -93,6 +93,31 @@ Result ask(Backend &backend, const Command &command)
     loop.exec();
     QObject::disconnect(connection);
     return answer.value_or(Result{Error{QStringLiteral("test_timeout"), {}, {}, {}, {}, {}}});
+}
+Attachment textFile(const QString &name, const QString &text)
+{
+    Attachment file;
+    file.id = name;
+    file.kind = Attachment::Kind::Text;
+    file.mime = QStringLiteral("text/plain");
+    file.name = name;
+    file.text = text;
+    file.size = text.toUtf8().size();
+    return file;
+}
+// A 1×1 PNG, as the composer prepares one.
+Attachment picture(const QString &name)
+{
+    Attachment file;
+    file.id = name;
+    file.kind = Attachment::Kind::Image;
+    file.mime = QStringLiteral("image/png");
+    file.name = name;
+    file.dataUrl = QStringLiteral("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAf"
+                                  "FcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==");
+    file.size = 70;
+    file.width = file.height = 1;
+    return file;
 }
 QString code(const Result &result)
 {
@@ -320,12 +345,11 @@ class PiTest final : public QObject
             QTRY_VERIFY(!h.chat.pending());
         }
         QCOMPARE(h.state(QStringLiteral("dup")), QStringLiteral("queued"));
-        Attachment file;
-        file.kind = Attachment::Kind::Text;
-        file.name = QStringLiteral("a.txt");
-        file.text = QStringLiteral("x");
-        file.size = 1;
-        QVERIFY(h.chat.send({}, {file}));
+        // A text file steers with its contents, as a start sends them.
+        QVERIFY(h.chat.send({}, {textFile(QStringLiteral("a.txt"), QStringLiteral("x"))}));
+        QTRY_VERIFY(!h.chat.pending());
+        // A picture is refused, never sent without its picture.
+        QVERIFY(h.chat.send(QStringLiteral("look"), {picture(QStringLiteral("p.png"))}));
         QTRY_VERIFY(!h.chat.pending());
         QVERIFY(h.chat.send(QStringLiteral("dup now")));
         QTRY_VERIFY(h.settled());
@@ -333,12 +357,16 @@ class PiTest final : public QObject
         int applied = 0;
         for (const auto &row : h.chat.current().rows)
             if (row.role == DisplayRow::Role::User && !row.clientInputId.isEmpty()) {
-                if (row.attachments.isEmpty())
+                if (row.attachments.isEmpty() || !row.attachments.first().image.value_or(false))
                     applied += row.state == QStringLiteral("applied");
                 else
                     QCOMPARE(row.state, QStringLiteral("notApplied")); // Never dropped.
             }
-        QCOMPARE(applied, 4); // Transformed and identical texts each matched once.
+        // Transformed and identical texts and the file each matched once.
+        QCOMPARE(applied, 5);
+        QVERIFY(commands().contains(QStringLiteral("steer <file name=\"a.txt\">\nx\n</file>\n")));
+        for (const auto &record : records())
+            QVERIFY(!record.contains("images"));
     }
 
     void identitiesAreChecked()
@@ -683,6 +711,131 @@ class PiTest final : public QObject
         QVERIFY(h.chat.send(QStringLiteral("hi")));
         QTRY_VERIFY(h.settled());
         QCOMPARE(runs(piName(h, h.chat.current().id)), QStringList{"New."});
+    }
+
+    void attachmentsReachPiAsItsOwnFileInput()
+    {
+        Harness h;
+        QTRY_VERIFY(h.chat.ready());
+        const auto prompts = [this] {
+            QVector<QJsonObject> list;
+            for (const auto &record : records())
+                if (record.value("type").toString() == QStringLiteral("prompt") &&
+                    !record.value("message").toString().startsWith(QStringLiteral("/openghost ")))
+                    list.append(record);
+            return list;
+        };
+        // A text file's whole contents precede the message, as `pi @file` puts them;
+        // the chat shows the message and the file's card, not the contents.
+        QVERIFY(h.chat.send(QStringLiteral("Summarize"),
+                            {textFile(QStringLiteral("notes.txt"), QStringLiteral("alpha\nbeta"))}));
+        QTRY_VERIFY(h.settled());
+        QCOMPARE(prompts().last().value("message").toString(),
+                 QStringLiteral("<file name=\"notes.txt\">\nalpha\nbeta\n</file>\nSummarize"));
+        QCOMPARE(h.last(DisplayRow::Role::User)->text, QStringLiteral("Summarize"));
+        QCOMPARE(h.last(DisplayRow::Role::User)->attachments.first().name,
+                 QStringLiteral("notes.txt"));
+        QVERIFY(h.text(DisplayRow::Role::Assistant).contains(QStringLiteral("alpha\nbeta")));
+        const auto a = h.chat.current().id;
+        // Attachment-only: the files are the whole prompt, and Pi answers it.
+        QVERIFY(h.chat.send({}, {textFile(QStringLiteral("a\"b<.txt"), QStringLiteral("one")),
+                                 textFile(QStringLiteral("two.md"), QStringLiteral("# two"))}));
+        QTRY_VERIFY(h.settled());
+        QCOMPARE(prompts().last().value("message").toString(),
+                 QStringLiteral("<file name=\"a&quot;b&lt;.txt\">\none\n</file>\n"
+                                "<file name=\"two.md\">\n# two\n</file>\n"));
+        QCOMPARE(h.count(DisplayRow::Role::Note), 0);
+        QVERIFY(h.text(DisplayRow::Role::Assistant).startsWith(QStringLiteral("Echo: <file")));
+        // The contents are Pi's history (its session file); the display record
+        // OpenGhost keeps there has names and sizes only.
+        const auto saved = userTexts(piEntries(h.backend.sessionFile(a)));
+        QVERIFY(saved.contains(QStringLiteral("<file name=\"notes.txt\">\nalpha\nbeta\n</file>\nSummarize")));
+
+        // A picture goes only to a model Pi says sees images: refused before the
+        // prompt, so nothing reaches Pi. (The window refuses it sooner, keeping the
+        // draft; this is the backend's own check against Pi's actual model.)
+        const auto before = prompts().size();
+        const auto start = [](const QString &session, const QString &model,
+                              const Attachment &file) {
+            StartTurn command;
+            command.sessionId = session;
+            command.clientTurnId = session + QStringLiteral("-turn");
+            command.input = {QStringLiteral("Look"), {file}};
+            command.params.selection = {QStringLiteral("p"), model, {}};
+            return command;
+        };
+        auto refused = ask(h.backend, start(QStringLiteral("seeless"), QStringLiteral("m2"),
+                                            picture(QStringLiteral("dot.png"))));
+        QCOMPARE(code(refused), QStringLiteral("unsupported_input"));
+        QVERIFY(std::get<Error>(refused).message.contains(QStringLiteral("can't see pictures")));
+        // An attachment Pi cannot take is refused whole, never sent without it.
+        Attachment pdf;
+        pdf.id = pdf.name = QStringLiteral("r.pdf");
+        pdf.kind = Attachment::Kind::Pdf;
+        pdf.size = 10;
+        refused = ask(h.backend, start(QStringLiteral("pdf"), QStringLiteral("v"), pdf));
+        QCOMPARE(code(refused), QStringLiteral("unsupported_input"));
+        QCOMPARE(prompts().size(), before);
+        h.chat.choose({QStringLiteral("p"), QStringLiteral("v"), {}}, false);
+        QTRY_VERIFY(!h.chat.pending());
+        QVERIFY(h.chat.send(QStringLiteral("Look"), {picture(QStringLiteral("dot.png"))}));
+        QTRY_VERIFY(h.settled());
+        const auto sent = prompts().last();
+        QCOMPARE(sent.value("message").toString(),
+                 QStringLiteral("<file name=\"dot.png\"></file>\nLook"));
+        QCOMPARE(sent.value("images").toArray().size(), 1);
+        QCOMPARE(sent.value("images").toArray().first().toObject().value("mimeType").toString(),
+                 QStringLiteral("image/png"));
+        QVERIFY(h.last(DisplayRow::Role::User)->attachments.first().image.value_or(false));
+    }
+
+    void pinnedFilesReachEveryRunAsSystemPrompt()
+    {
+        Harness h;
+        QTRY_VERIFY(h.chat.ready());
+        const auto pin = [&h](const QVector<ContextFile> &files) {
+            auto value = h.prefs.value();
+            value.userContext.files = files;
+            QVERIFY(h.prefs.save(value));
+        };
+        ContextFile cv;
+        cv.id = QStringLiteral("f1");
+        cv.name = QStringLiteral("cv.md");
+        cv.kind = ContextFile::Kind::Text;
+        cv.text = QStringLiteral("Pinned CV text");
+        cv.size = 14;
+        cv.path = QStringLiteral("/home/user/cv.md");
+        pin({cv});
+        const auto runs = [this](const QString &session) {
+            QVector<QJsonArray> list;
+            for (const auto &record : records())
+                if (record.value("type").toString() == QStringLiteral("run") &&
+                    record.value("session").toString() == session)
+                    list.append(record.value("files").toArray());
+            return list;
+        };
+        QVERIFY(h.chat.send(QStringLiteral("hello")));
+        QTRY_VERIFY(h.settled());
+        const auto a = h.chat.current().id;
+        QCOMPARE(runs(piName(h, a)).size(), 1);
+        const auto first = runs(piName(h, a)).first();
+        QCOMPARE(first.size(), 1);
+        // Name and contents only: the local path stays on this machine.
+        QCOMPARE(first.first().toObject(),
+                 (QJsonObject{{"name", "cv.md"}, {"text", "Pinned CV text"}}));
+        // System prompt, never Pi's history.
+        QFile file(h.backend.sessionFile(a));
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        QVERIFY(!file.readAll().contains("Pinned CV text"));
+        // A new chat starts with them; removing them applies from the next run.
+        h.chat.newChat();
+        QVERIFY(h.chat.send(QStringLiteral("hi")));
+        QTRY_VERIFY(h.settled());
+        QCOMPARE(runs(piName(h, h.chat.current().id)).first().size(), 1);
+        pin({});
+        QVERIFY(h.chat.send(QStringLiteral("again")));
+        QTRY_VERIFY(h.settled());
+        QCOMPARE(runs(piName(h, h.chat.current().id)).last().size(), 0);
     }
 };
 

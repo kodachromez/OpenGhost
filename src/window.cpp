@@ -266,8 +266,16 @@ void WindowController::sync()
         }
         entry.started = row.started;
         entry.completed = row.completed;
-        for (const auto &a : row.attachments)
-            entry.attachments.append({a.name, QStringLiteral("text/plain"), a.size.value_or(-1)});
+        // A picture's type is known only while its sent copy is kept; text is text.
+        for (qsizetype i = 0; i < row.attachments.size(); ++i) {
+            const auto &a = row.attachments[i];
+            const auto kept = m_pictures.value(row.key).constFind(int(i));
+            entry.attachments.append({a.name,
+                                      !a.image.value_or(false)                  ? QStringLiteral("text/plain")
+                                      : kept != m_pictures.value(row.key).cend() ? kept->mime
+                                                                                 : QString(),
+                                      a.size.value_or(-1)});
+        }
         entry.copyable = entry.kind == Entry::Assistant && !row.text.isEmpty();
         const auto previous = m_rendered.constFind(entry.key);
         entry.revision =
@@ -345,8 +353,89 @@ quint64 WindowController::send(const QString &text, const QVariantList &files)
         emit changed();
         return 0;
     }
+    const bool pictures =
+        std::any_of(payload->cbegin(), payload->cend(), [](const openghost::Attachment &a) {
+            return a.kind == openghost::Attachment::Kind::Image;
+        });
     m_notice.clear();
-    return m_chat.send(text, *payload);
+    if (pictures) {
+        // Refused before anything is sent, so the draft and its files stay.
+        const auto &selection = m_chat.current().selection;
+        const auto model =
+            std::find_if(m_chat.models().cbegin(), m_chat.models().cend(), [&](const auto &m) {
+                return m.id == selection.model && m.provider == selection.provider;
+            });
+        if (m_chat.canSteer()) {
+            m_notice = QStringLiteral("Pictures can't join a reply in progress. Send them "
+                                      "when it ends.");
+        } else if (model != m_chat.models().cend() && !model->vision.value_or(false)) {
+            m_notice = QStringLiteral("%1 can't see pictures. Choose a model that sees photos, "
+                                      "or remove the pictures.")
+                           .arg(model->name.isEmpty() ? model->id : model->name);
+        }
+        if (!m_notice.isEmpty()) {
+            emit changed();
+            return 0;
+        }
+    }
+    const auto submission = m_chat.send(text, *payload);
+    if (submission && pictures)
+        keepPictures(*payload);
+    return submission;
+}
+// The pictures just sent, kept for their cards' Preview while memory allows.
+void WindowController::keepPictures(const QVector<openghost::Attachment> &sent)
+{
+    constexpr qint64 Kept = 64 * 1024 * 1024;
+    const auto &rows = m_chat.current().rows;
+    const auto row = std::find_if(rows.crbegin(), rows.crend(), [](const auto &r) {
+        return r.role == openghost::DisplayRow::Role::User;
+    });
+    if (row == rows.crend() || row->attachments.size() != sent.size())
+        return;
+    QHash<int, Picture> pictures;
+    for (qsizetype i = 0; i < sent.size(); ++i) {
+        const auto &a = sent[i];
+        if (a.kind != openghost::Attachment::Kind::Image || !a.dataUrl)
+            continue;
+        const auto comma = a.dataUrl->indexOf(QLatin1Char(','));
+        Picture picture{QByteArray::fromBase64(a.dataUrl->mid(comma + 1).toLatin1()), a.mime};
+        m_pictureBytes += picture.bytes.size();
+        pictures.insert(int(i), picture);
+    }
+    m_pictures.insert(row->key, pictures);
+    m_pictureOrder.append(row->key);
+    while (m_pictureBytes > Kept && m_pictureOrder.size() > 1) {
+        const auto oldest = m_pictureOrder.takeFirst();
+        for (auto it = m_pictures[oldest].cbegin(); it != m_pictures[oldest].cend(); ++it) {
+            m_pictureBytes -= it->bytes.size();
+            if (m_previewed.remove(oldest + QLatin1Char('/') + QString::number(it.key())))
+                emit previewChanged(oldest, it.key());
+        }
+        m_pictures.remove(oldest);
+    }
+    sync();
+}
+void WindowController::preview(const QString &key, int card)
+{
+    if (!m_pictures.value(key).contains(card))
+        return;
+    m_previewed.insert(key + QLatin1Char('/') + QString::number(card));
+    emit previewChanged(key, card);
+}
+QString WindowController::previewState(const QString &key, int card) const
+{
+    return m_previewed.contains(key + QLatin1Char('/') + QString::number(card)) &&
+                   m_pictures.value(key).contains(card)
+               ? QStringLiteral("ready")
+               : QString();
+}
+QImage WindowController::previewImage(const QString &key, int card) const
+{
+    if (previewState(key, card) != QStringLiteral("ready"))
+        return {};
+    const auto picture = m_pictures.value(key).value(card);
+    return QImage::fromData(picture.bytes);
 }
 QString WindowController::pick(const QList<QUrl> &urls, int remaining, int pictures)
 {
@@ -360,7 +449,7 @@ QString WindowController::pick(const QList<QUrl> &urls, int remaining, int pictu
     QVariantList files;
     for (const auto &a : prepared)
         files.append(QVariantMap{
-            {"token", a.token}, {"name", a.name}, {"size", a.size}, {"picture", false}});
+            {"token", a.token}, {"name", a.name}, {"size", a.size}, {"picture", a.picture}});
     // This bounded preparation is synchronous: publish to the still-owning
     // composer before returning, never to a draft switched on the next event.
     emit filesPicked(files, {});

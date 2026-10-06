@@ -137,7 +137,7 @@ successful integration with a real backend.
 | Area | Current status |
 | --- | --- |
 | Native presentation | Implemented window/sidebar/composer, four base settings pages plus capability-gated Plugins, themes, splash/motion, selection/copy, Markdown/code/TeX/diagram rendering. Full visual parity is unqualified. |
-| Local preferences | Implemented appearance, standing instructions, explicit model/effort and Ask/Auto/Full preference persistence. Pinned-file preparation is unsupported. |
+| Local preferences | Implemented appearance, standing instructions, explicit model/effort and Ask/Auto/Full preference persistence, and pinned text files (General → Files). |
 | Chat flow in the existing UI | Implemented draft/open/search/local rename, pins/collapse, streaming, Escape Stop, Retry, steering, deletion, approval cards and text attachment cards. Turn-dependent behavior is exercised only with the fake. |
 | Local state/recovery | Implemented index/display-cache/checkpoint/reconciliation logic, tested with stores and scripted backends. Caches are not backend history; persistence caveats are below. |
 | Mini chat, locks, folder creation | State/service APIs and tests exist. **No mini-chat dialog, lock/unlock screen or add-folder picker is exposed in the UI.** Production encryption is absent. Existing folder groups can be displayed/collapsed and their chats managed. |
@@ -149,7 +149,7 @@ successful integration with a real backend.
 | Compaction/account limits | Contract types exist; fake refuses them, no operational compaction UI or live billing/limits. Saved compact/stats rows are retained as cache data, not rendered as cards. |
 | Other intentionally absent UI | No tool/subagent/reasoning transcript panels, source-port service/workspace picker, voice controls, other extra settings tabs or visual diagram form editor. Reasoning/tool activity is not assistant text. |
 
-The composer **+ file picker** handles text attachments; the reference's broader
+The composer **+ file picker** handles text files and pictures; the reference's broader
 plus-menu operations are not implemented. No new controls were invented to
 expose the unported state.
 
@@ -347,12 +347,16 @@ update or shutdown. There is no automatic retry loop or dedicated usage-error UI
 Unsaved counts can still be lost on a crash or persistent storage failure. See
 [the persistence findings](docs/repository-readiness.md).
 
-Attachments are local regular UTF-8 text only: 20/message, 256 KiB/file,
-64 retained draft tokens and 8 MiB total retained text. Preparation is synchronous
-and byte-bounded, not deadline-bounded; a failed selection adds nothing. Symlink,
-nonlocal, PDF and invalid/binary text inputs refuse. Tokens own full prepared
-payloads separately from cached metadata; previews are never resent as input.
-Images/media/office extraction and pinned-file storage are absent.
+Attachments are local regular UTF-8 text files (256 KiB each) or pictures
+(PNG/JPEG/GIF/WebP/BMP kept up to 6 MB and 2560 px, others re-encoded within
+them): 20/message, 64 retained draft tokens, 48 MiB retained. Preparation is
+synchronous and byte-bounded, not deadline-bounded; a failed selection adds nothing.
+PDFs, office documents, media and other binary files are refused by name, as are
+symlink and nonlocal inputs. With `--pi`, text files reach Pi in its `pi @file`
+form and pictures as prompt images, only for a model that sees images. Tokens own
+full prepared payloads separately from cached metadata; previews are never resent.
+General → Files keeps pinned text files with the preferences (20 files, 200,000
+characters together); Pi gets them as a system-prompt section on every run.
 
 Approval requests are bound to session/turn/request identities, answered once,
 and dismissed on resolution, Stop, cancellation or superseding steering. Auth

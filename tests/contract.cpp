@@ -1,6 +1,5 @@
 #include "backend/fake_backend.h"
 #include "browser-tools/fixtures.h"
-#include "frontend/attachments.h"
 #include "frontend/chat_service.h"
 #include "frontend/host.h"
 #include "frontend/library.h"
@@ -722,33 +721,18 @@ class ContractTest : public QObject
         chat.stop();
         QTRY_VERIFY(!chat.pending());
     }
+    // Reading files is tested in native_attachments_test; here a prepared text
+    // payload travels whole through the service to the backend.
     void attachmentsAreOwnedPayloads()
     {
-        QTemporaryDir temp;
-        QFile text(temp.filePath("input.txt"));
-        QVERIFY(text.open(QIODevice::WriteOnly));
-        text.write("original café\n");
-        text.close();
-        AttachmentStore store;
-        QVector<AttachmentStore::Prepared> prepared;
-        QVERIFY(store.prepare({QUrl::fromLocalFile(text.fileName())}, 20, prepared).isEmpty());
-        QCOMPARE(prepared.size(), 1);
-        const auto token = prepared.first().token;
-        const auto input = *store.resolve({token});
-        QCOMPARE(input.first().text.value(), QString::fromUtf8("original café\n"));
-        QVERIFY(!input.first().path); // Native host paths never leak into this demo.
-        QFile bad(temp.filePath("binary"));
-        QVERIFY(bad.open(QIODevice::WriteOnly));
-        bad.write("a\0b", 3);
-        bad.close();
-        QVERIFY(!store
-                     .prepare({QUrl::fromLocalFile(text.fileName()),
-                               QUrl::fromLocalFile(bad.fileName())},
-                              20, prepared)
-                     .isEmpty());
-        QVERIFY(prepared.isEmpty()); // Whole failed selection publishes nothing.
-        QVERIFY(!store.prepare({QUrl("https://example.com/file")}, 20, prepared).isEmpty());
-        QVERIFY(!store.resolve({token, token}));
+        openghost::Attachment text;
+        text.id = QStringLiteral("a1");
+        text.name = QStringLiteral("input.txt");
+        text.mime = QStringLiteral("text/plain");
+        text.kind = openghost::Attachment::Kind::Text;
+        text.text = QString::fromUtf8("original café\n");
+        text.size = text.text->toUtf8().size();
+        const QVector<openghost::Attachment> input{text};
         FakeBackend fake(nullptr, 0);
         PreferencesStore prefs({});
         ChatService chat(&fake, &prefs);
@@ -756,10 +740,9 @@ class ContractTest : public QObject
         QTRY_VERIFY(chat.ready());
         QVERIFY(chat.send({}, input));
         QTRY_VERIFY(!chat.pending());
-        store.release({token});
-        QVERIFY(!store.resolve({token}));
         QCOMPARE(chat.current().turn.prepared->input.attachments.first().text, input.first().text);
         QCOMPARE(chat.current().rows.first().attachments.first().name, QStringLiteral("input.txt"));
+        QVERIFY(!chat.current().rows.first().attachments.first().image.value_or(true));
         for (int i = 0; i < 100; ++i)
             fake.advance();
         QVERIFY(chat.current().rows.last().text.contains("input.txt"));
@@ -1688,6 +1671,37 @@ class ContractTest : public QObject
         value.userContext.instructions = QString(8001, QLatin1Char('x'));
         QVERIFY(!prefs.save(value));
         QCOMPARE(prefs.value().userContext.instructions, reopened.value().userContext.instructions);
+        // General's pinned files: text kept whole with the preferences, bounded.
+        value.userContext.instructions = QStringLiteral("Brief.");
+        ContextFile pinned;
+        pinned.id = QStringLiteral("f1");
+        pinned.name = QStringLiteral("style.md");
+        pinned.kind = ContextFile::Kind::Text;
+        pinned.text = QString::fromUtf8("Use British spelling. 👻");
+        pinned.size = pinned.text->toUtf8().size();
+        pinned.path = temp.filePath(QStringLiteral("style.md"));
+        value.userContext.files = {pinned};
+        QVERIFY(prefs.save(value));
+        {
+            PreferencesStore again(path);
+            QVERIFY(again.error().isEmpty());
+            QCOMPARE(again.value().userContext.files.size(), 1);
+            QCOMPARE(again.value().userContext.files.first().text, pinned.text);
+            QCOMPARE(again.value().userContext.files.first().name, pinned.name);
+            QCOMPARE(again.value().userContext.files.first().path, pinned.path);
+        }
+        auto picture = pinned;
+        picture.kind = ContextFile::Kind::Image;
+        picture.text.reset();
+        value.userContext.files = {picture};
+        QVERIFY(!prefs.save(value)); // Pinned files are text only.
+        auto big = pinned;
+        big.text = QString(200001, QLatin1Char('x'));
+        value.userContext.files = {big};
+        QVERIFY(!prefs.save(value));
+        value.userContext.files = QVector<ContextFile>(21, pinned);
+        QVERIFY(!prefs.save(value));
+        QCOMPARE(prefs.value().userContext.files.size(), 1); // Refused saves change nothing.
         PreferencesStore unwritable(
             temp.path()); // directory, not a file; deterministic on all platforms
         QVERIFY(!unwritable.save(Preferences{}));
