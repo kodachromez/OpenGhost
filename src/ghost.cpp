@@ -30,9 +30,16 @@ constexpr double FloatPeriod = 2.6, FloatAmp = 1.6;
 constexpr double SwayPeriod = 1.3, SwayAmp = 1.3;
 constexpr double Pi = 3.14159265358979323846;
 
-double random(const double (&range)[2])
+double (*testRandom)(const GhostItem *) = nullptr;
+
+double uniform(const GhostItem *ghost)
 {
-    return range[0] + QRandomGenerator::global()->generateDouble() * (range[1] - range[0]);
+    return testRandom ? testRandom(ghost) : QRandomGenerator::global()->generateDouble();
+}
+
+double random(const GhostItem *ghost, const double (&range)[2])
+{
+    return range[0] + uniform(ghost) * (range[1] - range[0]);
 }
 
 // The body outline (bodyPath(s)): below a half circle, the bottom edge is
@@ -138,8 +145,8 @@ void GhostItem::reset(double now)
     m_start = now;
     m_now = now;
     m_pose = &PoseTable[0];
-    m_nextPose = now + random(Hold) * 0.6;
-    m_nextBlink = now + random(BlinkEvery) * 0.5;
+    m_nextPose = now + random(this, Hold) * 0.6;
+    m_nextBlink = now + random(this, BlinkEvery) * 0.5;
     m_blinkAt = -1e9;
     m_eye[0] = m_eye[1] = {0, 0};
     m_eye[2] = m_eye[3] = {1, 0};
@@ -183,17 +190,18 @@ void GhostItem::look(qreal x, qreal y, int holdMs)
     m_gazeUntil = FrameClock::now() + holdMs / 1000.0;
 }
 
+void GhostItem::setTestRandom(double (*source)(const GhostItem *)) { testRandom = source; }
+
 void GhostItem::blink() { m_blinkAt = FrameClock::now(); }
 
 const GhostItem::Pose &GhostItem::pickPose()
 {
     const Pose *table = PoseTable;
-    auto *generator = QRandomGenerator::global();
-    if (m_pose != &table[0] && generator->generateDouble() < 0.3)
+    if (m_pose != &table[0] && uniform(this) < 0.3)
         return table[0];
     const Pose *pose;
     do
-        pose = &table[1 + int(generator->generateDouble() * 11)];
+        pose = &table[1 + int(uniform(this) * 11)];
     while (pose == m_pose);
     return *pose;
 }
@@ -297,16 +305,16 @@ void GhostItem::tick(qreal elapsed)
     const double dt = std::clamp(double(elapsed), 0.0, 0.032);
     if (m_gazing && now >= m_gazeUntil) {
         m_gazing = false;
-        m_nextPose = now + random(Hold) * 0.5;
+        m_nextPose = now + random(this, Hold) * 0.5;
     }
     if (!m_gazing && now >= m_nextPose) {
         m_pose = &pickPose();
-        m_nextPose = now + random(Hold);
+        m_nextPose = now + random(this, Hold);
     }
     const Pose &pose = m_gazing ? m_gaze : *m_pose;
     if (now >= m_nextBlink) {
         m_blinkAt = now;
-        m_nextBlink = now + random(BlinkEvery);
+        m_nextBlink = now + random(this, BlinkEvery);
     }
     const int steps = std::max(1, int(std::ceil(dt / 0.008)));
     const double step = dt / steps;

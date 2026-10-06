@@ -502,3 +502,32 @@ blur, and the separate sent-attachment pipeline. Lookup/consent/fallback states
 are implemented; no external backend service is deferred. The branch is ready
 to merge **as the scoped reply/media implementation**, not as an exact-pixel or
 crash-free release qualification.
+
+## Stepped splash parity
+
+The splash fixtures above are not phase locked. For the splash itself,
+`tests/parity/splash-reference.mjs` steps OpenGhost's own page (headless,
+SwiftShader taking splash.js's GPU path) and `openghost-cpp --splash-frames
+<dir> --splash-at <ms,...>` steps the native splash, both on the same virtual
+clock (a frame every 1/240 s from a fixed start, Web Animations and timers on
+it, each Ghost's random choices from the same seeded generator), and
+`tests/parity/splash_compare.py <dir>` measures them without masks or
+alignment. Native ran on NVIDIA through `tests/parity/private-kwin.sh`
+(maximized, 3840×2160 at ×1.45: 3840×2107 px of window).
+
+| Scene ms | Changed px | > 8 levels | MAE | Background MAE | Ghost/word MAE |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 100 | 8.45% | 0.000% | 0.029 | — | — |
+| 600 | 11.14% | 0.015% | 0.046 | 0.041 | 1.06 |
+| 1000 | 11.32% | 0.016% | 0.047 | 0.042 | 0.94 |
+| 1500 | 10.95% | 0.014% | 0.045 | 0.040 | 0.95 |
+| 1860 (landing) | 10.83% | 0.010% | 0.044 | 0.040 | 0.77 |
+| 2000 | 13.62% | 0.014% | 0.060 | 0.055 | 1.23 |
+| 2600 (word) | 11.41% | 0.048% | 0.080 | 0.040 | 2.69 |
+| 3000 | 11.63% | 0.044% | 0.068 | 0.062 | 1.23 |
+
+Not exact: the mist differs by 1–2 levels (NVIDIA vs SwiftShader float math);
+the Ghost's edges by antialiasing and a 0.2–0.35 px offset (Chromium places
+the composited `.splash-fly` layer on whole device pixels); the word by text
+rasterization and about 1 px of vertical font metrics. From 3300 ms the
+revealed app differs (the disconnected notice and sidebar), outside the splash.

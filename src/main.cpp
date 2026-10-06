@@ -57,6 +57,10 @@ void migrateProfile(QGuiApplication &app)
 int smokeTest(QQmlApplicationEngine &engine, WindowController &controller);
 int parityTest(QQmlApplicationEngine &engine, WindowController &controller, const QString &manifest,
                const QString &output);
+int splashFrames(QQmlApplicationEngine &engine, const QString &output, int every);
+void prepareSplashSteps();
+int splashSteps(QQmlApplicationEngine &engine, const QString &output, const QString &times);
+int splashCheck(QQmlApplicationEngine &engine);
 #endif
 
 int main(int argc, char *argv[])
@@ -67,14 +71,26 @@ int main(int argc, char *argv[])
     // renderer on a private memory-only display, with no visible fallback.
     bool parityRequested = false, platformOverride = false;
     for (int i = 1; i < argc; ++i) {
-        parityRequested |= std::strncmp(argv[i], "--parity-", 9) == 0;
+        parityRequested |= std::strncmp(argv[i], "--parity-", 9) == 0 ||
+                           std::strncmp(argv[i], "--splash-frames", 15) == 0 ||
+                           std::strncmp(argv[i], "--splash-check", 14) == 0;
         platformOverride |= std::strncmp(argv[i], "-platform", 9) == 0 ||
                             std::strncmp(argv[i], "--platform", 10) == 0;
     }
-    if (parityRequested && (qgetenv("QT_QPA_PLATFORM") != "offscreen" || platformOverride)) {
+    // A frame capture may also run on a private headless compositor (the
+    // runner's own `kwin_wayland --virtual` socket), never the desktop's.
+    const bool privateWayland = qgetenv("QT_QPA_PLATFORM") == "wayland" &&
+                                qgetenv("WAYLAND_DISPLAY").startsWith("openghost-private-");
+    if (parityRequested &&
+        ((qgetenv("QT_QPA_PLATFORM") != "offscreen" && !privateWayland) || platformOverride)) {
         fprintf(stderr, "Parity requires QT_QPA_PLATFORM=offscreen and no platform override\n");
         return 2;
     }
+    // A stepped splash drives its own animation timeline on the GUI thread.
+    for (int i = 1; i < argc; ++i)
+        if (std::strncmp(argv[i], "--splash-at", 11) == 0 ||
+            std::strncmp(argv[i], "--splash-check", 14) == 0)
+            qputenv("QSG_RENDER_LOOP", "basic");
 #endif
     platform::beforeApplication();
 #ifdef OPENGHOST_BROWSER
@@ -106,6 +122,18 @@ int main(int argc, char *argv[])
                       QStringLiteral("path")});
     parser.addOption({QStringLiteral("parity-output"),
                       QStringLiteral("Visual fixture output directory."), QStringLiteral("path")});
+    parser.addOption({QStringLiteral("splash-frames"),
+                      QStringLiteral("Read back the splash's rendered frames into a directory."),
+                      QStringLiteral("path")});
+    parser.addOption({QStringLiteral("splash-every"),
+                      QStringLiteral("Save every nth splash frame."), QStringLiteral("n"),
+                      QStringLiteral("1")});
+    parser.addOption({QStringLiteral("splash-check"),
+                      QStringLiteral("Check the splash against splash.js frame by frame and exit.")});
+    parser.addOption({QStringLiteral("splash-at"),
+                      QStringLiteral("Step the splash deterministically at 240 Hz and grab it at "
+                                     "these scene times (ms, comma-separated)."),
+                      QStringLiteral("times")});
 #endif
     parser.process(app);
 #ifdef OPENGHOST_SMOKE_TEST
@@ -121,7 +149,9 @@ int main(int argc, char *argv[])
 #ifdef OPENGHOST_SMOKE_TEST
     QTemporaryDir testSettings;
     if (parser.isSet(QStringLiteral("smoke-test")) ||
-        parser.isSet(QStringLiteral("parity-manifest"))) {
+        parser.isSet(QStringLiteral("parity-manifest")) ||
+        parser.isSet(QStringLiteral("splash-frames")) ||
+        parser.isSet(QStringLiteral("splash-check"))) {
         if (!testSettings.isValid())
             return 1;
         appearancePath = testSettings.path() + QStringLiteral("/appearance.json");
@@ -162,7 +192,9 @@ int main(int argc, char *argv[])
     // never read the real metadata cache or fall back to live networking.
 #ifdef OPENGHOST_SMOKE_TEST
     if (!parser.isSet(QStringLiteral("smoke-test")) &&
-        !parser.isSet(QStringLiteral("parity-manifest")))
+        !parser.isSet(QStringLiteral("parity-manifest")) &&
+        !parser.isSet(QStringLiteral("splash-frames")) &&
+        !parser.isSet(QStringLiteral("splash-check")))
 #endif
         VideoTitles::instance()->setService(
             std::make_shared<NetworkVideoInfo>(),
@@ -203,6 +235,9 @@ int main(int argc, char *argv[])
         initial.insert(QStringLiteral("width"), 2048);
         initial.insert(QStringLiteral("height"), 1400);
     }
+    // A stepped splash: its clock, animation driver and Ghosts' choices, from the start.
+    if (parser.isSet(QStringLiteral("splash-at")) || parser.isSet(QStringLiteral("splash-check")))
+        prepareSplashSteps();
 #endif
     engine.setInitialProperties(initial);
     engine.load(QUrl(QStringLiteral("qrc:/OpenGhost/Ui/Main.qml")));
@@ -214,6 +249,14 @@ int main(int argc, char *argv[])
     if (parser.isSet(QStringLiteral("parity-manifest")))
         return parityTest(engine, controller, parser.value(QStringLiteral("parity-manifest")),
                           parser.value(QStringLiteral("parity-output")));
+    if (parser.isSet(QStringLiteral("splash-check")))
+        return splashCheck(engine);
+    if (parser.isSet(QStringLiteral("splash-frames")) && parser.isSet(QStringLiteral("splash-at")))
+        return splashSteps(engine, parser.value(QStringLiteral("splash-frames")),
+                           parser.value(QStringLiteral("splash-at")));
+    if (parser.isSet(QStringLiteral("splash-frames")))
+        return splashFrames(engine, parser.value(QStringLiteral("splash-frames")),
+                            parser.value(QStringLiteral("splash-every")).toInt());
 #endif
     return app.exec();
 }

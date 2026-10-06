@@ -56,6 +56,10 @@ class GhostItem : public QQuickItem
     // The current pose, eye springs and bob, for tests.
     Q_INVOKABLE QVariantMap state() const;
 
+    // Tests only: the source of each Ghost's random poses and blinks (uniform
+    // in [0, 1)), for a deterministic timeline; null restores the default.
+    static void setTestRandom(double (*source)(const GhostItem *));
+
     static constexpr qreal ViewWidth = 64, ViewHeight = 70;
     // Eye offset and scale, in the view box's units.
     struct Pose {
