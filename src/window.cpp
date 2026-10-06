@@ -112,7 +112,11 @@ WindowController::WindowController(openghost::Backend *backend, QString preferen
     connect(&m_chat, &openghost::ChatService::accepted, this, &WindowController::accepted);
     connect(&m_chat, &openghost::ChatService::removed, this, &WindowController::sessionRemoved);
     connect(&m_chat, &openghost::ChatService::usageRecorded, &m_usage, &UsagePreview::record);
-    connect(&m_chat, &openghost::ChatService::authFinished, this, [this] {
+    connect(&m_chat, &openghost::ChatService::authFinished, this, [this](const QString &flow) {
+        if (flow != m_login.value("id").toString()) {
+            catalog(); // Another sign-in's end (cancelled or replaced): not this form's.
+            return;
+        }
         if (m_login.value("type") == "waiting") {
             m_login.insert("begun", true);
             return;
@@ -573,7 +577,7 @@ void WindowController::login(const QString &provider, const QString &method)
         m_login.insert("placeholder", advertised->placeholder.value_or(QString()));
     } else {
         m_login.insert("type", "waiting");
-        m_chat.authenticate(openghost::Login{provider});
+        m_chat.authenticate(openghost::Login{provider}, m_login.value("id").toString());
     }
     catalog();
 }
@@ -593,7 +597,8 @@ void WindowController::answerLogin(const QString &id, const QString &prompt, con
     m_login.remove("promptId");
     m_login.remove("input");
     catalog();
-    m_chat.authenticate(openghost::SetKey{provider, answer}); // Never retained in display/settings.
+    m_chat.authenticate(openghost::SetKey{provider, answer},
+                        id); // Never retained in display/settings.
 }
 void WindowController::cancelLogin(const QString &id)
 {

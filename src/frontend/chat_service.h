@@ -153,7 +153,9 @@ class ChatService final : public QObject
     void retry();
     void remove(const QString &id);
     void refresh();
-    void authenticate(const Command &command);
+    // `flow` names the sign-in form it belongs to; authFinished hands it back, so a
+    // cancelled or replaced sign-in's late end never touches a newer form.
+    void authenticate(const Command &command, const QString &flow = {});
     void answerLogin(const AnswerLogin &answer); // Not an auth mutation: no authFinished.
     void approve(RequestId id, bool allow);
     static QString metrics(const ChatRecord::Turn &turn);
@@ -175,7 +177,7 @@ class ChatService final : public QObject
     void folderRemoved(QString folder, bool ok, QString notice);
     void miniCleared(bool ok);
     void usageRecorded(openghost::Usage usage);
-    void authFinished();
+    void authFinished(const QString &flow);
     void loginStep(const openghost::LoginStep &step);
 
   private:

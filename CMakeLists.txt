@@ -55,7 +55,7 @@ qt_add_resources(native_contract browser_contract PREFIX /browser BASE src/brows
     FILES src/browser/schemas.json)
 # The Pi backend's bridge extension, handed to `pi -e` (runs inside Pi, not here).
 qt_add_resources(native_contract pi_bridge PREFIX /pi BASE src/backend/pi
-    FILES src/backend/pi/openghost-bridge.js)
+    FILES src/backend/pi/openghost-bridge.js src/backend/pi/openghost-policy.js)
 if(OPENGHOST_BROWSER)
     add_library(native_browser_automation STATIC src/browser/qt_browser_automation.cpp
         src/browser/qt_browser_automation.h)
@@ -147,6 +147,22 @@ if(OPENGHOST_BUILD_SMOKE_TEST)
     native_warnings(native_pi_audit_test)
     add_test(NAME native_pi_audit_test COMMAND native_pi_audit_test)
     set_tests_properties(native_pi_audit_test PROPERTIES TIMEOUT 60)
+    # The real `pi` on PATH (skipped without one), with a scripted faux model:
+    # access modes, approvals, extension dialogs/errors. And the access policy
+    # itself, through node, when node is installed.
+    add_executable(native_pi_real_test tests/pi_real.cpp)
+    target_link_libraries(native_pi_real_test PRIVATE native_contract Qt6::Test)
+    target_compile_definitions(native_pi_real_test PRIVATE
+        OPENGHOST_REAL_PI_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/pi/real")
+    native_warnings(native_pi_real_test)
+    add_test(NAME native_pi_real_test COMMAND native_pi_real_test)
+    set_tests_properties(native_pi_real_test PROPERTIES TIMEOUT 300)
+    find_program(OPENGHOST_NODE node)
+    if(OPENGHOST_NODE)
+        add_test(NAME native_pi_policy_check COMMAND ${OPENGHOST_NODE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/pi/real/policy-check.mjs)
+        set_tests_properties(native_pi_policy_check PROPERTIES TIMEOUT 30)
+    endif()
     add_executable(native_plugins_test tests/plugins.cpp)
     target_link_libraries(native_plugins_test PRIVATE native_contract Qt6::Test)
     native_warnings(native_plugins_test)
@@ -168,6 +184,15 @@ if(OPENGHOST_BUILD_SMOKE_TEST)
     native_warnings(native_attachments_test)
     add_test(NAME native_attachments_test COMMAND native_attachments_test)
     set_tests_properties(native_attachments_test PROPERTIES TIMEOUT 30
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    # Settings → Providers' sign-in form across cancel/sign-in-again races.
+    add_executable(native_sign_in_test tests/sign_in.cpp)
+    target_link_libraries(native_sign_in_test PRIVATE native_window Qt6::Test)
+    target_compile_definitions(native_sign_in_test PRIVATE
+        OPENGHOST_FAKE_PI_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/pi")
+    native_warnings(native_sign_in_test)
+    add_test(NAME native_sign_in_test COMMAND native_sign_in_test)
+    set_tests_properties(native_sign_in_test PROPERTIES TIMEOUT 30
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     add_executable(native_media_test tests/media.cpp)
     target_link_libraries(native_media_test PRIVATE native_window Qt6::Test)

@@ -2,6 +2,7 @@
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QUuid>
@@ -23,6 +24,41 @@ const QString Mark = QStringLiteral("openghost-turn"); // the bridge's turn reco
 const QString RetryTrigger = QStringLiteral("openghost-retry");
 
 QString uuid() { return QUuid::createUuid().toString(QUuid::WithoutBraces); }
+QString modeName(PermissionMode mode)
+{
+    return mode == PermissionMode::Full   ? QStringLiteral("full")
+           : mode == PermissionMode::Auto ? QStringLiteral("auto")
+                                          : QStringLiteral("ask");
+}
+const QString ApprovalTitle = QStringLiteral("openghost:approval"); // the bridge's approval confirm
+// An approval card's presentation, as the bridge describes the call (1.3's describe).
+std::optional<ApprovalPresentation> presentationOf(const QJsonValue &value)
+{
+    if (!value.isObject())
+        return std::nullopt;
+    const auto given = value.toObject();
+    ApprovalPresentation shown;
+    shown.kind = given.value("kind").toString();
+    shown.title = given.value("title").toString();
+    const auto text = [&](const char *key) -> std::optional<QString> {
+        return given.value(key).isString() ? std::optional(given.value(key).toString())
+                                           : std::nullopt;
+    };
+    shown.effect = text("effect");
+    if (given.value("badge").isBool())
+        shown.badge = given.value("badge").toBool();
+    for (const auto &item : given.value("places").toArray()) {
+        const auto place = item.toObject();
+        shown.places.append({place.value("kind").toString(), place.value("label").toString(),
+                             place.value("title").toString()});
+    }
+    shown.code = text("code");
+    shown.removed = text("removed");
+    shown.added = text("added");
+    shown.quote = text("quote");
+    shown.reveal = text("reveal");
+    return shown;
+}
 qint64 now() { return QDateTime::currentMSecsSinceEpoch(); }
 Error failure(const QString &code, const QString &message)
 {
@@ -352,6 +388,19 @@ void PiBackend::request(RequestId id, const Command &command)
 {
     if (std::holds_alternative<StartTurn>(command) || std::holds_alternative<RetryTurn>(command))
         m_pendingStarts.insert(id);
+    // A sign-in's flow begins (or ends) when it is asked for, not when dispatched:
+    // a step of the flow before it that Pi reports meanwhile is already stale.
+    if (const auto *login = std::get_if<Login>(&command)) {
+        m_flowOf.insert(id,
+                        m_flows[login->provider] = QStringLiteral("og-login-%1").arg(++m_tokens));
+        m_steps.remove(login->provider);
+    } else if (const auto *key = std::get_if<SetKey>(&command); key && key->key) {
+        m_flowOf.insert(id, m_flows[key->provider] = QStringLiteral("og-login-%1").arg(++m_tokens));
+        m_steps.remove(key->provider);
+    } else if (const auto *cancel = std::get_if<CancelLogin>(&command)) {
+        m_flowOf.insert(id, m_flows.take(cancel->provider));
+        m_steps.remove(cancel->provider);
+    }
     QTimer::singleShot(0, this, [this, id, command] { dispatch(id, command); });
 }
 // Stop before Pi accepted the start: unsent, it is never sent; sent, Pi's acceptance
@@ -386,6 +435,7 @@ void PiBackend::dispatch(RequestId id, const Command &command)
                          std::holds_alternative<CancelLogin>(command) ||
                          std::holds_alternative<AnswerLogin>(command);
     if (control && !m_control) {
+        m_flowOf.remove(id);
         emit replied(id, failure(QStringLiteral("backend_unavailable"),
                                  QStringLiteral("Pi is not running.")));
         return;
@@ -393,31 +443,62 @@ void PiBackend::dispatch(RequestId id, const Command &command)
     if (std::holds_alternative<ModelsList>(command)) {
         // Pi's catalog, Pi's own default model first: a chat with no saved choice
         // starts on the model Pi itself would use.
-        m_control->rpc({{"type", "get_available_models"}}, [this, id](const QJsonObject &reply) {
-            if (!succeeded(reply) || !m_control) {
-                emit replied(id, failure(QStringLiteral("backend_error"),
-                                         errorOf(reply, QStringLiteral("Pi could not list models."))));
-                return;
-            }
-            auto models = modelsOf(reply.value("data").toObject().value("models").toArray());
-            m_control->rpc({{"type", "get_state"}}, [this, id, models](const QJsonObject &state) mutable {
-                if (!state.value("success").toBool()) {
-                    emit replied(id, failure(QStringLiteral("backend_error"),
-                                             errorOf(state, QStringLiteral("Pi could not report its default model."))));
-                    return;
-                }
-                const auto chosen = state.value("data").toObject().value("model").toObject();
-                const auto it = std::find_if(models.begin(), models.end(), [&](const Model &m) {
-                    return m.provider == chosen.value("provider").toString() &&
-                           m.id == chosen.value("id").toString();
+        // Pi's runtime rereads models.json and credentials first: a change made
+        // outside OpenGhost (another `pi /login`) is seen, not an old snapshot.
+        m_control->bridge(
+            {{"op", "refresh"}},
+            [this, id](const QJsonObject &refreshed) {
+                if (!m_control)
+                    return emit replied(id, failure(QStringLiteral("backend_unavailable"),
+                                                    QStringLiteral("Pi is not running.")));
+                if (!succeeded(refreshed))
+                    report(QStringLiteral("warning"),
+                           QStringLiteral("Pi could not reread its models and credentials: ") +
+                               errorOf(refreshed, QStringLiteral("no reason given.")));
+                m_control->rpc({{"type", "get_available_models"}}, [this,
+                                                                    id](const QJsonObject &reply) {
+                    if (!succeeded(reply) || !m_control) {
+                        emit replied(
+                            id,
+                            failure(QStringLiteral("backend_error"),
+                                    errorOf(reply, QStringLiteral("Pi could not list models."))));
+                        return;
+                    }
+                    auto models =
+                        modelsOf(reply.value("data").toObject().value("models").toArray());
+                    m_control->rpc({{"type", "get_state"}}, [this, id, models](
+                                                                const QJsonObject &state) mutable {
+                        if (!state.value("success").toBool()) {
+                            emit replied(id, failure(QStringLiteral("backend_error"),
+                                                     errorOf(state, QStringLiteral("Pi could not report its default model."))));
+                            return;
+                        }
+                        const auto chosen =
+                            state.value("data").toObject().value("model").toObject();
+                        const auto it =
+                            std::find_if(models.begin(), models.end(), [&](const Model &m) {
+                                return m.provider == chosen.value("provider").toString() &&
+                                       m.id == chosen.value("id").toString();
+                            });
+                        if (it != models.end())
+                            std::rotate(models.begin(), it, it + 1);
+                        emit replied(id, Reply{models});
+                    });
                 });
-                if (it != models.end())
-                    std::rotate(models.begin(), it, it + 1);
-                emit replied(id, Reply{models});
-            });
-        });
+            },
+            StepDeadline);
     } else if (std::holds_alternative<ProvidersList>(command)) {
-        m_control->bridge({{"op", "providers"}}, [settle](const QJsonObject &reply) {
+        m_control->bridge({{"op", "providers"}}, [this, settle](const QJsonObject &reply) {
+            // Credentials changed since last read (here or outside OpenGhost): every
+            // chat's Pi rereads them before its next run.
+            if (succeeded(reply)) {
+                const auto seen =
+                    QString::fromUtf8(QJsonDocument(reply.value("providers").toArray())
+                                          .toJson(QJsonDocument::Compact));
+                if (!m_authSeen.isEmpty() && seen != m_authSeen)
+                    ++m_auth;
+                m_authSeen = seen;
+            }
             settle(reply, QStringLiteral("Pi could not list providers."),
                    [](const QJsonObject &r) { return providersOf(r.value("providers").toArray()); });
         });
@@ -430,8 +511,7 @@ void PiBackend::dispatch(RequestId id, const Command &command)
     } else if (const auto *logout = std::get_if<Logout>(&command)) {
         auth(id, logout->provider, {{"op", "logout"}});
     } else if (const auto *cancel = std::get_if<CancelLogin>(&command)) {
-        m_cancelled.insert(cancel->provider);
-        auth(id, cancel->provider, {{"op", "cancel"}});
+        auth(id, cancel->provider, {{"op", "cancel"}, {"flow", m_flowOf.take(id)}});
     } else if (const auto *answer = std::get_if<AnswerLogin>(&command)) {
         m_control->bridge({{"op", "answer"}, {"promptId", answer->promptId}, {"value", answer->value}},
                           [settle](const QJsonObject &reply) {
@@ -575,6 +655,10 @@ Result PiBackend::execute(const Command &command)
                 return failure(QStringLiteral("backend_unavailable"), error);
             m_control->onStep = [this](const QString &token, const QString &kind,
                                        const QJsonObject &value) { step(token, kind, value); };
+            // The control child never runs a turn: nothing there can be approved.
+            m_control->onDialog = [this](const QJsonObject &request) {
+                return dialog({}, m_control, request);
+            };
             m_control->onExit = [this] {
                 // The connection ends with its control child: every chat's Pi stops too.
                 m_control->deleteLater();
@@ -610,14 +694,20 @@ Result PiBackend::execute(const Command &command)
 PiProcess *PiBackend::spawn(const QStringList &args, const QString &cwd, QString *error)
 {
     if (m_bridgePath.isEmpty() && m_bridgeDir.isValid()) {
+        // The bridge and the access policy it imports, side by side.
         const auto path = m_bridgeDir.filePath(QStringLiteral("openghost-bridge.js"));
-        if (QFile::copy(QStringLiteral(":/pi/openghost-bridge.js"), path))
+        if (QFile::copy(QStringLiteral(":/pi/openghost-policy.js"),
+                        m_bridgeDir.filePath(QStringLiteral("openghost-policy.js"))) &&
+            QFile::copy(QStringLiteral(":/pi/openghost-bridge.js"), path))
             m_bridgePath = path;
     }
     auto arguments = args;
     if (!m_bridgePath.isEmpty())
         arguments << QStringLiteral("-e") << m_bridgePath;
     auto *pi = new PiProcess(m_bridgePath, this);
+    pi->onExtension = [this](const QString &type, const QJsonObject &record) {
+        extensionRecord(type, record);
+    };
     if (!pi->start(arguments, cwd, error)) {
         delete pi;
         return nullptr;
@@ -651,8 +741,18 @@ PiProcess *PiBackend::child(const QString &session, const QString &cwd, QString 
             runEvent(session, type, object);
     };
     pi->onExit = [this, session] { exited(session); };
+    pi->onDialog = [this, session, pi](const QJsonObject &request) {
+        return dialog(session, pi, request);
+    };
+    pi->onStep = [this, session](const QString &token, const QString &kind,
+                                 const QJsonObject &value) {
+        if (kind == QStringLiteral("approval"))
+            approvalEnded(session, token, value);
+    };
     chat.pi = pi;
     chat.context.reset();
+    chat.mode.reset();
+    chat.auth = m_auth; // A new Pi reads the credentials as they are now.
     reap();
     return pi;
 }
@@ -668,6 +768,7 @@ void PiBackend::retire(Chat &chat, std::function<void()> gone)
     }
     auto *pi = std::exchange(chat.pi, nullptr);
     chat.context.reset();
+    chat.mode.reset();
     if (!pi) {
         if (gone)
             gone();
@@ -676,6 +777,8 @@ void PiBackend::retire(Chat &chat, std::function<void()> gone)
     chat.retiring = pi;
     pi->onRecord = {};
     pi->onExit = {};
+    pi->onStep = {};
+    pi->onDialog = {};
     pi->close([&chat, pi, gone = std::move(gone)] {
         chat.retiring = nullptr;
         pi->deleteLater();
@@ -690,6 +793,8 @@ void PiBackend::exited(const QString &session)
     if (auto *pi = std::exchange(chat.pi, nullptr))
         pi->deleteLater();
     chat.context.reset();
+    chat.mode.reset();
+    withdrawApprovals(session, false);
     const auto gone = failure(QStringLiteral("backend_unavailable"), QStringLiteral("Pi exited."));
     if (chat.run && chat.run->accepted)
         finish(session, {TurnStatus::Error, {}, gone});
@@ -860,34 +965,77 @@ void PiBackend::configure(RequestId id, const ConfigureSession &configure)
             error = failure(QStringLiteral("session_missing"), QStringLiteral("Pi no longer has this chat."));
         else if (!error && chat.version != configure.sessionVersion)
             error = failure(QStringLiteral("session_conflict"), QStringLiteral("This chat changed in Pi."));
-        else if (!error && (chat.run || chat.stopping))
+        const bool model = configure.model && configure.provider && !configure.model->isEmpty();
+        // A model switch waits for the running turn; an access mode applies at once.
+        if (!error && (chat.run || chat.stopping) && model)
             error = failure(QStringLiteral("busy"), QStringLiteral("A turn is already running."));
         if (error) {
             emit replied(id, *error);
             return;
         }
-        if (!configure.model || !configure.provider || configure.model->isEmpty()) {
-            emit replied(id, Reply{SessionConfigured{}}); // Nothing Pi changes here.
-            return;
+        const auto switchModel = [this, id, configure, model](SessionConfigured configured) {
+            if (!model) {
+                emit replied(id, Reply{configured});
+                return;
+            }
+            QString problem;
+            auto *pi = child(configure.sessionId, {}, &problem);
+            if (!pi) {
+                emit replied(id, failure(QStringLiteral("backend_unavailable"), problem));
+                return;
+            }
+            setModel(pi, *configure.provider, *configure.model,
+                     [this, id, configured](std::optional<Error> error,
+                                            const ModelSelection &actual) mutable {
+                         if (error) {
+                             emit replied(id, *error);
+                             return;
+                         }
+                         configured.model = actual.model;
+                         configured.provider = actual.provider;
+                         emit replied(id, Reply{configured});
+                     });
+        };
+        if (!configure.permissionMode)
+            return switchModel({});
+        // The mode reaches a running Pi now (the bridge reconsiders the approvals it
+        // waits on); an idle chat's Pi takes it before its next run.
+        const auto mode = *configure.permissionMode;
+        if (chat.run)
+            chat.run->mode = mode;
+        if (!chat.run || !chat.pi) { // Set before the next run (StartTurn names its mode).
+            SessionConfigured configured;
+            configured.permissionMode = mode;
+            return switchModel(configured);
         }
-        QString problem;
-        auto *pi = child(configure.sessionId, {}, &problem);
-        if (!pi) {
-            emit replied(id, failure(QStringLiteral("backend_unavailable"), problem));
-            return;
-        }
-        setModel(pi, *configure.provider, *configure.model,
-                 [this, id](std::optional<Error> error, const ModelSelection &actual) {
-                     if (error) {
-                         emit replied(id, *error);
-                         return;
-                     }
-                     SessionConfigured configured;
-                     configured.model = actual.model;
-                     configured.provider = actual.provider;
-                     emit replied(id, Reply{configured});
-                 });
+        setMode(chat.pi, mode,
+                [this, id, session = configure.sessionId, mode,
+                 switchModel](std::optional<Error> error) {
+                    if (error) {
+                        m_chats[session].mode.reset(); // Unknown: set again before the next run.
+                        emit replied(id, *error);
+                        return;
+                    }
+                    m_chats[session].mode = mode;
+                    SessionConfigured configured;
+                    configured.permissionMode = mode;
+                    switchModel(configured);
+                });
     });
+}
+void PiBackend::setMode(PiProcess *pi, PermissionMode mode,
+                        std::function<void(std::optional<Error>)> done)
+{
+    pi->bridge(
+        {{"op", "mode"}, {"mode", modeName(mode)}},
+        [done = std::move(done)](const QJsonObject &reply) {
+            if (succeeded(reply))
+                done(std::nullopt);
+            else
+                done(failure(QStringLiteral("backend_error"),
+                             errorOf(reply, QStringLiteral("Pi did not take the access mode."))));
+        },
+        StepDeadline);
 }
 // session.delete: the chat's running reply is aborted, its Pi child exits, and only
 // then is its Pi session file removed. An absent session succeeds (retry is safe).
@@ -972,6 +1120,7 @@ void PiBackend::start(RequestId id, Run run, const SessionParams &params)
     run.turn = uuid();
     run.version = chat.version.isEmpty() ? uuid() : chat.version; // a new one is created
     run.context = contextOf(params.userContext);
+    run.mode = params.permissionMode;
     run.chosen = params.selection;
     QString error;
     if (!child(session, params.cwd, &error)) {
@@ -1002,8 +1151,9 @@ void PiBackend::refuse(const QString &session, const Error &error)
         emit replied(request, error);
 }
 // What the chat's Pi needs before the prompt, each awaited because Pi runs RPC lines
-// concurrently: the instructions and pinned files, the chat's model, that model's
-// sight when the input has pictures, then the turn's start record in Pi's session.
+// concurrently: the instructions and pinned files, the chat's access mode,
+// credentials changed since it last read them, the chat's model, that model's sight
+// when the input has pictures, then the turn's start record in Pi's session.
 void PiBackend::advance(const QString &session, const QString &turn)
 {
     auto *run = running(session, turn);
@@ -1048,7 +1198,37 @@ void PiBackend::advance(const QString &session, const QString &turn)
             StepDeadline);
         return;
     }
-    case 1: { // The chat's model, checked against what Pi has selected, never cached.
+    case 1: { // Ask / Auto / Full, enforced by the bridge before any tool runs.
+        const auto mode = run->mode;
+        if (chat.mode == mode)
+            return advance(session, turn);
+        setMode(chat.pi, mode, [this, session, turn, mode](std::optional<Error> error) {
+            if (!running(session, turn))
+                return;
+            if (error)
+                return refuse(session, *error);
+            m_chats[session].mode = mode;
+            advance(session, turn);
+        });
+        return;
+    }
+    case 2: { // Credentials changed since this Pi read them: it rereads them.
+        const auto generation = m_auth;
+        if (chat.auth == generation)
+            return advance(session, turn);
+        chat.pi->bridge(
+            {{"op", "refresh"}},
+            [this, session, generation,
+             next = proceed(QStringLiteral("Pi could not reread its credentials."))](
+                const QJsonObject &reply) {
+                if (succeeded(reply))
+                    m_chats[session].auth = generation;
+                next(reply);
+            },
+            StepDeadline);
+        return;
+    }
+    case 3: { // The chat's model, checked against what Pi has selected, never cached.
         const auto chosen = run->chosen;
         chat.pi->rpc(
             {{"type", "get_state"}},
@@ -1087,7 +1267,7 @@ void PiBackend::advance(const QString &session, const QString &turn)
             StepDeadline);
         return;
     }
-    case 2: { // Pictures go only to a model Pi says sees images; Pi would replace
+    case 4: { // Pictures go only to a model Pi says sees images; Pi would replace
               // them with a placeholder for any other.
         if (run->images.isEmpty())
             return advance(session, turn);
@@ -1113,7 +1293,7 @@ void PiBackend::advance(const QString &session, const QString &turn)
             StepDeadline);
         return;
     }
-    case 3: { // Its start, in Pi's session before Pi can take it.
+    case 5: { // Its start, in Pi's session before Pi can take it.
         QJsonObject entry{{"event", "start"}, {"version", run->version}, {"client", run->client},
                           {"turn", run->turn}, {"retry", run->retry}};
         if (run->input)
@@ -1336,6 +1516,7 @@ void PiBackend::finish(const QString &session, TurnCompleted done)
         return;
     }
     const auto status = done.status;
+    withdrawApprovals(session, true); // Nothing of an ended turn runs later.
     // Its end, in Pi's session beside the turn's own messages.
     if (chat.pi) {
         QJsonObject entry{{"event", "end"}, {"turn", run.turn}, {"client", run.client},
@@ -1433,31 +1614,39 @@ void PiBackend::steer(RequestId id, const SteerTurn &steer)
         });
 }
 // Sign-in, API key, cancel and logout run Pi's own login/logout; the reply comes
-// when Pi finishes. Status is then reread from Pi, never assumed.
+// when Pi finishes. Status is then reread from Pi, never assumed. A sign-in is the
+// flow its token names (see request()): once cancelled or superseded, its steps are
+// dropped and its failure is only that it was cancelled.
 void PiBackend::auth(RequestId id, const QString &provider, QJsonObject request)
 {
     const auto op = request.value("op").toString();
-    if (op == QStringLiteral("login") || op == QStringLiteral("setKey"))
-        m_cancelled.remove(provider);
-    const auto token = QStringLiteral("og-login-%1").arg(++m_tokens);
+    const bool flow = op == QStringLiteral("login") || op == QStringLiteral("setKey");
+    const auto token = flow ? m_flowOf.take(id) : QStringLiteral("og-login-%1").arg(++m_tokens);
     request.insert("provider", provider);
     request.insert("token", token);
-    m_logins.insert(token, provider);
-    m_control->bridge(request, [this, id, provider, op, token](const QJsonObject &reply) {
+    if (flow)
+        m_logins.insert(token, provider);
+    m_control->bridge(request, [this, id, provider, op, flow, token](const QJsonObject &reply) {
         m_logins.remove(token);
-        const bool cancel = op == QStringLiteral("cancel");
-        if (!cancel)
+        const bool current = flow && m_flows.value(provider) == token;
+        if (current) {
+            m_flows.remove(provider);
             m_steps.remove(provider);
-        if (reply.value("ok").toBool()) {
+        }
+        const bool ok = reply.value("ok").toBool();
+        if (ok) {
             emit replied(id, Reply{Null{}});
-        } else if (!cancel && m_cancelled.remove(provider)) {
-            emit replied(id, Reply{Null{}}); // Aborted because it was cancelled.
+        } else if (flow && !current) {
+            emit replied(id, Reply{Null{}}); // Ended because it was cancelled or replaced.
         } else {
             emit replied(id, failure(QStringLiteral("auth_failed"),
                                      errorOf(reply, QStringLiteral("Pi could not sign in."))));
         }
-        if (!cancel)
-            emit globalEvent(ModelsChanged{provider});
+        if (op == QStringLiteral("cancel"))
+            return;
+        if (ok)
+            ++m_auth; // Every chat's Pi rereads credentials before its next run.
+        emit globalEvent(ModelsChanged{provider});
     });
 }
 // set_model on one chat's Pi. Pi's reply names the model it actually selected.
@@ -1490,9 +1679,26 @@ void PiBackend::setModel(PiProcess *pi, const QString &provider, const QString &
 void PiBackend::step(const QString &token, const QString &kind, const QJsonObject &value)
 {
     const auto provider = m_logins.value(token);
-    if (provider.isEmpty())
-        return;
+    if (provider.isEmpty() || m_flows.value(provider) != token)
+        return; // A cancelled or replaced sign-in: never shown in the current one's form.
     const auto prior = m_steps.value(provider);
+    if (kind == QStringLiteral("withdrawn")) {
+        // Pi took its prompt back (the browser finished first): no answer is wanted.
+        if (!prior.promptId || *prior.promptId != value.value("promptId").toString())
+            return;
+        LoginStep waiting;
+        waiting.provider = provider;
+        waiting.type = prior.userCode ? QStringLiteral("device_code") : QStringLiteral("waiting");
+        waiting.url = prior.url;
+        waiting.userCode = prior.userCode;
+        waiting.message =
+            prior.userCode
+                ? QStringLiteral("Enter the code %1 on the verification page.").arg(*prior.userCode)
+                : QStringLiteral("Finish signing in in the browser…");
+        m_steps.insert(provider, waiting);
+        emit globalEvent(waiting);
+        return;
+    }
     LoginStep step;
     step.provider = provider;
     step.type = QStringLiteral("waiting");
@@ -1529,6 +1735,121 @@ void PiBackend::step(const QString &token, const QString &kind, const QJsonObjec
         step.type = QStringLiteral("device_code");
     m_steps.insert(provider, step);
     emit globalEvent(step);
+}
+// An extension's blocking dialog. The bridge's approval confirm is the running
+// turn's approval card; anything else (and an approval no turn can show) is
+// declined at once and said, so Pi never waits on a question nobody sees.
+bool PiBackend::dialog(const QString &session, PiProcess *pi, const QJsonObject &request)
+{
+    const auto method = request.value("method").toString();
+    const auto title = request.value("title").toString();
+    if (method == QStringLiteral("confirm") && title == ApprovalTitle) {
+        const auto ask =
+            QJsonDocument::fromJson(request.value("message").toString().toUtf8()).object();
+        const auto chat = session.isEmpty() ? m_chats.end() : m_chats.find(session);
+        if (chat == m_chats.end() || chat->second.pi != pi || !chat->second.run ||
+            !chat->second.run->accepted || chat->second.run->cancelled ||
+            ask.value("approvalId").toString().isEmpty())
+            return false; // Declined: Pi blocks the step.
+        const auto &run = *chat->second.run;
+        ApprovalRequest approval;
+        approval.sessionId = session;
+        approval.turnId = run.turn;
+        approval.approvalId = ask.value("approvalId").toString();
+        approval.toolCallId = ask.value("toolCallId").toString();
+        approval.tool = ask.value("tool").toString();
+        approval.args = ask.value("args").toObject();
+        approval.presentation = presentationOf(ask.value("presentation"));
+        const auto id = ++m_reverse;
+        m_approvals.insert(
+            id, {session, run.turn, request.value("id").toString(), approval.approvalId});
+        emit reverseRequest(id, approval);
+        return true;
+    }
+    report(QStringLiteral("warning"),
+           title.isEmpty()
+               ? QStringLiteral(
+                     "A Pi extension asked a question OpenGhost cannot show, so it was declined.")
+               : QStringLiteral("A Pi extension asked “%1”, which OpenGhost cannot show, so it was "
+                                "declined.")
+                     .arg(title));
+    return false;
+}
+// The user's answer to an approval card: Pi's confirm, answered once.
+void PiBackend::answer(RequestId id, const ReverseResult &result)
+{
+    const auto it = m_approvals.find(id);
+    if (it == m_approvals.end())
+        return; // Already withdrawn or answered.
+    const auto approval = *it;
+    m_approvals.erase(it);
+    const auto *decided = std::get_if<ApprovalAnswer>(&result);
+    const bool allow = decided && decided->decision == Decision::Allow;
+    const auto chat = m_chats.find(approval.session);
+    if (chat != m_chats.end() && chat->second.pi)
+        chat->second.pi->send(
+            {{"type", "extension_ui_response"}, {"id", approval.dialog}, {"confirmed", allow}});
+}
+// Pi took an approval back unanswered: Stop (decision null), or a new access mode
+// no longer asks for it (allow). Its card goes; an allowed one says so.
+void PiBackend::approvalEnded(const QString &session, const QString &approvalId,
+                              const QJsonObject &value)
+{
+    for (auto it = m_approvals.begin(); it != m_approvals.end(); ++it) {
+        if (it->session != session || it->approvalId != approvalId)
+            continue;
+        const auto id = it.key();
+        const auto turn = it->turn;
+        m_approvals.erase(it);
+        emit reverseCancelled(id);
+        if (value.value("decision").toString() == QStringLiteral("allow"))
+            if (auto *run = running(session, turn))
+                if (run->accepted)
+                    publish(session, ApprovalResolved{approvalId, Decision::Allow});
+        return;
+    }
+}
+// A chat's approval cards end with its turn (or its Pi): declined in Pi if it still
+// waits on them, and withdrawn from the frontend.
+void PiBackend::withdrawApprovals(const QString &session, bool answer)
+{
+    QVector<RequestId> ids;
+    for (auto it = m_approvals.cbegin(); it != m_approvals.cend(); ++it)
+        if (it->session == session)
+            ids.append(it.key());
+    for (const auto id : ids) {
+        const auto approval = m_approvals.take(id);
+        auto *pi = m_chats[session].pi;
+        if (answer && pi)
+            pi->send(
+                {{"type", "extension_ui_response"}, {"id", approval.dialog}, {"confirmed", false}});
+        emit reverseCancelled(id);
+    }
+}
+// Extension errors and error/warning notifications: said in the status line, never
+// turned into the assistant's reply.
+void PiBackend::extensionRecord(const QString &type, const QJsonObject &record)
+{
+    if (type == QStringLiteral("extension_error")) {
+        // The bridge's retry trigger failing is the retry's own error (runEvent).
+        if (record.value("extensionPath").toString() == m_bridgePath &&
+            record.value("event").toString() == QStringLiteral("send_message"))
+            return;
+        const auto name = QFileInfo(record.value("extensionPath").toString()).fileName();
+        report(QStringLiteral("error"),
+               QStringLiteral("A Pi extension%1 failed: %2")
+                   .arg(name.isEmpty() ? QString() : QStringLiteral(" (%1)").arg(name),
+                        record.value("error").toString(QStringLiteral("no reason given."))));
+    } else if (type == QStringLiteral("notify")) {
+        const auto level = record.value("notifyType").toString();
+        if (level == QStringLiteral("error") || level == QStringLiteral("warning"))
+            report(level, record.value("message").toString());
+    }
+}
+void PiBackend::report(const QString &level, const QString &message)
+{
+    fprintf(stderr, "[pi] %s: %s\n", qPrintable(level), qPrintable(message));
+    emit globalEvent(Log{level, message});
 }
 // Pi's events for the chat's accepted turn. Messages are Pi's own: deltas stream, and
 // message_end replaces them with the authoritative text and stop reason.

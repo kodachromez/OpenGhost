@@ -3,6 +3,10 @@
 # relies on, shaped as Pi 1.0.4 emits them. No model, network or credentials.
 # The prompt text picks the run: reject, handled, fail, length, tools, slow,
 # delay, switch (an extension changes the model); anything else is echoed. While "slow" runs, steers queue; a steer
+# approve: a tool call the bridge asks the user about (unless the access mode is
+# full); foreign: another extension's select dialog; ext-error: an extension fails.
+# Sign-in (bridge login) asks one prompt; provider "w" takes it back at once, and
+# cancelling reports a stale step of the cancelled flow before its end.
 # containing "now" delivers the queue in order. FAKE_PI_LOG records commands
 # (with their prompt images) and, per run, the standing instructions and pinned
 # files its system prompt carried. Model "v" sees images; "m" and "m2" do not.
@@ -21,6 +25,10 @@ entries = []
 flushed = False
 model = None  # (provider, id) Pi has selected
 instructions = ""
+access = "ask"  # the bridge's access mode
+dialogs = {}  # extension UI request id -> callback(response)
+approval = None  # (approvalId, dialog id) the bridge waits on
+logins = {}  # provider -> (flow token, promptId)
 files = []  # the bridge's pinned files: [{name, text}]
 INPUTS = {"m": ["text"], "m2": ["text"], "v": ["text", "image"], "alias": ["text"]}
 if session and os.path.exists(session):
@@ -119,6 +127,20 @@ def status(token, value):
          "statusKey": "openghost:" + token, "statusText": json.dumps(value)})
 
 
+def dialog(request, callback):
+    rid = "dlg-%d" % (len(dialogs) + 1 + int(time.time() * 1000) % 1000000)
+    dialogs[rid] = callback
+    out(dict(request, type="extension_ui_request", id=rid))
+    return rid
+
+
+def tool_done(ran):
+    globals()["approval"] = None
+    note({"type": "tool", "ran": ran})
+    assistant("ran" if ran else "blocked", "stop", usage(9, 1))
+    settle()
+
+
 def run(text, images=None):
     global streaming
     streaming = True
@@ -139,6 +161,30 @@ def run(text, images=None):
         globals()["model"] = ("p", "m2")
         append({"type": "model_change", "provider": "p", "modelId": "m2"})
         assistant("Switched.", "stop", usage(8, 2))
+    elif text == "approve":
+        assistant("Let me run it.", "toolUse", usage(20, 2))
+        if access == "full":
+            return tool_done(True)
+        request = {"approvalId": "og-approval-1", "toolCallId": "call-1", "tool": "bash",
+                   "args": {"command": "touch made.txt"},
+                   "presentation": {"kind": "command", "title": "Run a command", "effect": "change",
+                                    "badge": True, "places": [{"kind": "file", "label": "made.txt",
+                                                               "title": "made.txt"}],
+                                    "code": "touch made.txt", "reveal": "command"}}
+        rid = dialog({"method": "confirm", "title": "openghost:approval", "message": json.dumps(request)},
+                     lambda r: tool_done(bool(r.get("confirmed")) and not r.get("cancelled")))
+        globals()["approval"] = ("og-approval-1", rid)
+        return
+    elif text == "foreign":
+        def answered(r):
+            assistant("foreign: " + ("cancelled" if r.get("cancelled") else str(r.get("value"))), "stop", usage(3, 1))
+            settle()
+        dialog({"method": "select", "title": "Pick one", "options": ["a", "b"]}, answered)
+        return
+    elif text == "ext-error":
+        out({"type": "extension_error", "extensionPath": "/x/helper.ts", "event": "tool_call", "error": "helper broke"})
+        out({"type": "extension_ui_request", "id": "n1", "method": "notify", "message": "helper is unhappy", "notifyType": "warning"})
+        assistant("Echo: ext-error", "stop", usage(3, 1))
     elif text in ("slow", "delay"):
         out({"type": "message_start", "message": {"role": "assistant", "content": [],
              "provider": selected()[0], "model": selected()[1], "stopReason": "pending", "usage": usage(0, 0)}})
@@ -154,7 +200,11 @@ def bridged(cid, request):
     token = request.get("token", "")
     op = request.get("op")
     if op == "providers":
-        status(token, {"ok": True, "providers": []})
+        # FAKE_PI_PROVIDERS names providers with Pi's own sign-in (comma separated).
+        names = [n for n in os.environ.get("FAKE_PI_PROVIDERS", "").split(",") if n]
+        status(token, {"ok": True, "providers": [
+            {"id": n, "name": n.upper(), "oauth": n.upper() + " sign-in", "apiKey": None,
+             "connected": False, "stored": False} for n in names]})
     elif op == "retry":
         if streaming:
             status(token, {"ok": False, "error": "Pi is still busy."})
@@ -178,6 +228,41 @@ def bridged(cid, request):
         globals()["instructions"] = request.get("instructions", "")
         globals()["files"] = request.get("files", [])
         status(token, {"ok": True})
+    elif op == "mode":
+        globals()["access"] = request.get("mode")
+        note({"type": "mode", "mode": access})
+        status(token, {"ok": True, "mode": access})
+        if approval and access == "full":  # It no longer asks: allowed.
+            aid, rid = approval
+            dialogs.pop(rid, None)
+            status(aid + ":approval", {"decision": "allow"})
+            tool_done(True)
+        return respond(cid, "prompt", data={"disposition": "handled"})
+    elif op == "refresh":
+        note({"type": "refresh"})
+        status(token, {"ok": True})
+    elif op in ("login", "setKey"):
+        provider = request.get("provider")
+        prompt = "p-" + token
+        logins[provider] = (token, prompt)
+        status(token + ":prompt", {"promptId": prompt, "type": "text", "message": "Code?"})
+        if provider == "w":
+            status(token + ":withdrawn", {"promptId": prompt})
+        return respond(cid, "prompt", data={"disposition": "handled"})
+    elif op == "answer":
+        for provider, (flow, prompt) in list(logins.items()):
+            if prompt == request.get("promptId"):
+                del logins[provider]
+                status(flow, {"ok": True})
+        status(token, {"ok": True})
+    elif op == "cancel":
+        provider = request.get("provider")
+        flow = logins.get(provider, (None, None))[0]
+        if flow and (not request.get("flow") or request.get("flow") == flow):
+            del logins[provider]
+            status(flow + ":prompt", {"promptId": "late", "type": "text", "message": "Stale?"})
+            status(flow, {"ok": False, "error": "Login cancelled"})
+        status(token, {"ok": True})
     elif op == "mark":
         append({"type": "custom", "customType": "openghost-turn", "data": request.get("entry")})
         status(token, {"ok": True})
@@ -193,6 +278,12 @@ def handle(command):
     if "images" in command:
         record["images"] = [{"mimeType": i.get("mimeType"), "bytes": len(i.get("data", ""))} for i in command["images"]]
     note(record)
+    if kind == "extension_ui_response":
+        callback = dialogs.pop(command.get("id"), None)
+        note({k: command[k] for k in ("confirmed", "cancelled") if k in command} | {"type": "ui_response"})
+        if callback:
+            callback(command)
+        return
     if kind == "get_commands":
         respond(cid, kind, data={"commands": [{"name": "openghost", "source": "extension",
                                                "sourceInfo": {"path": bridge}}]})
@@ -259,6 +350,12 @@ def handle(command):
         out({"type": "queue_update", "steering": [], "followUp": []})
         respond(cid, kind, data={"steering": cleared, "followUp": []})
     elif kind == "abort":
+        if approval:  # Pi's signal takes the approval back unanswered.
+            aid, rid = approval
+            dialogs.pop(rid, None)
+            globals()["approval"] = None
+            status(aid + ":approval", {"decision": None})
+            note({"type": "tool", "ran": False})
         if streaming:
             out({"type": "message_end", "message": {"role": "assistant", "content": [{"type": "text", "text": "working"}],
                  "provider": selected()[0], "model": selected()[1], "stopReason": "aborted", "usage": usage(50, 3)}})

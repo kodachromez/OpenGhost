@@ -100,6 +100,12 @@ to **OFF** and enables all four checks:
   scene graph (e.g. `MAXIMIZE=1 tests/parity/private-kwin.sh 3840 2160 1.45 out
   --splash-check`, a private headless KWin) it also checks the rendered frames:
   mist at .6 of the window's pixels, no Ghost afterimage, identical redraws.
+- `native_pi_real_test`: `PiBackend` against the installed `pi` (skipped without
+  one) with Pi AI's faux model in a throwaway agent directory: Ask/Auto/Full,
+  approval cards, Stop, other extensions' dialogs and errors. No network or
+  credentials. `native_pi_policy_check` (needs `node`) checks the access policy's
+  decisions directly; `native_sign_in_test` checks the sign-in form across
+  cancel/sign-in-again races against the scripted Pi.
 
 CTest uses offscreen/software rendering. Smokes isolate appearance, preferences
 and the library in temporary directories (even the fake smoke uses a temporary

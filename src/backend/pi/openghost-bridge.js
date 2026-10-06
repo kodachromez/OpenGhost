@@ -5,7 +5,18 @@
 //   openghost:<token>         {ok, error?, providers?}  once, when the op ends
 //   openghost:<token>:event   a Pi auth event (auth_url, device_code, info, progress)
 //   openghost:<token>:prompt  {promptId, type, message, placeholder?, options?}
-// A prompt is answered by {op: "answer", promptId, value} (or cancelled).
+//   openghost:<token>:withdrawn {promptId}  Pi took a prompt back unanswered
+// A prompt is answered by {op: "answer", promptId, value}. Each sign-in is its own
+// flow, named by its token: {op: "cancel", provider, flow} cancels that flow only,
+// and a new sign-in for the provider ends the one before. {op: "refresh"} rereads
+// Pi's models.json and stored credentials (as `providers` also does first), so
+// changes made outside OpenGhost (another `pi /login`) are seen.
+// {op: "mode", mode} sets Ask / Auto / Full (src/backend/pi/openghost-policy.js).
+// A tool call that needs approval waits on Pi's own extension UI: a confirm whose
+// title is "openghost:approval" and whose message is the request as JSON
+// {approvalId, toolCallId, tool, args, presentation}; Allow runs it, anything else
+// blocks it. A request Pi took back unanswered (Stop, or a mode that no longer
+// asks) is said by  openghost:<approvalId>:approval {decision: "allow"|null}.
 // {op: "retry"} retries Pi's failed latest reply in place (OpenGhost's Retry).
 // {op: "context", instructions, files} sets what every run's system prompt
 // carries from Settings → General: the standing instructions and the pinned text
@@ -13,6 +24,7 @@
 // section: system prompt, never history, so compaction keeps them. {op: "mark", entry} records an OpenGhost turn's start or
 // end in Pi's session (a custom entry: kept in the session file, never context).
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
+import { describe, needsApproval } from "./openghost-policy.js";
 
 const RETRY = "openghost-retry"; // The custom message that starts a retry run.
 const MARK = "openghost-turn"; // OpenGhost's turn records in Pi's session.
@@ -21,7 +33,12 @@ const FILES = "openghost-files";
 let instructions = "";
 let files = "";
 const escape = (name) => name.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-const logins = new Map(); // provider -> AbortController
+const APPROVAL = "openghost:approval"; // The confirm OpenGhost shows as an approval card.
+const MODES = new Set(["ask", "auto", "full"]);
+let mode = "ask"; // Until OpenGhost says otherwise: never less than asked for.
+const approvals = new Map(); // approvalId -> {name, input, cwd, controller, allowed}
+let nextApproval = 0;
+const logins = new Map(); // provider -> {token, controller}
 const prompts = new Map(); // promptId -> {resolve, reject}
 let nextPrompt = 0;
 
@@ -37,6 +54,32 @@ function latest(sessionManager) {
 }
 
 export default function (pi) {
+  // Every tool call, the model's or another tool's, passes here before it runs.
+  pi.on("tool_call", async (event, ctx) => {
+    const name = event.toolName, input = event.input, cwd = ctx.cwd;
+    if (!needsApproval(name, input, { mode, cwd })) return undefined;
+    if (!ctx.hasUI) return { block: true, reason: "This step needs the user's approval, and nobody can be asked." };
+    const approvalId = `og-approval-${++nextApproval}`;
+    const controller = new AbortController();
+    const entry = { name, input, cwd, controller, allowed: false };
+    approvals.set(approvalId, entry);
+    const signal = ctx.signal ? AbortSignal.any([ctx.signal, controller.signal]) : controller.signal;
+    let allowed = false;
+    try {
+      const request = { approvalId, toolCallId: event.toolCallId, tool: name, args: input ?? {}, presentation: describe(name, input, cwd) };
+      allowed = await ctx.ui.confirm(APPROVAL, JSON.stringify(request), { signal });
+    } catch {
+      allowed = false; // Blocked: a failure never runs the step.
+    } finally {
+      approvals.delete(approvalId);
+    }
+    if (signal.aborted) {
+      allowed = entry.allowed; // Taken back: allowed only by a mode that no longer asks.
+      ctx.ui.setStatus(`openghost:${approvalId}:approval`, JSON.stringify({ decision: allowed ? "allow" : null }));
+    }
+    if (allowed) return undefined;
+    return { block: true, reason: ctx.signal?.aborted ? "Stopped before this step ran." : "The user did not allow this step." };
+  });
   pi.on("before_agent_start", (event) => {
     const sections = event.systemPromptOptions.sections;
     if (instructions) sections[INSTRUCTIONS] = instructions;
@@ -71,18 +114,22 @@ export default function (pi) {
     return { messages };
   });
   pi.registerCommand("openghost", {
-    description: "OpenGhost frontend bridge (providers, login, logout, retry, context, turn records)",
+    description: "OpenGhost frontend bridge (providers, login, logout, refresh, access mode, retry, context, turn records)",
     handler: async (args, ctx) => {
       let request;
       try {
         request = JSON.parse(args);
       } catch {
+        // Still answered, so nothing waits on it: its token, if one can be read.
+        const token = /"token"\s*:\s*"([^"]+)"/.exec(args)?.[1];
+        if (token) ctx.ui.setStatus(`openghost:${token}`, JSON.stringify({ ok: false, error: "OpenGhost sent a malformed bridge request." }));
         return;
       }
       const status = (suffix, value) => ctx.ui.setStatus(`openghost:${request.token}${suffix}`, JSON.stringify(value));
       const runtime = ctx.modelRegistry.runtime; // The session's own ModelRuntime.
       try {
         if (request.op === "providers") {
+          await runtime.refresh({ allowNetwork: false, signal: AbortSignal.timeout(15_000) });
           const stored = new Set(
             (await runtime.listCredentials({ signal: AbortSignal.timeout(15_000) })).map((c) => c.providerId));
           const providers = runtime.getProviders().map((provider) => ({
@@ -95,14 +142,15 @@ export default function (pi) {
           }));
           status("", { ok: true, providers });
         } else if (request.op === "login" || request.op === "setKey") {
-          logins.get(request.provider)?.abort();
+          logins.get(request.provider)?.controller.abort(); // One sign-in per provider.
           const controller = new AbortController();
-          logins.set(request.provider, controller);
+          const flow = { token: request.token, controller };
+          logins.set(request.provider, flow);
           let key = request.op === "setKey" ? request.key : undefined;
           const ask = (prompt) => new Promise((resolve, reject) => {
             const promptId = `p${++nextPrompt}`;
             const abort = () => {
-              prompts.delete(promptId);
+              if (prompts.delete(promptId)) status(":withdrawn", { promptId });
               reject(new Error("Login cancelled"));
             };
             for (const signal of [controller.signal, prompt.signal]) {
@@ -132,7 +180,7 @@ export default function (pi) {
               notify: (event) => status(":event", event),
             }, { getDeviceId: () => SettingsManager.create(ctx.cwd).getOrCreateDeviceId() }); // As /login.
           } finally {
-            if (logins.get(request.provider) === controller) logins.delete(request.provider);
+            if (logins.get(request.provider) === flow) logins.delete(request.provider);
           }
           status("", { ok: true });
         } else if (request.op === "answer") {
@@ -141,8 +189,22 @@ export default function (pi) {
           if (prompt) prompt.resolve(String(request.value ?? ""));
           status("", { ok: !!prompt, error: prompt ? undefined : "That sign-in step has ended." });
         } else if (request.op === "cancel") {
-          logins.get(request.provider)?.abort();
+          const flow = logins.get(request.provider);
+          if (flow && (!request.flow || flow.token === request.flow)) flow.controller.abort();
           status("", { ok: true });
+        } else if (request.op === "refresh") {
+          await runtime.refresh({ allowNetwork: false, signal: AbortSignal.timeout(15_000) });
+          status("", { ok: true });
+        } else if (request.op === "mode") {
+          if (!MODES.has(request.mode)) throw new Error(`Unknown access mode: ${request.mode}`);
+          mode = request.mode;
+          // Waiting approvals the new mode no longer asks for are allowed; the rest wait.
+          for (const entry of approvals.values())
+            if (!needsApproval(entry.name, entry.input, { mode, cwd: entry.cwd })) {
+              entry.allowed = true;
+              entry.controller.abort();
+            }
+          status("", { ok: true, mode });
         } else if (request.op === "retry") {
           // No new or repeated input: Pi continues its own context from where the
           // failed reply left it, so earlier tool effects are not run again.

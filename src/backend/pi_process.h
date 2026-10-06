@@ -36,6 +36,12 @@ class PiProcess final : public QObject
     std::function<void(const QString &type, const QJsonObject &record)> onRecord;
     std::function<void(const QString &token, const QString &kind, const QJsonObject &value)> onStep;
     std::function<void()> onExit; // after every waiting reply has failed
+    // An extension's blocking dialog (select, confirm, input, editor). True: the
+    // handler answers it later (send an extension_ui_response). False, or no
+    // handler: it is cancelled at once, so Pi never waits on it.
+    std::function<bool(const QJsonObject &request)> onDialog;
+    // extension_error records and extension notify requests ("notify").
+    std::function<void(const QString &type, const QJsonObject &record)> onExtension;
 
   private:
     void readStdout();
