@@ -1,5 +1,5 @@
 import QtQuick
-import OpenGhost.Native
+import OpenGhost.Cpp
 
 // A CSS `text-shadow: 0 0 <2σ>px <color>` of `source` (a sibling, at the
 // same place): its pixels' alpha blurred by a Gaussian of `sigma` px, as

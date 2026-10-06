@@ -1,6 +1,6 @@
 import QtQuick
 import QtQuick.Controls
-import OpenGhost.Native
+import OpenGhost.Cpp
 
 // A drawing (diagram.js DiagramView): compiled and painted off the GUI thread
 // (DiagramImage), placed in a stage as wide as the chat the way viewSpec

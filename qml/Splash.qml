@@ -1,5 +1,5 @@
 import QtQuick
-import OpenGhost.Native
+import OpenGhost.Cpp
 
 // The startup splash, OpenGhost 1.3's (splash.js, splash-mist.js). Night
 // falls over the window and mist drifts through it, with motes of light in

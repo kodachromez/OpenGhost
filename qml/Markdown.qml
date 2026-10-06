@@ -1,5 +1,5 @@
 import QtQuick
-import OpenGhost.Native
+import OpenGhost.Cpp
 
 // One level of a message's blocks: the message itself, or a quote's or list
 // item's contents. Nested levels load this file again through a Loader;

@@ -1,7 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Effects
-import OpenGhost.Native
+import OpenGhost.Cpp
 
 // Settings → Usage (OpenGhost 1.2's settings-usage.js): the tokens sent and
 // written back today, over 7 and 30 days and all the time, each split by

@@ -1,7 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Effects
-import OpenGhost.Native
+import OpenGhost.Cpp
 
 // One block of a message, drawn by kind from markdown's allowlist
 // (markdown.js's rendering and styles.css). Content is never HTML: text is

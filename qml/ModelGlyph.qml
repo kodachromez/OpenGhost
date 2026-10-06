@@ -1,5 +1,5 @@
 import QtQuick
-import OpenGhost.Native
+import OpenGhost.Cpp
 
 // The model sparkle (model-button.js): a big outlined star and a small solid
 // one circling it, in the 60-unit box of the other glyphs. `bigTurn` turns

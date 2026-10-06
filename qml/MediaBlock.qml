@@ -1,6 +1,6 @@
 import QtQuick
 import QtQuick.Effects
-import OpenGhost.Native
+import OpenGhost.Cpp
 
 // Pictures and videos shown in a reply (media-embed.js and styles.css
 // .md-media): the pictures as a stack to leaf through, with the caption and

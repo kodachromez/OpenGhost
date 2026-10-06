@@ -1,6 +1,6 @@
 import QtQuick
 import QtQuick.Effects
-import OpenGhost.Native
+import OpenGhost.Cpp
 
 // The effort's stage (OpenGhost 1.2 effort-stage.js): while the slider is
 // open the app frosts over around it, softly, as it does around a selection,

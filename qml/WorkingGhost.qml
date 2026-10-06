@@ -1,5 +1,5 @@
 import QtQuick
-import OpenGhost.Native
+import OpenGhost.Cpp
 
 // The run's working Ghost (chat.js's .message-status), after the newest row
 // while OpenGhost works. It enters with ghost-in (450 ms); it collapses away while

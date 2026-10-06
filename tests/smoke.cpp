@@ -183,7 +183,7 @@ int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
           "no inherited recovery banner");
     check(!QFile::exists(QStringLiteral(":/OpenGhost/Ui/ToolCard.qml")),
           "no tool-result panel packaged");
-    check(qmlTypeId("OpenGhost.Native", 1, 0, "ToolText") == -1,
+    check(qmlTypeId("OpenGhost.Cpp", 1, 0, "ToolText") == -1,
           "no tool/subagent display helper registered");
     const auto roles = controller.transcript()->roleNames().values();
     check(roles.contains("messageState") && !roles.contains("toolName") &&
@@ -680,7 +680,7 @@ int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
                   "a click on the plate asks for the picture and adds it to the stack");
         }
         if (stack) {
-            auto *theme = engine.singletonInstance<Theme *>("OpenGhost.Native", "Theme");
+            auto *theme = engine.singletonInstance<Theme *>("OpenGhost.Cpp", "Theme");
             const bool wasReduced = theme->reducedMotion();
             theme->setReducedMotion(
                 true); // Deterministic hit geometry; spring was exercised above.

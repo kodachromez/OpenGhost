@@ -1,7 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Shapes
-import OpenGhost.Native
+import OpenGhost.Cpp
 
 // Settings → Appearance (OpenGhost 1.2's settings-appearance.js): the themes
 // as small windows of the app itself, painted with that theme's own colours.

@@ -11,6 +11,8 @@
 #include <memory>
 
 #include <QCommandLineParser>
+#include <QDir>
+#include <QFileInfo>
 #include <QFont>
 #include <QGuiApplication>
 #include <QIcon>
@@ -21,6 +23,35 @@
 #include <QtWebEngineQuick/qtwebenginequickglobal.h>
 #include "browser/qt_browser_automation.h"
 #endif
+
+namespace
+{
+// One-time move of the profile written under the pre-rename application name.
+// Each location moves only when the new one does not exist yet; afterwards
+// every read and write uses the openghost-cpp locations.
+void migrateProfile(QGuiApplication &app)
+{
+    const auto locations = {QStandardPaths::AppConfigLocation, QStandardPaths::AppDataLocation,
+                            QStandardPaths::CacheLocation};
+    const QString current = app.applicationName();
+    app.setApplicationName(QStringLiteral("openghost-native")); // legacy name, migration only
+    QStringList old;
+    for (const auto location : locations)
+        old.append(QStandardPaths::writableLocation(location));
+    app.setApplicationName(current);
+    qsizetype i = 0;
+    for (const auto location : locations) {
+        const QString from = old[i++];
+        const QString to = QStandardPaths::writableLocation(location);
+        if (from.isEmpty() || to.isEmpty() || from == to || !QFileInfo(from).isDir() ||
+            QFileInfo::exists(to))
+            continue;
+        QDir().mkpath(QFileInfo(to).absolutePath());
+        if (!QDir().rename(from, to))
+            fprintf(stderr, "Could not migrate %s to %s\n", qPrintable(from), qPrintable(to));
+    }
+}
+} // namespace
 
 #ifdef OPENGHOST_SMOKE_TEST
 int smokeTest(QQmlApplicationEngine &engine, WindowController &controller);
@@ -52,8 +83,7 @@ int main(int argc, char *argv[])
 #endif
     QGuiApplication app(argc, argv);
     platform::afterApplication();
-    // Kept from before the OpenGhost C++ rename: it names the existing profile paths.
-    app.setApplicationName(QStringLiteral("openghost-native"));
+    app.setApplicationName(QStringLiteral("openghost-cpp"));
     app.setApplicationDisplayName(QStringLiteral("OpenGhost C++"));
     app.setApplicationVersion(QStringLiteral("0.1"));
     app.setWindowIcon(QIcon(QStringLiteral(":/openghost.png")));
@@ -103,6 +133,7 @@ int main(int argc, char *argv[])
     } else
 #endif
     {
+        migrateProfile(app);
         const QString config = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
         appearancePath = config + QStringLiteral("/appearance.json");
         preferencesPath = config + QStringLiteral("/preferences.json");

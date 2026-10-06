@@ -1,6 +1,6 @@
 import QtQuick
 import QtQuick.Controls
-import OpenGhost.Native
+import OpenGhost.Cpp
 
 // OpenGhost's copy button (.md-copy): 28 px, its glyph in the secondary grey
 // brightening on the control hover fill (0.2 s), a 2 px focus ring, and the

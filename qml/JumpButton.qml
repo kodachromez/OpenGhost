@@ -2,7 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Effects
 import QtQuick.Shapes
-import OpenGhost.Native
+import OpenGhost.Cpp
 
 // OpenGhost's jump to the latest message (scroll-button.js, .thread-bottom):
 // a 36 px round glass lens with a 17 px down arrow at .8 (1 over it). It

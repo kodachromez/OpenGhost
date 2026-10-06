@@ -1,6 +1,6 @@
 import QtQuick
 import QtQuick.Controls
-import OpenGhost.Native
+import OpenGhost.Cpp
 
 // selection-menu.js: once a reply's selection is let go, a small toolbar
 // stands 8 px above its first line (below its last when that would come

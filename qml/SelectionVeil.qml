@@ -1,5 +1,5 @@
 import QtQuick
-import OpenGhost.Native
+import OpenGhost.Cpp
 
 // selection-focus.js: while a piece of a reply is selected, the rest of the
 // feed steps back behind a soft blur, the selection cut out of it. The veil

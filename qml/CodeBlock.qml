@@ -1,6 +1,6 @@
 import QtQuick
 import QtQuick.Controls
-import OpenGhost.Native
+import OpenGhost.Cpp
 
 // A fenced code block (.md-code): language label, Copy of the exact source,
 // and the source itself, highlighted from runs computed with the parse and

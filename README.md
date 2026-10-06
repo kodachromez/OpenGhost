@@ -265,8 +265,7 @@ Neither a toggle nor its failure restarts anything.
 
 ## Local persistence and recovery
 
-Qt selects the app-specific locations for application name `openghost-native`
-(kept from before the OpenGhost C++ rename so existing profiles still load):
+Qt selects the app-specific locations for application name `openghost-cpp`:
 
 | Location | Contents |
 | --- | --- |
@@ -277,9 +276,12 @@ Qt selects the app-specific locations for application name `openghost-native`
 | `…/library/mini/<parent-id>.json` | Separate mini-chat display cache, pending markers and parent `seen` timestamp. |
 | `…/library/usage.json` | Local usage ledger, schema v2 (v1 keys upgraded on read). |
 
-On Linux the defaults are normally `~/.config/openghost-native` and
-`~/.local/share/openghost-native`, respecting Qt/XDG overrides. Windows/macOS use
-Qt's platform locations. No previous Electron/native profile is read or migrated.
+On Linux the defaults are normally `~/.config/openghost-cpp` and
+`~/.local/share/openghost-cpp`, respecting Qt/XDG overrides. Windows/macOS use
+Qt's platform locations. On first launch, a config, data or cache location left
+under the pre-rename application name is moved once to the matching
+`openghost-cpp` location if that location does not exist yet. No Electron profile
+is read or migrated.
 Normal disconnected mode selects the file-backed library, but cannot create a
 backend chat; New Chat is only a draft until a first send is admitted.
 

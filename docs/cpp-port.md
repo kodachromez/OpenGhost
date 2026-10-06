@@ -84,7 +84,7 @@ for the excluded name, artwork, animations or design.
 list models/settings from the source `client.h` and `transcript.h`.
 `presentation.cpp` retains two rich-renderer display-truncation markers. No
 implementation of those clients, projections or protocol parsers was imported.
-QML resource namespaces are `OpenGhost.Ui` and `OpenGhost.Native`.
+QML resource namespaces are `OpenGhost.Ui` and `OpenGhost.Cpp`.
 
 ### Explicit exclusions and unexposed UI
 

@@ -2,7 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Effects
 import QtQuick.Shapes
-import OpenGhost.Native
+import OpenGhost.Cpp
 
 // OpenGhost's saved conversations by folder, newest first, drawn as its
 // sidebar (index.html .sidebar, chat-list.js, search-field.js). OpenGhost

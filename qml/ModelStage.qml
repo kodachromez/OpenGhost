@@ -1,7 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Effects
-import OpenGhost.Native
+import OpenGhost.Cpp
 
 // The model stage (model-stage.js, .model-stage): the whole window steps
 // back behind a blurred, darkened veil, and the models stand over it,

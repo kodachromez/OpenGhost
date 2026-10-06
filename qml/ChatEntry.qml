@@ -2,7 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Window
-import OpenGhost.Native
+import OpenGhost.Cpp
 
 // One OpenGhost transcript row. User text and notes are plain text; an
 // assistant's text is Markdown shown through the allowlisted components in

@@ -1,5 +1,5 @@
 import QtQuick
-import OpenGhost.Native
+import OpenGhost.Cpp
 
 // filter: var(--veil) on an element while a reply's selection is up (the
 // composer, the jump button: .is-veiled): its own pixels, shadows

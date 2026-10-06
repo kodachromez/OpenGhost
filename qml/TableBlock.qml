@@ -1,6 +1,6 @@
 import QtQuick
 import QtQuick.Window
-import OpenGhost.Native
+import OpenGhost.Cpp
 
 // A Markdown table (.md-table): header cells, then rows, each cell styled
 // inline text. Columns take their natural width, share any room left, and

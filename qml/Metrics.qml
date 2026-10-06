@@ -1,6 +1,6 @@
 import QtQuick
 import QtQuick.Controls
-import OpenGhost.Native
+import OpenGhost.Cpp
 
 // A run's reply metrics (.reply-metrics): tokens, elapsed and cache hit, as
 // the worker computed them ("%1" where the elapsed time goes). Its

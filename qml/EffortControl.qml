@@ -1,7 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Shapes
-import OpenGhost.Native
+import OpenGhost.Cpp
 
 // The effort control (OpenGhost 1.2 effort-button.js, effort-slider.js,
 // effort-morph.js, effort-stage.js, effort-paint.js, liquid-glass.js). The

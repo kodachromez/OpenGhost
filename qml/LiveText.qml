@@ -1,6 +1,6 @@
 import QtQuick
 import QtQuick.Controls
-import OpenGhost.Native
+import OpenGhost.Cpp
 
 // Read-only plain text that follows a streamed string by editing its document:
 // an append inserts only the new suffix and a bounded front trim removes only

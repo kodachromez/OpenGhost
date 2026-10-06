@@ -1,7 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Effects
-import OpenGhost.Native
+import OpenGhost.Cpp
 
 // The agent mode in the composer (OpenGhost 1.3 mode-picker.js,
 // .composer-mode): the current mode's icon and name. Pressed, it gives way

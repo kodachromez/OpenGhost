@@ -1,5 +1,5 @@
 import QtQuick
-import OpenGhost.Native
+import OpenGhost.Cpp
 
 // A damped spring integrated as OpenGhost's are (chat-list.js,
 // search-field.js): acceleration (goal − value)·k − velocity·c, explicit

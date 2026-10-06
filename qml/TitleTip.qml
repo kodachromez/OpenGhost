@@ -1,7 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Window
-import OpenGhost.Native
+import OpenGhost.Cpp
 
 // Chromium's own tooltip for an element's title (TooltipAura, measured on
 // OpenGhost 1.2): once the pointer has rested on the owner for the delay

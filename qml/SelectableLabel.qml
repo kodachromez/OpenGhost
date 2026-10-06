@@ -1,5 +1,5 @@
 import QtQuick
-import OpenGhost.Native
+import OpenGhost.Cpp
 
 // A short plain label that is one text of its reply's selection
 // (selection.h), as a code block's language and a callout's title are in

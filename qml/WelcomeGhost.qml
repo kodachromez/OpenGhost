@@ -1,6 +1,6 @@
 import QtQuick
 import QtQuick.Effects
-import OpenGhost.Native
+import OpenGhost.Cpp
 
 // The welcome Ghost (welcome-ghost.js) over an empty conversation. It rises
 // in, watches the pointer and glances down at typing. When the first message

@@ -3,7 +3,7 @@ import QtQuick.Controls
 import QtQuick.Dialogs
 import QtQuick.Effects
 import QtQuick.Shapes
-import OpenGhost.Native
+import OpenGhost.Cpp
 
 // Settings → General (OpenGhost's settings-general.js): standing instructions
 // and files kept at hand for chats. Instructions use the local preference store;

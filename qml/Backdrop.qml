@@ -1,5 +1,5 @@
 import QtQuick
-import OpenGhost.Native
+import OpenGhost.Cpp
 
 // OpenGhost 1.3's backdrop, `var(--frame), var(--app-bg)` (shaders/frame.frag):
 // light falling from the left corners onto --app-bg. Laid out in `box` with

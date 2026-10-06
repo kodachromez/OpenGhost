@@ -1,5 +1,5 @@
 import QtQuick
-import OpenGhost.Native
+import OpenGhost.Cpp
 
 // One of OpenGhost's entry keyframes (styles.css md-rise, md-pop, md-bar,
 // md-row, md-chip, …) as a progress: play() runs `value` from 0 to 1 over

@@ -44,7 +44,7 @@ StartTurn start(QString session = QStringLiteral("chat"))
     StartTurn s;
     s.sessionId = session;
     s.clientTurnId = QStringLiteral("client-1");
-    s.input.text = QStringLiteral("Hello native frontend");
+    s.input.text = QStringLiteral("Hello OpenGhost C++");
     s.params.selection = {QStringLiteral("fake"), QStringLiteral("echo"), {}};
     return s;
 }

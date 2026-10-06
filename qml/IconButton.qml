@@ -1,6 +1,6 @@
 import QtQuick
 import QtQuick.Controls
-import OpenGhost.Native
+import OpenGhost.Cpp
 
 // OpenGhost's icon button (icon-button.js): a square hit area, an icon in
 // one opaque colour faded as a whole, and a 2 px white .35 focus ring for

@@ -1,6 +1,6 @@
 import QtQuick
 import QtQuick.Effects
-import OpenGhost.Native
+import OpenGhost.Cpp
 
 // A stack of pictures to leaf through (media-slider.js and styles.css
 // .media): the one on top whole, the next ones fanned out behind it, more

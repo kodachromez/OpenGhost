@@ -2,7 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Effects
 import QtQuick.Shapes
-import OpenGhost.Native
+import OpenGhost.Cpp
 
 // The agent mode's dock (OpenGhost 1.3 dock.js as mode-picker.js uses it,
 // a choosing Dock): the modes as icons in a capsule grown out of the mode

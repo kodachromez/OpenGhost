@@ -828,6 +828,6 @@ void wantRichWork(QObject *owner, RichMake make);
 void cancelRichWork(QObject *owner);
 void forgetRichWork(QObject *owner);
 
-// Registers the OpenGhost.Native QML module (these types, the Ghost and the
+// Registers the OpenGhost.Cpp QML module (these types, the Ghost and the
 // icons) before QML loads.
 void registerNativeTypes();

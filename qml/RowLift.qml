@@ -1,6 +1,6 @@
 import QtQuick
 import QtQuick.Shapes
-import OpenGhost.Native
+import OpenGhost.Cpp
 
 // --row-active-lift for the parent, which it fills: the chosen row, and
 // Settings' tab glide, are each a small card on the backdrop. Dark: inset

@@ -1,6 +1,6 @@
 import QtQuick
 import QtQuick.Controls
-import OpenGhost.Native
+import OpenGhost.Cpp
 
 // Read-only styled text: markdown's display text, always plain, with char
 // formats set by InlineFormat (never HTML). It is one text (`unit`) of its

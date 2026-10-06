@@ -1,5 +1,5 @@
 import QtQuick
-import OpenGhost.Native
+import OpenGhost.Cpp
 
 // The pointer over a transcript row's texts (a reply, user message or note),
 // as Chromium's over OpenGhost's

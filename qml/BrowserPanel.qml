@@ -1,7 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtWebEngine
-import OpenGhost.Native
+import OpenGhost.Cpp
 
 // The built-in browser (browser-panel.js, styles.css .browser): a card beside
 // the chat with the tab strip, the address bar and the stage holding the

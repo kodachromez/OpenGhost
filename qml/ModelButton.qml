@@ -1,6 +1,6 @@
 import QtQuick
 import QtQuick.Controls
-import OpenGhost.Native
+import OpenGhost.Cpp
 
 // The composer's model button (model-button.js, .composer-model): the
 // sparkle in the composer's grey, the accent on hover, keyboard focus and

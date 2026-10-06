@@ -1,7 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Dialogs
-import OpenGhost.Native
+import OpenGhost.Cpp
 
 ApplicationWindow {
     id: window

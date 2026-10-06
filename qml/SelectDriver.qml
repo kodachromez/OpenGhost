@@ -1,5 +1,5 @@
 import QtQuick
-import OpenGhost.Native
+import OpenGhost.Cpp
 
 // Drags the selection across the transcript (selection.h): while a range is
 // dragged, the window's pointer moves (Selection.moved, which outlive the row

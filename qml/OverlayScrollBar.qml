@@ -1,6 +1,6 @@
 import QtQuick
 import QtQuick.Controls
-import OpenGhost.Native
+import OpenGhost.Cpp
 
 // OpenGhost's scroll bar (scrollbar.js, .scrollbar): a 12 px strip over the
 // view's edge holding a 4 px thumb, 2 px from its ends and at least 24 px

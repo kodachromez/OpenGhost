@@ -67,8 +67,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 else()
     target_sources(native_window PRIVATE src/platform/portable.cpp)
 endif()
-qt_add_qml_module(native_window URI OpenGhost.Native VERSION 1.0 NO_PLUGIN RESOURCE_PREFIX /
-    OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/OpenGhost/Native
+qt_add_qml_module(native_window URI OpenGhost.Cpp VERSION 1.0 NO_PLUGIN RESOURCE_PREFIX /
+    OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/OpenGhost/Cpp
     SOURCES src/rich.h src/rich.cpp src/ghost.h src/ghost.cpp src/icon.h src/icon.cpp
         src/shadow.h src/shadow.cpp src/reveal.h src/reveal.cpp
         src/exposure.h src/exposure.cpp src/wave.h src/wave.cpp
@@ -107,7 +107,7 @@ if(OPENGHOST_BROWSER)
     target_compile_definitions(openghost-cpp PRIVATE OPENGHOST_BROWSER)
 endif()
 qt_add_qml_module(openghost-cpp URI OpenGhost.Ui VERSION 1.0 RESOURCE_PREFIX /
-    QML_FILES ${qml_files} IMPORTS OpenGhost.Native)
+    QML_FILES ${qml_files} IMPORTS OpenGhost.Cpp)
 qt_add_resources(openghost-cpp icon PREFIX / BASE resources FILES resources/openghost.png)
 
 # Small opt-in launch/rendering check. No Python, Node, Rust or live backend needed.

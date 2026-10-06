@@ -1,7 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Effects
-import OpenGhost.Native
+import OpenGhost.Cpp
 
 // The card that asks before the agent acts (OpenGhost 1.3 approval-card.js,
 // .approval). It leads with what the step is for in plain words, says what

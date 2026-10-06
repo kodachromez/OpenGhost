@@ -2,7 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Effects
 import QtQuick.Shapes
-import OpenGhost.Native
+import OpenGhost.Cpp
 
 // OpenGhost's settings sheet. Runtime Plugins is capability-gated; all pages
 // share the existing row/control styling, navigation and motion.
