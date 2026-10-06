@@ -30,13 +30,15 @@ namespace openghost
 // credential. Each sign-in is a flow of its own: a cancelled or superseded one's
 // steps and outcome never reach the newer one.
 //
-// Ask / Auto / Full are enforced inside Pi by the bridge (its tool_call handler and
-// src/backend/pi/openghost-policy.js), set on the chat's child before every run and
-// as soon as the chat changes mode (idle or not); a later update always wins. A call that needs approval is Pi's own extension UI
-// confirm, shown as an approval card (a reverse request) and answered once; Stop,
-// the turn's end or Pi taking it back withdraws the card. Any other extension
-// dialog is cancelled at once and said, as are extension errors: nothing waits on
-// a question OpenGhost cannot show.
+// OpenGhost owns no permission policy: whether a tool call may run is Pi's and its
+// permission plugin's. Ask / Auto / Full is relayed as the chat's mode (the
+// bridge's `mode`, said to Pi's extensions), set on the chat's child before every
+// run and as soon as the chat changes mode (idle or not); a later update always
+// wins. A permission request is Pi's own extension UI confirm titled
+// "openghost:approval", shown as an approval card (a reverse request) and answered
+// once, only to the child and turn that asked; Stop, the turn's end or Pi taking it
+// back withdraws the card. Any other extension dialog is cancelled at once and
+// said, as are extension errors: nothing waits on a question OpenGhost cannot show.
 class PiBackend final : public Backend
 {
     Q_OBJECT

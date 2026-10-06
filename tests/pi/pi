@@ -3,8 +3,8 @@
 # relies on, shaped as Pi 1.0.4 emits them. No model, network or credentials.
 # The prompt text picks the run: reject, handled, fail, length, tools, slow,
 # delay, switch (an extension changes the model); anything else is echoed. While "slow" runs, steers queue; a steer
-# approve: a tool call the bridge asks the user about (unless the access mode is
-# full); foreign: another extension's select dialog; ext-error: an extension fails.
+# approve: a tool call a stand-in Pi permission plugin asks the user about, in
+# every mode (it allows the waiting one itself once the mode turns full); foreign: another extension's select dialog; ext-error: an extension fails.
 # Sign-in (bridge login) asks one prompt; provider "w" takes it back at once,
 # "n"/"sel"/"sec" send progress and info while it is open, and cancelling reports a
 # stale step of the cancelled flow before its end.
@@ -26,9 +26,9 @@ entries = []
 flushed = False
 model = None  # (provider, id) Pi has selected
 instructions = ""
-access = "ask"  # the bridge's access mode
+access = "ask"  # the mode the bridge relayed
 dialogs = {}  # extension UI request id -> callback(response)
-approval = None  # (approvalId, dialog id) the bridge waits on
+approval = None  # (approvalId, dialog id) the permission plugin waits on
 logins = {}  # provider -> (flow token, promptId)
 files = []  # the bridge's pinned files: [{name, text}]
 INPUTS = {"m": ["text"], "m2": ["text"], "v": ["text", "image"], "alias": ["text"]}
@@ -164,8 +164,6 @@ def run(text, images=None):
         assistant("Switched.", "stop", usage(8, 2))
     elif text == "approve":
         assistant("Let me run it.", "toolUse", usage(20, 2))
-        if access == "full":
-            return tool_done(True)
         request = {"approvalId": "og-approval-1", "toolCallId": "call-1", "tool": "bash",
                    "args": {"command": "touch made.txt"},
                    "presentation": {"kind": "command", "title": "Run a command", "effect": "change",
@@ -233,7 +231,7 @@ def bridged(cid, request):
         globals()["access"] = request.get("mode")
         note({"type": "mode", "mode": access})
         status(token, {"ok": True, "mode": access})
-        if approval and access == "full":  # It no longer asks: allowed.
+        if approval and access == "full":  # The plugin's own choice: allowed after all.
             aid, rid = approval
             dialogs.pop(rid, None)
             status(aid + ":approval", {"decision": "allow"})

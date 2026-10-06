@@ -415,8 +415,9 @@ void FakeBackend::advance()
             publish(
                 it.key(), *it, turn,
                 ToolStarted{"fixture-tool", "demo", QStringLiteral("Simulated tool (no effects)")});
-            if (scenario == "/fake approval" &&
-                turn.start.params.permissionMode != PermissionMode::Full) {
+            // The fixture always asks, in every mode: deciding is the backend's
+            // permission plugin's, never OpenGhost's.
+            if (scenario == "/fake approval") {
                 turn.approval = ++m_reverse;
                 m_approvals.insert(turn.approval, it.key());
                 ApprovalRequest request{

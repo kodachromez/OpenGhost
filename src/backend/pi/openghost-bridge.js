@@ -12,13 +12,16 @@
 // Pi's models.json and stored credentials (as `providers` also does first), so
 // changes made outside OpenGhost (another `pi /login`, an edited models.json) are
 // seen, and the session's selected model is retaken from the reread registry.
-// {op: "mode", mode, seq} sets Ask / Auto / Full (src/backend/pi/openghost-policy.js);
-// an update numbered lower than the last applied is ignored.
-// A tool call that needs approval waits on Pi's own extension UI: a confirm whose
-// title is "openghost:approval" and whose message is the request as JSON
-// {approvalId, toolCallId, tool, args, presentation}; Allow runs it, anything else
-// blocks it. A request Pi took back unanswered (Stop, or a mode that no longer
-// asks) is said by  openghost:<approvalId>:approval {decision: "allow"|null}.
+// {op: "mode", mode, seq} relays the chat's Ask / Auto / Full selection. The
+// bridge decides nothing with it: it keeps the latest and says it to Pi's other
+// extensions on pi.events channel "openghost:mode" ({mode}); permissions are
+// Pi's and its permission plugin's. An update numbered lower than the last
+// applied is ignored.
+// A permission request is Pi's own extension UI: a confirm whose title is
+// "openghost:approval" and whose message is the request as JSON
+// {approvalId, toolCallId, tool, args, presentation?}, shown as an approval card;
+// the answer is the confirm's. A request taken back unanswered is said by the
+// asker with the status openghost:<approvalId>:approval {decision: "allow"|null}.
 // {op: "retry"} retries Pi's failed latest reply in place (OpenGhost's Retry).
 // {op: "context", instructions, files} sets what every run's system prompt
 // carries from Settings → General: the standing instructions and the pinned text
@@ -26,7 +29,6 @@
 // section: system prompt, never history, so compaction keeps them. {op: "mark", entry} records an OpenGhost turn's start or
 // end in Pi's session (a custom entry: kept in the session file, never context).
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
-import { describe, needsApproval } from "./openghost-policy.js";
 
 const RETRY = "openghost-retry"; // The custom message that starts a retry run.
 const MARK = "openghost-turn"; // OpenGhost's turn records in Pi's session.
@@ -35,12 +37,9 @@ const FILES = "openghost-files";
 let instructions = "";
 let files = "";
 const escape = (name) => name.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-const APPROVAL = "openghost:approval"; // The confirm OpenGhost shows as an approval card.
 const MODES = new Set(["ask", "auto", "full"]);
-let mode = "ask"; // Until OpenGhost says otherwise: never less than asked for.
+let mode = "ask"; // The chat's selection, as OpenGhost last said it.
 let modeSeq = 0; // The latest mode update applied.
-const approvals = new Map(); // approvalId -> {name, input, cwd, controller, allowed}
-let nextApproval = 0;
 const logins = new Map(); // provider -> {token, controller}
 const prompts = new Map(); // promptId -> {resolve, reject}
 let nextPrompt = 0;
@@ -57,32 +56,6 @@ function latest(sessionManager) {
 }
 
 export default function (pi) {
-  // Every tool call, the model's or another tool's, passes here before it runs.
-  pi.on("tool_call", async (event, ctx) => {
-    const name = event.toolName, input = event.input, cwd = ctx.cwd;
-    if (!needsApproval(name, input, { mode, cwd })) return undefined;
-    if (!ctx.hasUI) return { block: true, reason: "This step needs the user's approval, and nobody can be asked." };
-    const approvalId = `og-approval-${++nextApproval}`;
-    const controller = new AbortController();
-    const entry = { name, input, cwd, controller, allowed: false };
-    approvals.set(approvalId, entry);
-    const signal = ctx.signal ? AbortSignal.any([ctx.signal, controller.signal]) : controller.signal;
-    let allowed = false;
-    try {
-      const request = { approvalId, toolCallId: event.toolCallId, tool: name, args: input ?? {}, presentation: describe(name, input, cwd) };
-      allowed = await ctx.ui.confirm(APPROVAL, JSON.stringify(request), { signal });
-    } catch {
-      allowed = false; // Blocked: a failure never runs the step.
-    } finally {
-      approvals.delete(approvalId);
-    }
-    if (signal.aborted) {
-      allowed = entry.allowed; // Taken back: allowed only by a mode that no longer asks.
-      ctx.ui.setStatus(`openghost:${approvalId}:approval`, JSON.stringify({ decision: allowed ? "allow" : null }));
-    }
-    if (allowed) return undefined;
-    return { block: true, reason: ctx.signal?.aborted ? "Stopped before this step ran." : "The user did not allow this step." };
-  });
   pi.on("before_agent_start", (event) => {
     const sections = event.systemPromptOptions.sections;
     if (instructions) sections[INSTRUCTIONS] = instructions;
@@ -218,12 +191,7 @@ export default function (pi) {
           }
           if (seq !== undefined) modeSeq = seq;
           mode = request.mode;
-          // Waiting approvals the new mode no longer asks for are allowed; the rest wait.
-          for (const entry of approvals.values())
-            if (!needsApproval(entry.name, entry.input, { mode, cwd: entry.cwd })) {
-              entry.allowed = true;
-              entry.controller.abort();
-            }
+          pi.events.emit("openghost:mode", { mode });
           status("", { ok: true, mode });
         } else if (request.op === "retry") {
           // No new or repeated input: Pi continues its own context from where the

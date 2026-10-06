@@ -1,9 +1,11 @@
 // PiBackend against the real `pi` on PATH (skipped without one): the real bridge
-// and access policy inside real Pi, with Pi AI's faux provider as the model
-// (tests/pi/real/faux.ts) in a throwaway agent directory. No network, no
-// credentials, nothing of the user's Pi configuration. The faux model asks for
-// exactly the tool call the prompt names, so every approval decision here is
-// Pi's own tool_call path, and every file effect is checked on disk.
+// inside real Pi, with Pi AI's faux provider as the model (tests/pi/real/faux.ts)
+// in a throwaway agent directory. No network, no credentials, nothing of the
+// user's Pi configuration. The faux model asks for exactly the tool call the
+// prompt names. OpenGhost owns no permission policy: a test-only stand-in Pi
+// permission plugin (tests/pi/real/permission.ts) asks, OpenGhost shows its
+// requests and relays the answers and the mode, and every file effect is
+// checked on disk.
 #include "backend/pi_backend.h"
 #include "backend/pi_process.h"
 #include "frontend/chat_service.h"
@@ -91,7 +93,7 @@ class PiRealTest final : public QObject
         QVERIFY(m_dir.isValid());
         const auto agent = m_dir.filePath(QStringLiteral("agent"));
         QVERIFY(QDir().mkpath(agent + QStringLiteral("/extensions")));
-        for (const auto *name : {"faux.ts", "helper.ts"})
+        for (const auto *name : {"faux.ts", "helper.ts", "permission.ts"})
             QVERIFY(QFile::copy(QStringLiteral(OPENGHOST_REAL_PI_DIR "/") + name,
                                 agent + QStringLiteral("/extensions/") + name));
         QFile settings(agent + QStringLiteral("/settings.json"));
@@ -105,7 +107,8 @@ class PiRealTest final : public QObject
     }
     void init() { fresh(); }
 
-    void askAsksBeforeCommandsAndHonoursTheAnswer()
+    // A request Pi's permission plugin makes is a card; the answer is the plugin's.
+    void piAsksAndTheAnswerGoesBack()
     {
         Harness h(m_folder);
         const auto made = m_folder + QStringLiteral("/made.txt");
@@ -114,16 +117,14 @@ class PiRealTest final : public QObject
         const auto card = h.chat.approvals().first().data;
         QCOMPARE(card.tool, QStringLiteral("bash"));
         QCOMPARE(card.args.value("command").toString(), QStringLiteral("touch made.txt"));
+        QVERIFY(card.approvalId.startsWith(QStringLiteral("stand-in-")));
         QVERIFY(card.presentation);
-        QCOMPARE(card.presentation->kind, QStringLiteral("command"));
-        QCOMPARE(card.presentation->title, QStringLiteral("Run a command"));
-        QCOMPARE(card.presentation->effect, std::optional(QStringLiteral("change")));
+        QCOMPARE(card.presentation->title, QStringLiteral("Stand-in asks"));
         QCOMPARE(card.presentation->code, std::optional(QStringLiteral("touch made.txt")));
         QVERIFY(!QFile::exists(made)); // Nothing ran while it waits.
         h.chat.approve(h.chat.approvals().first().request, false);
         QTRY_VERIFY_WITH_TIMEOUT(h.settled(), 30000);
-        QVERIFY(
-            h.reply().contains(QStringLiteral("done: error: The user did not allow this step.")));
+        QVERIFY(h.reply().contains(QStringLiteral("done: error: The stand-in was not allowed.")));
         QVERIFY(!QFile::exists(made));
 
         QVERIFY(h.call(QStringLiteral("bash"), {{"command", "touch made.txt"}}));
@@ -132,68 +133,62 @@ class PiRealTest final : public QObject
         QTRY_VERIFY_WITH_TIMEOUT(h.settled(), 30000);
         QVERIFY(h.reply().contains(QStringLiteral("done: ok")));
         QVERIFY(QFile::exists(made));
+    }
 
-        // Reading inside the folder needs nothing; outside it, Ask asks.
-        QVERIFY(h.call(QStringLiteral("read"), {{"path", "made.txt"}}));
-        QTRY_VERIFY_WITH_TIMEOUT(h.settled(), 30000);
+    // OpenGhost decides nothing: in Ask, a call no plugin asks about runs (even a
+    // write outside the folder), and in Full a call the plugin asks about is
+    // still a card.
+    void openGhostNeverDecidesItself()
+    {
+        Harness h(m_folder);
+        QCOMPARE(h.chat.current().mode, PermissionMode::Ask);
+        const auto outside = m_dir.filePath(QStringLiteral("outside.txt"));
+        QVERIFY(h.call(QStringLiteral("write"), {{"path", outside}, {"content", "x"}}));
+        QVERIFY(!h.asks());
         QVERIFY(h.reply().contains(QStringLiteral("done: ok")));
-        QVERIFY(h.call(QStringLiteral("read"), {{"path", "@/etc/hostname"}}));
-        QTRY_COMPARE_WITH_TIMEOUT(h.chat.approvals().size(), 1, 30000);
-        QCOMPARE(h.chat.approvals().first().data.presentation->title,
-                 QStringLiteral("Read a file outside the project"));
-        h.chat.approve(h.chat.approvals().first().request, false);
-        QTRY_VERIFY_WITH_TIMEOUT(h.settled(), 30000);
-    }
+        QVERIFY(QFile::exists(outside));
+        QFile::remove(outside);
 
-    void autoWorksInTheFolderAndAsksBeforeRiskOrOutside()
-    {
-        Harness h(m_folder);
-        h.chat.setMode(PermissionMode::Auto);
-        QVERIFY(h.call(QStringLiteral("write"), {{"path", "auto.txt"}, {"content", "x"}}));
-        QTRY_VERIFY_WITH_TIMEOUT(h.settled(), 30000);
-        QVERIFY(h.chat.approvals().isEmpty());
-        QVERIFY(QFile::exists(m_folder + QStringLiteral("/auto.txt")));
-        QVERIFY(h.call(QStringLiteral("bash"), {{"command", "ls"}}));
-        QTRY_VERIFY_WITH_TIMEOUT(h.settled(), 30000);
-        QVERIFY(h.reply().contains(QStringLiteral("done: ok: auto.txt")));
-        // Deleting, and writing through a link that leads outside, are asked about.
-        QVERIFY(h.call(QStringLiteral("bash"), {{"command", "rm auto.txt"}}));
-        QTRY_COMPARE_WITH_TIMEOUT(h.chat.approvals().size(), 1, 30000);
-        QCOMPARE(h.chat.approvals().first().data.presentation->effect,
-                 std::optional(QStringLiteral("delete")));
-        h.chat.approve(h.chat.approvals().first().request, false);
-        QTRY_VERIFY_WITH_TIMEOUT(h.settled(), 30000);
-        QVERIFY(QFile::exists(m_folder + QStringLiteral("/auto.txt")));
-        const auto outside = m_dir.filePath(QStringLiteral("outside"));
-        QVERIFY(QDir().mkpath(outside));
-        QVERIFY(QFile::link(outside, m_folder + QStringLiteral("/link")));
-        QVERIFY(h.call(QStringLiteral("write"), {{"path", "link/escaped.txt"}, {"content", "x"}}));
-        QTRY_COMPARE_WITH_TIMEOUT(h.chat.approvals().size(), 1, 30000);
-        h.chat.approve(h.chat.approvals().first().request, false);
-        QTRY_VERIFY_WITH_TIMEOUT(h.settled(), 30000);
-        QVERIFY(!QFile::exists(outside + QStringLiteral("/escaped.txt")));
-    }
-
-    void fullNeverAsks()
-    {
-        Harness h(m_folder);
         h.chat.setMode(PermissionMode::Full);
-        QVERIFY(h.call(QStringLiteral("bash"),
-                       {{"command", "touch full.txt && rm full.txt && echo gone"}}));
         QTRY_VERIFY_WITH_TIMEOUT(h.settled(), 30000);
-        QVERIFY(h.chat.approvals().isEmpty());
-        QVERIFY(h.reply().contains(QStringLiteral("done: ok: gone")));
+        QVERIFY(h.call(QStringLiteral("bash"), {{"command", "touch full.txt"}}));
+        QVERIFY(h.asks());
+        h.deny();
+        QVERIFY(!QFile::exists(m_folder + QStringLiteral("/full.txt")));
     }
 
-    void aModeThatNoLongerAsksReleasesTheWaitingCall()
+    // Ask / Auto / Full reach Pi's extensions as the chat's mode, before a run and
+    // as soon as it changes.
+    void modesReachPiExtensions()
     {
         Harness h(m_folder);
-        QVERIFY(h.call(QStringLiteral("write"), {{"path", "m.txt"}, {"content", "x"}}));
+        const auto said = [&h](const char *mode) {
+            QVERIFY(h.chat.send(QStringLiteral("/og-mode")));
+            QTRY_VERIFY_WITH_TIMEOUT(h.settled(), 30000);
+            QTRY_VERIFY_WITH_TIMEOUT(h.logs.contains(QStringLiteral("warning og-mode got ") +
+                                                     QString::fromUtf8(mode)),
+                                     10000);
+            h.logs.clear();
+        };
+        said("ask");
+        h.chat.setMode(PermissionMode::Auto);
+        QTRY_VERIFY_WITH_TIMEOUT(h.settled(), 30000);
+        said("auto");
+        h.chat.setMode(PermissionMode::Full);
+        QTRY_VERIFY_WITH_TIMEOUT(h.settled(), 30000);
+        said("full");
+    }
+
+    // A request Pi takes back, allowed after all by its own choice: the card goes.
+    void aRequestPiTakesBackLeavesNoCard()
+    {
+        Harness h(m_folder);
+        QVERIFY(h.call(QStringLiteral("bash"), {{"command", "touch m.txt"}}));
         QTRY_COMPARE_WITH_TIMEOUT(h.chat.approvals().size(), 1, 30000);
-        h.chat.setMode(PermissionMode::Auto); // Auto writes in the folder on its own.
+        h.chat.setMode(PermissionMode::Full); // The stand-in then allows it itself.
         QTRY_VERIFY_WITH_TIMEOUT(h.settled(), 30000);
         QVERIFY(h.chat.approvals().isEmpty());
-        QCOMPARE(h.chat.current().mode, PermissionMode::Auto);
+        QCOMPARE(h.chat.current().mode, PermissionMode::Full);
         QVERIFY(QFile::exists(m_folder + QStringLiteral("/m.txt")));
         QVERIFY(h.reply().contains(QStringLiteral("done: ok")));
     }
@@ -201,7 +196,7 @@ class PiRealTest final : public QObject
     void stopWithdrawsTheWaitingCall()
     {
         Harness h(m_folder);
-        QVERIFY(h.call(QStringLiteral("write"), {{"path", "s.txt"}, {"content", "x"}}));
+        QVERIFY(h.call(QStringLiteral("bash"), {{"command", "touch s.txt"}}));
         QTRY_COMPARE_WITH_TIMEOUT(h.chat.approvals().size(), 1, 30000);
         h.chat.stop();
         QTRY_VERIFY_WITH_TIMEOUT(h.settled(), 30000);
@@ -210,81 +205,6 @@ class PiRealTest final : public QObject
         QVERIFY(h.chat.send(QStringLiteral("still here?"))); // The chat goes on.
         QTRY_VERIFY_WITH_TIMEOUT(h.settled(), 30000);
         QCOMPARE(h.reply(), QStringLiteral("echo: still here?"));
-    }
-
-    // M01/F1: on POSIX a backslash is part of a name, never a separator, so
-    // `project\elsewhere` is a sibling of the folder, not inside it. Ask asks before
-    // reading there; Auto asks before writing or reaching it from a command.
-    void backslashNamesAreNotInsideTheFolder()
-    {
-        if (QDir::separator() != QLatin1Char('/'))
-            QSKIP("POSIX names only.");
-        const auto sibling = m_folder + QStringLiteral("\\elsewhere");
-        QVERIFY(QDir().mkpath(sibling));
-        QFile secret(sibling + QStringLiteral("/secret.txt"));
-        QVERIFY(secret.open(QIODevice::WriteOnly));
-        secret.write("outside-marker");
-        secret.close();
-        Harness h(m_folder);
-        QVERIFY(h.call(QStringLiteral("read"), {{"path", secret.fileName()}}));
-        QVERIFY(h.asks());
-        QCOMPARE(h.chat.approvals().first().data.presentation->title,
-                 QStringLiteral("Read a file outside the project"));
-        h.deny();
-        QVERIFY(!h.reply().contains(QStringLiteral("outside-marker")));
-
-        h.chat.setMode(PermissionMode::Auto); // An idle chat's Pi takes it at once.
-        QTRY_VERIFY_WITH_TIMEOUT(h.settled(), 30000);
-        QCOMPARE(h.chat.current().mode, PermissionMode::Auto);
-        const auto written = sibling + QStringLiteral("/written.txt");
-        QVERIFY(h.call(QStringLiteral("write"), {{"path", written}, {"content", "x"}}));
-        QVERIFY(h.asks());
-        h.deny();
-        QVERIFY(!QFile::exists(written));
-        QVERIFY(h.call(QStringLiteral("bash"),
-                       {{"command", QStringLiteral("touch '%1'").arg(written)}}));
-        QVERIFY(h.asks());
-        h.deny();
-        QVERIFY(!QFile::exists(written));
-        // The folder's own files are still its own.
-        QVERIFY(h.call(QStringLiteral("write"), {{"path", "in.txt"}, {"content", "x"}}));
-        QVERIFY(!h.asks());
-        QVERIFY(QFile::exists(m_folder + QStringLiteral("/in.txt")));
-    }
-
-    // M01/F2: Pi's read falls back to a curly-quote, NFD or screenshot-spacing
-    // variant of a missing name. Ask decides on the file Pi would actually open.
-    void readFallbacksAreDecidedOnTheFileRead()
-    {
-        const auto marker = m_dir.filePath(QStringLiteral("fallback-marker.txt"));
-        QFile outside(marker);
-        QVERIFY(outside.open(QIODevice::WriteOnly));
-        outside.write("fallback-marker");
-        outside.close();
-        const struct {
-            QString link, asked;
-        } cases[] = {
-            {QStringLiteral("fallback\u2019name.txt"), QStringLiteral("fallback'name.txt")},
-            {QStringLiteral("cafe\u0301.txt"), QStringLiteral("caf\u00e9.txt")},
-            {QStringLiteral("Shot 1.02.03\u202fPM.png"), QStringLiteral("Shot 1.02.03 PM.png")},
-        };
-        Harness h(m_folder);
-        for (const auto &c : cases) {
-            QVERIFY(QFile::link(marker, m_folder + '/' + c.link));
-            QVERIFY(!QFile::exists(m_folder + '/' + c.asked));
-            QVERIFY(h.call(QStringLiteral("read"), {{"path", c.asked}}));
-            QVERIFY2(h.asks(), qPrintable(c.asked));
-            h.deny();
-            QVERIFY(!h.reply().contains(QStringLiteral("fallback-marker")));
-        }
-        // A fallback that stays in the folder needs nothing.
-        QFile inside(m_folder + QStringLiteral("/it\u2019s.txt"));
-        QVERIFY(inside.open(QIODevice::WriteOnly));
-        inside.write("inside-marker");
-        inside.close();
-        QVERIFY(h.call(QStringLiteral("read"), {{"path", "it's.txt"}}));
-        QVERIFY(!h.asks());
-        QVERIFY(h.reply().contains(QStringLiteral("inside-marker")));
     }
 
     // M12/F4: a change to Pi's models.json made outside OpenGhost reaches an
@@ -323,14 +243,12 @@ class PiRealTest final : public QObject
         QCOMPARE(h.reply(), QStringLiteral("model: Changed outside OpenGhost"));
     }
 
-    // M01: access mode updates are numbered, and the bridge in real Pi never lets an
+    // Access mode updates are numbered, and the bridge in real Pi never lets an
     // older one land after a newer one, whatever order Pi runs them in.
     void anOlderModeUpdateNeverWins()
     {
         QTemporaryDir dir;
         const auto bridge = dir.filePath(QStringLiteral("openghost-bridge.js"));
-        QVERIFY(QFile::copy(QStringLiteral(":/pi/openghost-policy.js"),
-                            dir.filePath(QStringLiteral("openghost-policy.js"))));
         QVERIFY(QFile::copy(QStringLiteral(":/pi/openghost-bridge.js"), bridge));
         PiProcess pi(bridge);
         QString error;

@@ -30,8 +30,8 @@ QString modeName(PermissionMode mode)
            : mode == PermissionMode::Auto ? QStringLiteral("auto")
                                           : QStringLiteral("ask");
 }
-const QString ApprovalTitle = QStringLiteral("openghost:approval"); // the bridge's approval confirm
-// An approval card's presentation, as the bridge describes the call (1.3's describe).
+const QString ApprovalTitle = QStringLiteral("openghost:approval"); // a Pi permission request
+// An approval card's presentation, as the permission request describes the call.
 std::optional<ApprovalPresentation> presentationOf(const QJsonValue &value)
 {
     if (!value.isObject())
@@ -707,11 +707,8 @@ Result PiBackend::execute(const Command &command)
 PiProcess *PiBackend::spawn(const QStringList &args, const QString &cwd, QString *error)
 {
     if (m_bridgePath.isEmpty() && m_bridgeDir.isValid()) {
-        // The bridge and the access policy it imports, side by side.
         const auto path = m_bridgeDir.filePath(QStringLiteral("openghost-bridge.js"));
-        if (QFile::copy(QStringLiteral(":/pi/openghost-policy.js"),
-                        m_bridgeDir.filePath(QStringLiteral("openghost-policy.js"))) &&
-            QFile::copy(QStringLiteral(":/pi/openghost-bridge.js"), path))
+        if (QFile::copy(QStringLiteral(":/pi/openghost-bridge.js"), path))
             m_bridgePath = path;
     }
     auto arguments = args;
@@ -1021,8 +1018,8 @@ void PiBackend::configure(RequestId id, const ConfigureSession &configure)
         };
         if (!configure.permissionMode)
             return switchModel({});
-        // The mode reaches a running Pi now (the bridge reconsiders the approvals it
-        // waits on); an idle chat's Pi takes it before its next run.
+        // The mode reaches a running Pi now (what Pi does with it is Pi's); an idle
+        // chat's Pi takes it at once too.
         const auto mode = *configure.permissionMode;
         if (chat.run)
             chat.run->mode = mode;
@@ -1232,7 +1229,7 @@ void PiBackend::advance(const QString &session, const QString &turn)
             StepDeadline);
         return;
     }
-    case 1: { // Ask / Auto / Full, enforced by the bridge before any tool runs.
+    case 1: { // Ask / Auto / Full, relayed to Pi: Pi decides what it means.
         const auto mode = run->mode;
         if (chat.mode == mode)
             return advance(session, turn);
@@ -1785,8 +1782,8 @@ void PiBackend::step(const QString &token, const QString &kind, const QJsonObjec
     m_steps.insert(provider, step);
     emit globalEvent(step);
 }
-// An extension's blocking dialog. The bridge's approval confirm is the running
-// turn's approval card; anything else (and an approval no turn can show) is
+// An extension's blocking dialog. A Pi permission request is the running turn's
+// approval card; anything else (and a request no turn can show) is
 // declined at once and said, so Pi never waits on a question nobody sees.
 bool PiBackend::dialog(const QString &session, PiProcess *pi, const QJsonObject &request)
 {
@@ -1799,7 +1796,7 @@ bool PiBackend::dialog(const QString &session, PiProcess *pi, const QJsonObject 
         if (chat == m_chats.end() || chat->second.pi != pi || !chat->second.run ||
             !chat->second.run->accepted || chat->second.run->cancelled ||
             ask.value("approvalId").toString().isEmpty())
-            return false; // Declined: Pi blocks the step.
+            return false; // Cancelled: no card can show it.
         const auto &run = *chat->second.run;
         ApprovalRequest approval;
         approval.sessionId = session;
@@ -1843,8 +1840,8 @@ void PiBackend::answer(RequestId id, const ReverseResult &result)
     approval.pi->send(
         {{"type", "extension_ui_response"}, {"id", approval.dialog}, {"confirmed", allow}});
 }
-// Pi took an approval back unanswered: Stop (decision null), or a new access mode
-// no longer asks for it (allow). Its card goes; an allowed one says so.
+// Pi took a permission request back unanswered: Stop (decision null), or Pi's own
+// decision to allow it after all (allow). Its card goes; an allowed one says so.
 void PiBackend::approvalEnded(const QString &session, const QString &approvalId,
                               const QJsonObject &value)
 {

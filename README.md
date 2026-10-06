@@ -101,10 +101,10 @@ to **OFF** and enables all four checks:
   --splash-check`, a private headless KWin) it also checks the rendered frames:
   mist at .6 of the window's pixels, no Ghost afterimage, identical redraws.
 - `native_pi_real_test`: `PiBackend` against the installed `pi` (skipped without
-  one) with Pi AI's faux model in a throwaway agent directory: Ask/Auto/Full,
-  approval cards, Stop, other extensions' dialogs and errors. No network or
-  credentials. `native_pi_policy_check` (needs `node`) checks the access policy's
-  decisions directly; `native_sign_in_test` checks the sign-in form across
+  one) with Pi AI's faux model in a throwaway agent directory: Ask/Auto/Full
+  relayed to Pi, approval cards for a test-only stand-in Pi permission plugin's
+  requests, Stop, other extensions' dialogs and errors. No network or
+  credentials. `native_sign_in_test` checks the sign-in form across
   cancel/sign-in-again races against the scripted Pi.
 
 CTest uses offscreen/software rendering. Smokes isolate appearance, preferences
@@ -194,7 +194,7 @@ runs to steer. Submit these exact whole-message fixture selectors:
 | Message | Scenario |
 | --- | --- |
 | `/fake tools` | Simulated tool activity/working ghost; no host effect or tool transcript panel. |
-| `/fake approval` | Approval card in Ask/Auto; Full skips the prompt. Allow/Deny only affects the simulation. |
+| `/fake approval` | Approval card in every mode (the fixture stands in for a backend permission plugin; OpenGhost decides nothing). Allow/Deny only affects the simulation. |
 | `/fake error` | Terminal error with Retry; retry targets that failed turn without another user bubble. |
 | `/fake empty` | Empty final reply notice. |
 | `/fake length` | Output-limit finish notice. |
@@ -376,8 +376,15 @@ characters together); Pi gets them as a system-prompt section on every run.
 Approval requests are bound to session/turn/request identities, answered once,
 and dismissed on resolution, Stop, cancellation or superseding steering. Auth
 and model notifications trigger fresh reads. Pending auth/approvals are memory
-state, not persisted consent or credentials. Ask/Auto/Full is a requested backend
-policy, not frontend sandboxing or local tool enforcement.
+state, not persisted consent or credentials.
+
+OpenGhost no longer owns permission policy. Permission enforcement belongs to
+Pi/the Pi permission plugin. OpenGhost only renders permission UI and relays
+decisions. Ask/Auto/Full is the chat's mode, relayed to Pi (the bridge says it to
+Pi's extensions on `pi.events` channel `openghost:mode`); OpenGhost never decides
+from it whether a tool call runs. Without a Pi permission plugin, Pi's tools run
+unasked in every mode. A plugin asks with a Pi extension UI `confirm` titled
+`openghost:approval` (see `src/backend/pi/openghost-bridge.js`).
 
 `HostServices` publishes tool schemas at initialization and routes only named,
 live-turn calls, tracking duplicate in-flight calls, cancellation and turn-end

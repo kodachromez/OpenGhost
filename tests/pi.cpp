@@ -1015,8 +1015,9 @@ class PiTest final : public QObject
         QCOMPARE(runs(piName(h, h.chat.current().id)).last().size(), 0);
     }
 
-    // Ask / Auto / Full reach Pi's bridge before the run; a call the bridge asks
-    // about is an approval card, answered exactly once.
+    // Ask / Auto / Full reach Pi's bridge before the run; a call Pi asks about is
+    // an approval card, answered exactly once, and an old card's answer never
+    // reaches a newer request.
     void approvalsAreAskedAndAnsweredOnce()
     {
         Harness h;
@@ -1044,7 +1045,12 @@ class PiTest final : public QObject
         h.chat.approve(card.request, true); // Answered already: nothing more reaches Pi.
         QVERIFY(h.chat.send(QStringLiteral("approve")));
         QTRY_COMPARE(h.chat.approvals().size(), 1);
-        h.chat.approve(h.chat.approvals().first().request, true);
+        const auto newer = h.chat.approvals().first().request;
+        QVERIFY(newer != card.request);
+        h.chat.approve(card.request, true); // Stale: the newer request still waits.
+        QCOMPARE(h.chat.approvals().size(), 1);
+        QVERIFY(!h.settled());
+        h.chat.approve(newer, true);
         QTRY_VERIFY(h.settled());
         QVERIFY(h.text(DisplayRow::Role::Assistant).endsWith(QStringLiteral("\n\nran")));
         int answers = 0;
@@ -1058,21 +1064,25 @@ class PiTest final : public QObject
         QCOMPARE(modes, 1);
     }
 
-    void fullNeverAsksAndModeChangesReachTheRunningPi()
+    // OpenGhost decides nothing with the mode: Full is relayed to Pi, and a call Pi
+    // still asks about is a card in Full too. A change reaches the idle and the
+    // running Pi at once; what it does to a waiting request is Pi's to say.
+    void modesAreRelayedAndPiDecides()
     {
         Harness h;
         QTRY_VERIFY(h.chat.ready());
         h.chat.setMode(PermissionMode::Full);
         QVERIFY(h.chat.send(QStringLiteral("approve")));
-        QTRY_VERIFY(h.settled());
-        QVERIFY(h.text(DisplayRow::Role::Assistant).endsWith(QStringLiteral("\n\nran")));
-        QVERIFY(h.chat.approvals().isEmpty());
+        QTRY_COMPARE(h.chat.approvals().size(), 1);
         const auto session = piName(h, h.chat.current().id);
         QVERIFY(records().contains(
             QJsonObject{{"type", "mode"}, {"mode", "full"}, {"session", session}}));
+        h.chat.approve(h.chat.approvals().first().request, false);
+        QTRY_VERIFY(h.settled());
+        QVERIFY(h.text(DisplayRow::Role::Assistant).endsWith(QStringLiteral("\n\nblocked")));
         // Back to Ask between turns: the idle chat's Pi takes it at once, so nothing
         // it runs before the next turn (an extension's own turn) keeps Full.
-        const auto before = records().size();
+        auto before = records().size();
         h.chat.setMode(PermissionMode::Ask);
         QTRY_VERIFY(!h.chat.pending());
         QCOMPARE(h.chat.current().mode, PermissionMode::Ask);
@@ -1080,15 +1090,24 @@ class PiTest final : public QObject
             QJsonObject{{"type", "mode"}, {"mode", "ask"}, {"session", session}}));
         QVERIFY(h.chat.send(QStringLiteral("approve")));
         QTRY_COMPARE(h.chat.approvals().size(), 1);
-        // Full while the card waits: the bridge no longer asks, so the call runs and
-        // the card goes without an answer.
+        // Auto while the card waits reaches the running Pi; the card stays, since Pi
+        // has not taken it back.
+        before = records().size();
+        h.chat.setMode(PermissionMode::Auto);
+        QTRY_VERIFY(records().mid(before).contains(
+            QJsonObject{{"type", "mode"}, {"mode", "auto"}, {"session", session}}));
+        QCOMPARE(h.chat.approvals().size(), 1);
+        // Full: the stand-in plugin allows the waiting call itself and takes the
+        // request back; the card goes without an answer from OpenGhost.
         h.chat.setMode(PermissionMode::Full);
         QTRY_VERIFY(h.settled());
         QVERIFY(h.text(DisplayRow::Role::Assistant).endsWith(QStringLiteral("\n\nran")));
         QVERIFY(h.chat.approvals().isEmpty());
         QCOMPARE(h.chat.current().mode, PermissionMode::Full);
+        int answers = 0;
         for (const auto &record : records())
-            QVERIFY(record.value("type").toString() != QStringLiteral("ui_response"));
+            answers += record.value("type").toString() == QStringLiteral("ui_response");
+        QCOMPARE(answers, 1); // Only the first card's Deny.
     }
 
     void stopWithdrawsTheApproval()
@@ -1106,6 +1125,26 @@ class PiTest final : public QObject
         QVERIFY(h.chat.send(QStringLiteral("hello"))); // The chat goes on.
         QTRY_VERIFY(h.settled());
         QCOMPARE(h.text(DisplayRow::Role::Assistant), QStringLiteral("Echo: hello"));
+    }
+
+    // Deleting the chat ends its Pi: its card goes, and nothing answers Allow.
+    void deletingTheChatClosesItsApproval()
+    {
+        Harness h;
+        QTRY_VERIFY(h.chat.ready());
+        QVERIFY(h.chat.send(QStringLiteral("approve")));
+        QTRY_COMPARE(h.chat.approvals().size(), 1);
+        const auto a = h.chat.current().id;
+        const auto session = piName(h, a);
+        QSignalSpy removed(&h.chat, &ChatService::removed);
+        h.chat.remove(a);
+        QTRY_COMPARE(removed.count(), 1);
+        QVERIFY(h.chat.approvals().isEmpty());
+        for (const auto &record : records())
+            QVERIFY(record.value("type").toString() != QStringLiteral("ui_response") ||
+                    !record.value("confirmed").toBool());
+        QVERIFY(records().contains(
+            QJsonObject{{"type", "tool"}, {"ran", false}, {"session", session}}));
     }
 
     // Another extension's dialog would block Pi forever: declined at once, and said.

@@ -5,6 +5,13 @@
 > `07e9819`), fixed at its root and covered by regression tests. **M01 and M12 now
 > PASS, and M15 still PASSES.** See [Resolution](#resolution). The original review
 > follows unchanged.
+>
+> **Superseded for M01 (2026-10-06):** OpenGhost no longer owns permission
+> policy. Permission enforcement belongs to Pi/the Pi permission plugin. OpenGhost
+> only renders permission UI and relays decisions. The access policy that F1/F2
+> concerned (`openghost-policy.js`) has been removed; see
+> [OpenGhost owns no permission policy](#openghost-owns-no-permission-policy).
+> The M12 fixes and M15 are unchanged.
 
 ## Verdict and scope
 
@@ -409,3 +416,86 @@ These limits are unchanged:
   decision and the effect.
 - A later-loaded extension can still rewrite arguments after approval.
 - Command risk is still 1.3's text heuristic.
+
+## OpenGhost owns no permission policy
+
+**OpenGhost no longer owns permission policy. Permission enforcement belongs to
+Pi/the Pi permission plugin. OpenGhost only renders permission UI and relays
+decisions.**
+
+The intended architecture: Pi's permission plugin decides whether a call needs
+approval, is allowed or is denied. When it asks, Pi emits the request, OpenGhost
+shows the existing approval card, and the user's answer goes back to that exact
+Pi request. No such plugin is built here. Until one is installed, Pi's tools run
+unasked in every mode.
+
+### Removed (enforcement)
+
+- `src/backend/pi/openghost-policy.js`, deleted in full: 1.3's `needsApproval`
+  and `describe` ported onto Pi's tools, together with everything that existed
+  only for them. That covers path expansion as Pi resolves it (`@`, `~`, file
+  URLs), symlink-following canonicalization, the component-wise inside/outside
+  root comparison (F1), the read-fallback variants (F2), the shell-command risk
+  and path analysis (unescaping included) and the Ask/Auto/Full decision tables.
+- The bridge's `tool_call` handler, which decided, blocked calls (including
+  "nobody can be asked") and kept its own map of waiting approvals. Also the
+  `mode` op's re-evaluation of those approvals with `needsApproval`.
+- Copying `openghost-policy.js` beside the bridge (`PiBackend::spawn`), and its
+  Qt resource entry (`CMakeLists.txt`).
+- The fake backend's own Full check: `/fake approval` asks in every mode now.
+- Tests of OpenGhost's path enforcement: `tests/pi/real/policy-check.mjs`
+  (`native_pi_policy_check`), and `native_pi_real_test`'s
+  `askAsksBeforeCommandsAndHonoursTheAnswer`,
+  `autoWorksInTheFolderAndAsksBeforeRiskOrOutside`, `fullNeverAsks`,
+  `aModeThatNoLongerAsksReleasesTheWaitingCall`,
+  `backslashNamesAreNotInsideTheFolder` and
+  `readFallbacksAreDecidedOnTheFileRead`.
+
+### Kept (UI, transport and state plumbing)
+
+- The Ask / Auto / Full controls (`ModePicker`, `ModeDock`), the saved
+  preference and the per-chat mode, unchanged in look and behavior.
+- Relaying the mode: `{op:"mode", mode, seq}` is sent before every run and at
+  once on change (idle or running). Updates are numbered, so an older one never
+  lands last (`m_modeSeq`, `stale:true`). The bridge keeps the latest mode and
+  emits it to Pi's extensions on `pi.events` channel `openghost:mode` as
+  `{mode}`. It decides nothing with it.
+- The permission-request protocol: a Pi extension UI `confirm` titled
+  `openghost:approval`, whose message is
+  `{approvalId, toolCallId, tool, args, presentation?}`. A request taken back
+  unanswered is announced with the status
+  `openghost:<approvalId>:approval {decision: "allow"|null}`, because Pi's RPC
+  says nothing to the client when a dialog's signal aborts.
+- `PiBackend::dialog`, `answer`, `approvalEnded` and `withdrawApprovals`:
+  - A request becomes a card only for the chat's own child and its accepted,
+    uncancelled turn.
+  - An answer goes only to the child and dialog that asked.
+  - Allow counts only while that turn still runs.
+  - Stop, the turn's end, the child exiting or retiring, and chat deletion all
+    withdraw the card, declining the request if Pi still waits on it.
+- `ChatService`'s approval correlation: early requests, stale-turn and duplicate
+  rejection, answer-once, and dismissal on Stop or steering. Also the
+  `ApprovalCard` UI and its presentation fallback (tool name and arguments) when a
+  request carries no presentation.
+- M15: every other blocking extension dialog is cancelled at once and named. M12
+  (sign-in flows, open prompts, configuration generation, latest-attempt status)
+  is untouched.
+
+### Tests now
+
+| Test | Verifies |
+| --- | --- |
+| `native_pi_real_test::piAsksAndTheAnswerGoesBack` | A test-only stand-in permission plugin's (`tests/pi/real/permission.ts`) request appears as a card with its own presentation. Deny and Allow reach that request, checked on disk |
+| `native_pi_real_test::openGhostNeverDecidesItself` | In Ask, a write outside the folder that no plugin asks about runs with no card. In Full, a call the plugin asks about is still a card |
+| `native_pi_real_test::modesReachPiExtensions` | Ask, Auto and Full reach a Pi extension through `openghost:mode` |
+| `native_pi_real_test::aRequestPiTakesBackLeavesNoCard` | Pi's own allow after all withdraws the card |
+| `native_pi_real_test::stopWithdrawsTheWaitingCall` | Stop withdraws the card and nothing runs |
+| `native_pi_real_test::anOlderModeUpdateNeverWins` | The mode relay's ordering in the real bridge |
+| `native_pi_test::approvalsAreAskedAndAnsweredOnce` | Answered once, and an old card's answer never reaches a newer request |
+| `native_pi_test::modesAreRelayedAndPiDecides` | Full still shows Pi's request. Mode changes reach the idle and the running Pi without touching the waiting card |
+| `native_pi_test::deletingTheChatClosesItsApproval` | Deleting the chat closes its card, and nothing answers Allow |
+| `native_pi_test::stopWithdrawsTheApproval`, `native_contract_test` approval cases, both UI smokes | Unchanged: Stop, routing, stale and early requests, and the card UI |
+| M12/M15 tests (`native_pi_test`, `native_sign_in_test`, `native_contract_test`, `native_pi_real_test::everyBlockingDialogIsCancelled`/`otherExtensionsCannotHangOpenGhost`) | Unchanged, passing |
+
+The limits listed under [Evidence](#evidence) applied to the removed policy. They
+are now the Pi permission plugin's to address.
