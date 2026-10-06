@@ -7,6 +7,7 @@
 #include <QStringList>
 #include <QVector>
 #include <optional>
+#include <utility>
 #include <variant>
 
 namespace openghost
@@ -460,14 +461,31 @@ struct ApprovalPresentation {
     QVector<Place> places;
     std::optional<QString> code, removed, added, quote, reveal;
 };
+// A decision the asker offers on an approval card beyond plain Allow and Deny
+// (Pi's plugin-permissions: allow once, allow for the session, allow both
+// directions for the session, deny, deny with a reason), with its shortcut key.
+struct ApprovalAction {
+    QString id, label, detail, key;
+};
 struct ApprovalRequest {
     QString sessionId, turnId, approvalId, toolCallId, tool;
     QJsonObject args;
     std::optional<ApprovalPresentation> presentation;
+    // Empty: the card offers Allow and Deny alone.
+    QVector<ApprovalAction> actions{};
+    bool doublePressToConfirm = false; // a shortcut arms first, commits on a second press
+    // A subagent's session grant: for that subagent alone, or the whole session.
+    std::optional<std::pair<QString, QString>> scopes{}; // {subagent, session} labels
 };
 struct ApprovalAnswer {
     Decision decision = Decision::Deny;
-    std::optional<QString> reason;
+    std::optional<QString> reason; // OpenGhost's own (why a card was dismissed)
+    // The card action chosen (an ApprovalAction id), when one was; empty for a
+    // plain Allow or Deny. It only says how wide an Allow is or why a Deny was
+    // given: `decision` stays the answer.
+    QString action{};
+    std::optional<QString> note{}; // deny with a reason: what the agent is told
+    QString scope{};               // a subagent's session grant: "subagent" or "session"
 };
 struct HostToolRequest {
     QString sessionId, turnId, toolCallId, name;

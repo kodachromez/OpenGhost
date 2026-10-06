@@ -848,16 +848,32 @@ Result PiBackend::execute(const Command &command)
         return Reply{Null{}};
     return failure(QStringLiteral("unsupported"), QStringLiteral("Not implemented for Pi."));
 }
-PiProcess *PiBackend::spawn(const QStringList &args, const QString &cwd, QString *error)
+// `permissions`: a chat child, which also loads plugin-permissions (the bundle and
+// its two grammars, unpacked once beside the bridge). Pi's permission policy and
+// enforcement are that plugin's alone; OpenGhost only shows its requests.
+PiProcess *PiBackend::spawn(const QStringList &args, const QString &cwd, QString *error,
+                            bool permissions)
 {
     if (m_bridgePath.isEmpty() && m_bridgeDir.isValid()) {
         const auto path = m_bridgeDir.filePath(QStringLiteral("openghost-bridge.js"));
         if (QFile::copy(QStringLiteral(":/pi/openghost-bridge.js"), path))
             m_bridgePath = path;
     }
+    if (m_permissionsPath.isEmpty() && m_bridgeDir.isValid()) {
+        bool unpacked = true;
+        for (const auto *file :
+             {"plugin-permissions.js", "web-tree-sitter.wasm", "tree-sitter-bash.wasm"})
+            unpacked = QFile::copy(QStringLiteral(":/pi/plugin-permissions/") + file,
+                                   m_bridgeDir.filePath(QString::fromLatin1(file))) &&
+                       unpacked;
+        if (unpacked)
+            m_permissionsPath = m_bridgeDir.filePath(QStringLiteral("plugin-permissions.js"));
+    }
     auto arguments = args;
     if (!m_bridgePath.isEmpty())
         arguments << QStringLiteral("-e") << m_bridgePath;
+    if (permissions && m_loadPermissions && !m_permissionsPath.isEmpty())
+        arguments << QStringLiteral("-e") << m_permissionsPath;
     auto *pi = new PiProcess(m_bridgePath, this);
     pi->onExtension = [this](const QString &type, const QJsonObject &record) {
         extensionRecord(type, record);
@@ -886,7 +902,7 @@ PiProcess *PiBackend::child(const QString &session, const QString &cwd, QString 
     }
     auto *pi = spawn({QStringLiteral("--mode"), QStringLiteral("rpc"), QStringLiteral("--session"),
                       sessionFile(session)},
-                     folder, error);
+                     folder, error, true);
     if (!pi)
         return nullptr;
     pi->onRecord = [this, session](const QString &type, const QJsonObject &object) {
@@ -907,6 +923,7 @@ PiProcess *PiBackend::child(const QString &session, const QString &cwd, QString 
     chat.context.reset();
     chat.mode.reset();
     chat.auth = m_auth; // A new Pi reads the credentials as they are now.
+    chat.permissions = m_loadPermissions;
     reap();
     return pi;
 }
@@ -1222,8 +1239,24 @@ void PiBackend::setMode(const QString &session, PermissionMode mode,
         [this, session, pi, seq, mode, done = std::move(done)](const QJsonObject &reply) {
             const bool ok = succeeded(reply);
             const auto chat = m_chats.find(session);
-            if (ok && chat != m_chats.end() && chat->second.pi == pi && chat->second.modeSent == seq)
+            // Held only once the enforcer says it holds this very mode: one that
+            // missed or refused the update leaves it unknown, so the next run
+            // sends it again.
+            const auto enforcer = reply.value("enforcer");
+            const bool enforced = !enforcer.isObject() ||
+                                  enforcer.toObject().value("mode").toString() == modeName(mode);
+            if (ok && enforced && chat != m_chats.end() && chat->second.pi == pi &&
+                chat->second.modeSent == seq)
                 chat->second.mode = mode;
+            // Nothing in this Pi enforces permissions: said once, and never made up
+            // for. OpenGhost decides no call itself, whatever the mode.
+            if (ok && chat != m_chats.end() && chat->second.pi == pi &&
+                reply.value("enforcer").isNull() && !reply.value("stale").toBool() &&
+                !std::exchange(chat->second.unenforcedSaid, true))
+                report(QStringLiteral("warning"),
+                       QStringLiteral("Permissions are not enforced: Pi's permission plugin "
+                                      "(plugin-permissions) is not loaded, so Pi's tools run "
+                                      "without asking, whatever the access mode."));
             if (ok)
                 done(std::nullopt);
             else
@@ -1317,6 +1350,15 @@ void PiBackend::start(RequestId id, Run run, const SessionParams &params)
     run.context = contextOf(params.userContext);
     run.mode = params.permissionMode;
     run.chosen = params.selection;
+    // Permissions were turned on or off since this idle child started: it closes,
+    // and a new one loads plugin-permissions as the switch is now.
+    if (chat.pi && chat.permissions != m_loadPermissions && !chat.run && !chat.loading &&
+        !chat.deleting) {
+        retire(chat, [this, id, run = std::move(run), params]() mutable {
+            start(id, std::move(run), params);
+        });
+        return;
+    }
     QString error;
     if (!child(session, params.cwd, &error)) {
         emit replied(id, failure(QStringLiteral("backend_unavailable"), error));
@@ -1997,6 +2039,12 @@ bool PiBackend::dialog(const QString &session, PiProcess *pi, const QJsonObject 
 {
     const auto method = request.value("method").toString();
     const auto title = request.value("title").toString();
+    if (method == QStringLiteral("confirm") && title == ApprovalTitle && !m_loadPermissions) {
+        // Permissions are off, so no card shows it: declined at once, never left waiting.
+        report(QStringLiteral("warning"),
+               QStringLiteral("Permissions are off, so Pi's permission request was declined."));
+        return false;
+    }
     if (method == QStringLiteral("confirm") && title == ApprovalTitle) {
         const auto ask =
             QJsonDocument::fromJson(request.value("message").toString().toUtf8()).object();
@@ -2014,6 +2062,18 @@ bool PiBackend::dialog(const QString &session, PiProcess *pi, const QJsonObject 
         approval.tool = ask.value("tool").toString();
         approval.args = ask.value("args").toObject();
         approval.presentation = presentationOf(ask.value("presentation"));
+        for (const auto &value : ask.value("actions").toArray()) {
+            const auto action = value.toObject();
+            if (!action.value("id").toString().isEmpty())
+                approval.actions.append({action.value("id").toString(),
+                                         action.value("label").toString(),
+                                         action.value("detail").toString(),
+                                         action.value("key").toString()});
+        }
+        approval.doublePressToConfirm = ask.value("doublePressToConfirm").toBool();
+        if (const auto scopes = ask.value("scopes").toObject(); !scopes.isEmpty())
+            approval.scopes = std::pair{scopes.value("subagent").toString(),
+                                        scopes.value("session").toString()};
         const auto id = ++m_reverse;
         m_approvals.insert(
             id, {session, run.turn, request.value("id").toString(), approval.approvalId, pi});
@@ -2045,8 +2105,38 @@ void PiBackend::answer(RequestId id, const ReverseResult &result)
         return;
     const bool allow = decided && decided->decision == Decision::Allow &&
                        running(approval.session, approval.turn);
-    approval.pi->send(
-        {{"type", "extension_ui_response"}, {"id", approval.dialog}, {"confirmed", allow}});
+    // Plain Allow or Deny (a card's own "approve"/"deny" included) is the confirm alone.
+    const bool plain = !decided || (!decided->note && decided->scope.isEmpty() &&
+                                    (decided->action.isEmpty() ||
+                                     decided->action == QStringLiteral("approve") ||
+                                     decided->action == QStringLiteral("deny")));
+    if (plain) {
+        approval.pi->send(
+            {{"type", "extension_ui_response"}, {"id", approval.dialog}, {"confirmed", allow}});
+        return;
+    }
+    // A card choice (how wide an Allow, why a Deny) goes to the asker first; the
+    // confirm then answers. The choice cannot turn the answer around: Pi's plugin
+    // keeps it only as a refinement of the confirm, which is sent whatever the
+    // bridge replies, and Allow still needs the turn running when it is sent.
+    QJsonObject choice{{"action", decided->action}};
+    if (decided->note)
+        choice.insert("reason", *decided->note);
+    if (!decided->scope.isEmpty())
+        choice.insert("scope", decided->scope);
+    QPointer<PiProcess> pi = approval.pi;
+    const bool wanted = decided->decision == Decision::Allow;
+    pi->bridge({{"op", "choice"}, {"approvalId", approval.approvalId}, {"choice", choice}},
+               [this, approval, pi, wanted](const QJsonObject &) {
+                   const auto chat = m_chats.find(approval.session);
+                   if (!pi || chat == m_chats.end() || chat->second.pi != pi)
+                       return; // Its child is gone, and its dialog with it.
+                   const bool allow = wanted && running(approval.session, approval.turn);
+                   pi->send({{"type", "extension_ui_response"},
+                             {"id", approval.dialog},
+                             {"confirmed", allow}});
+               },
+               StepDeadline);
 }
 // Pi took a permission request back unanswered: Stop (decision null), or Pi's own
 // decision to allow it after all (allow). Its card goes; an allowed one says so.
@@ -2069,6 +2159,17 @@ void PiBackend::approvalEnded(const QString &session, const QString &approvalId,
 }
 // A chat's approval cards end with its turn (or its Pi): declined in Pi if it still
 // waits on them, and withdrawn from the frontend.
+void PiBackend::setPermissionsEnabled(bool enabled)
+{
+    if (std::exchange(m_loadPermissions, enabled) == enabled || enabled)
+        return;
+    // Off: every waiting card is declined to the Pi that asked, then withdrawn.
+    QSet<QString> sessions;
+    for (const auto &approval : std::as_const(m_approvals))
+        sessions.insert(approval.session);
+    for (const auto &session : std::as_const(sessions))
+        withdrawApprovals(session, true);
+}
 void PiBackend::withdrawApprovals(const QString &session, bool answer)
 {
     QVector<RequestId> ids;

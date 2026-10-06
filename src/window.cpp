@@ -1,5 +1,6 @@
 #include "window.h"
 #include "frontend/browser.h"
+#include "frontend/permissions_plugin.h"
 #include "platform/platform.h"
 #include "rich.h"
 
@@ -14,6 +15,7 @@
 #include <QQmlNetworkAccessManagerFactory>
 #include <QQuickStyle>
 #include <QQuickTextDocument>
+#include <QTimer>
 #include <QUuid>
 #include <algorithm>
 
@@ -145,6 +147,12 @@ WindowController::WindowController(openghost::Backend *backend, QString preferen
     });
     connect(&m_chat, &openghost::ChatService::answered, this, [this] {
         m_frontendPlugins.publish({openghost::events::ReplyDelta, m_chat.current().id, {}});
+    });
+    connect(&m_frontendPlugins, &openghost::FrontendPlugins::entriesChanged, this,
+            &WindowController::syncPermissions);
+    connect(&m_chat, &openghost::ChatService::changed, this, [this] {
+        if (m_restarting)
+            restartWhenStopped();
     });
     connect(&m_frontendPlugins, &openghost::FrontendPlugins::rowsChanged, this,
             &WindowController::sync);
@@ -506,8 +514,45 @@ QVariantMap WindowController::collapsedFolders() const
             result.insert(folder.path, true);
     return result;
 }
+// The Permissions plugin turned on or off: the backend is told first (off, it
+// declines and withdraws a waiting request), then the permission UI follows.
+void WindowController::syncPermissions()
+{
+    const auto &id = openghost::PermissionsPlugin::Id;
+    const bool on = !m_frontendPlugins.registered(id) || m_frontendPlugins.enabled(id);
+    if (on == m_permissions)
+        return;
+    m_permissions = on;
+    m_chat.setPermissionsEnabled(on);
+    emit permissionsChanged();
+    emit approvalsChanged();
+    emit changed();
+}
+bool WindowController::restartWithPlugin(const QString &id, bool enabled)
+{
+    if (m_restarting || !m_frontendPlugins.registered(id) || !m_frontendPlugins.saveChoice(id, enabled))
+        return false;
+    m_restarting = true;
+    emit restartingChanged();
+    m_chat.stopAll();
+    QTimer::singleShot(RestartDeadline, this, [this] {
+        if (!std::exchange(m_restartRequested, true))
+            emit restartRequested(); // A stop the backend never answered: Pi is closed anyway.
+    });
+    restartWhenStopped();
+    return true;
+}
+void WindowController::restartWhenStopped()
+{
+    if (m_chat.stopping() || m_chat.running() || !m_chat.approvals().isEmpty())
+        return;
+    if (!std::exchange(m_restartRequested, true))
+        emit restartRequested();
+}
 QVariantMap WindowController::modes() const
 {
+    if (!m_permissions)
+        return {{"known", false}};
     return {{"known", true},
             {"permissions",
              QStringList{QStringLiteral("ask"), QStringLiteral("auto"), QStringLiteral("full")}},
@@ -515,11 +560,15 @@ QVariantMap WindowController::modes() const
 }
 void WindowController::setPermissionMode(const QString &name)
 {
+    if (!m_permissions)
+        return;
     if (const auto mode = openghost::parseMode(name))
         m_chat.setMode(*mode);
 }
 quint64 WindowController::send(const QString &text, const QVariantList &files)
 {
+    if (m_restarting)
+        return 0; // Nothing new starts while OpenGhost stops to restart.
     QStringList tokens;
     for (const auto &token : files)
         tokens.append(token.toString());
@@ -683,8 +732,22 @@ QVariantList WindowController::approvals() const
                     {"title", p.tool},
                     {"code", QString::fromUtf8(QJsonDocument(p.args).toJson())},
                     {"reveal", "command"}};
+        // The asker's decisions and their shortcuts only while Permissions is
+        // on; off, a card is OpenGhost 1.3's Allow and Deny.
+        QVariantList actions;
+        for (const auto &action : m_permissions ? p.actions : decltype(p.actions){})
+            actions.append(QVariantMap{{"id", action.id},
+                                       {"label", action.label},
+                                       {"detail", action.detail},
+                                       {"key", action.key}});
+        QVariantMap scopes;
+        if (p.scopes && m_permissions)
+            scopes = {{"subagent", p.scopes->first}, {"session", p.scopes->second}};
         result.append(QVariantMap{{"requestId", QString::number(pending.request)},
                                   {"card", card},
+                                  {"actions", actions},
+                                  {"doublePress", m_permissions && p.doublePressToConfirm},
+                                  {"scopes", scopes},
                                   {"answered", false},
                                   {"toolCallId", p.toolCallId}});
     }

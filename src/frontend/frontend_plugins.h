@@ -38,6 +38,10 @@ class FrontendPlugins final : public QObject
     // False when unknown or the choice could not be saved (nothing changes).
     Q_INVOKABLE bool setEnabled(const QString &id, bool enabled);
     bool enabled(const QString &id) const;
+    // Save an on/off choice without applying it. Used by plugins whose
+    // setting takes effect after restarting OpenGhost.
+    bool saveChoice(const QString &id, bool enabled);
+    bool registered(const QString &id) const { return find(id) != nullptr; }
     // A plugin's option: the saved value, else its default; false if unknown.
     Q_INVOKABLE bool option(const QString &id, const QString &key) const;
     // False when the plugin or key is unknown or the value could not be saved

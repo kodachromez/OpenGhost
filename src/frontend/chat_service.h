@@ -180,10 +180,29 @@ class ChatService final : public QObject
     void authenticate(const Command &command, const QString &flow = {});
     void answerLogin(const AnswerLogin &answer); // Not an auth mutation: no authFinished.
     void approve(RequestId id, bool allow);
+    // A card action the request offered (ApprovalRequest::actions): it is the
+    // answer (approve… allows, deny… denies) with how wide an Allow is or why a
+    // Deny was given. `note`: a deny reason; `scope`: "subagent" or "session".
+    // Anything the request did not offer is ignored. OpenGhost decides nothing
+    // here: the asker (Pi's plugin-permissions) applies it.
+    void decide(RequestId id, const QString &action, const QString &note, const QString &scope);
+    // The Permissions switch, told to the backend: off, it declines and withdraws
+    // a waiting request (the card goes through reverseCancelled) and asks no more.
+    void setPermissionsEnabled(bool enabled)
+    {
+        if (m_backend)
+            m_backend->setPermissionsEnabled(enabled);
+    }
     static QString metrics(const ChatRecord::Turn &turn);
     static QJsonArray entries(const QVector<DisplayRow> &rows);
     static QVector<DisplayRow> rowsOf(const QJsonArray &saved);
     void stop();
+    // Before OpenGhost restarts: every waiting approval is declined and closed, and
+    // every chat's running turn is stopped. stopping() holds until the backend
+    // has answered each stop.
+    void stopAll();
+    bool stopping() const { return m_stops > 0; }
+    bool running() const;
     void choose(const ModelSelection &selection, bool thinkingPreference);
     void setMode(PermissionMode mode);
     void rename(const QString &id, const QString &title);
@@ -225,6 +244,7 @@ class ChatService final : public QObject
     void endTurn(ChatRecord &chat, const TurnCompleted &done, bool replay = false,
                  bool local = false);
     void cancelRemote(ChatRecord &chat);
+    void stopChat(ChatRecord &chat);
     void updateMetrics(ChatRecord &chat, ChatRecord::Turn &turn);
     SessionParams params(const ChatRecord &chat) const;
     quint64 steer(const Input &input);
@@ -252,6 +272,7 @@ class ChatService final : public QObject
     QHash<RequestId, QPair<QString, QString>> m_hostRequests; // -> session, tool call
     QHash<RequestId, Completion> m_calls;
     QHash<QString, ChatRecord> m_chats;
+    int m_stops = 0; // CancelTurn calls not yet answered
     ChatRecord m_draft;
     QString m_current, m_status;
     QVector<Model> m_models;

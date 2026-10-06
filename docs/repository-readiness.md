@@ -141,6 +141,17 @@ what Pi reports and no more:
   incarnation/revision boundaries, exact failed-turn Retry, mini-session semantics,
   approval/host lifetimes and truthful usage/errors with that backend. The fake
   alone proves none of its durability or remote-effect guarantees.
+- [plugin-permissions](plugin-permissions.md) is a decision layer, not a sandbox:
+  an action reachable through an allowed tool is limited only by the rules and Pi's
+  process permissions. An explicit `deny` always wins over a session approval;
+  it offers no durable "always allow". Turning Permissions off (Settings →
+  Plugins, which restarts OpenGhost) leaves Pi's tools unasked. The relaunch
+  (`QProcess::startDetached` once the app has quit) is not exercised by the
+  headless tests, which stop at `restartRequested` and rebuild the window on the
+  same profile. Its committed bundle is rebuilt with Node (`npm run bundle`);
+  the CTest bundle check catches drift. Auto's risky-command list is a rule list,
+  not an exhaustive risk model; the engine's wrapper/unparseable floors and the
+  outside-folder boundary still apply.
 
 ## Checks for the documentation audit (`4542756`)
 

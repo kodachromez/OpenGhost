@@ -14,6 +14,7 @@ Settings → Plugins rows from `plugin.list`) are unrelated to this.
 - `src/frontend/frontend_plugins.{h,cpp}`: `FrontendPlugins`, the registry the
   window owns, and `registerBuiltinPlugins()`.
 - `src/frontend/example_plugin.{h,cpp}`: the example plugin.
+- `src/frontend/permissions_plugin.{h,cpp}`: the Permissions switch (below).
 - `plugins/tool_calls/`: the Tool Calls plugin (below).
 - `plugins/thinking/`: the Thinking plugin (below).
 
@@ -70,7 +71,23 @@ item from the render thread and a tab icon deleted mid-frame crashes it.
 With no plugin enabled, rows carry empty `decorations`, events reach no one and
 `visibility` is empty: the window behaves as without the SDK.
 
-## Tool Calls (`openghost.tool-calls`)
+## Permissions (`openghost.plugin-permissions`)
+
+Always built in and registered by `main.cpp`; **on by default**, shown in
+Settings → Plugins as *Permissions*. It is the switch for Pi's permission plugin
+([plugin-permissions](plugin-permissions.md)) and its UI, and registers no
+hooks: the window reads whether it is on (`WindowController::permissions`, true
+when it is not registered) and tells the backend (`Backend::setPermissionsEnabled`).
+Off, the Ask / Auto / Full picker and its dock, the approval card's decisions
+and their `y`/`s`/`b`/`n`/`r` shortcuts are gone, a mode pick or card decision
+is ignored, a waiting request is declined and withdrawn, and chats' Pi start
+without plugin-permissions. On again, all of it returns.
+
+Its `FrontendPluginInfo::restart` is set, so Settings shows *Requires restart*
+beside its toggle and changes it only through a confirmed restart
+(`WindowController::restartWithPlugin`, then `restartRequested`, on which
+`main.cpp` quits and starts OpenGhost again). Any plugin can set it.
+
 
 Built in (`OPENGHOST_TOOL_CALLS`, default ON) and registered by `main.cpp`;
 **on by default**, offered as *Show Tool Calls* under Settings → Appearance →

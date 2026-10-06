@@ -468,13 +468,143 @@ Popup {
                                     first: index === 0 && !dialog.frontend.runtimePlugins
                                     label: entry.name ?? ""
                                     hint: [entry.description, entry.status].filter(Boolean).join("\n")
-                                    PillButton {
-                                        objectName: "frontendPluginToggle-" + (frontendPlugin.entry.pluginId ?? "")
-                                        text: frontendPlugin.entry.enabled ? "On" : "Off"
-                                        Accessible.name: frontendPlugin.label
-                                                         + (frontendPlugin.entry.enabled ? ": turn off" : ": turn on")
-                                        onClicked: dialog.frontend.frontendPlugins.setEnabled(
-                                            frontendPlugin.entry.pluginId, !frontendPlugin.entry.enabled)
+                                    Row {
+                                        spacing: 12
+                                        // A plugin whose change restarts OpenGhost says so before
+                                        // its toggle is touched; hovering says why.
+                                        Item {
+                                            objectName: "frontendPluginRestart-" + (frontendPlugin.entry.pluginId ?? "")
+                                            visible: !!frontendPlugin.entry.restart
+                                            width: restartNote.implicitWidth
+                                            height: 32
+                                            Accessible.role: Accessible.StaticText
+                                            Accessible.name: "Requires restart"
+                                            Accessible.description: tip
+                                            readonly property string tip: frontendPlugin.entry.restart ?? ""
+                                            Row {
+                                                id: restartNote
+                                                anchors.verticalCenter: parent.verticalCenter
+                                                spacing: 6
+                                                PathIcon {
+                                                    anchors.verticalCenter: parent.verticalCenter
+                                                    width: 14
+                                                    height: 14
+                                                    name: "warning"
+                                                    color: Theme.warn
+                                                }
+                                                CssText {
+                                                    anchors.verticalCenter: parent.verticalCenter
+                                                    text: "Requires restart"
+                                                    size: 13
+                                                    line: 18
+                                                    color: Theme.warn
+                                                }
+                                            }
+                                            ButtonTip { text: parent.tip }
+                                        }
+                                        PillButton {
+                                            objectName: "frontendPluginToggle-" + (frontendPlugin.entry.pluginId ?? "")
+                                            text: frontendPlugin.entry.enabled ? "On" : "Off"
+                                            enabled: !dialog.frontend.restarting
+                                            Accessible.name: frontendPlugin.label
+                                                             + (frontendPlugin.entry.enabled ? ": turn off" : ": turn on")
+                                            Accessible.description: frontendPlugin.entry.restart ?? ""
+                                            onClicked: {
+                                                const id = frontendPlugin.entry.pluginId
+                                                const on = !frontendPlugin.entry.enabled
+                                                if (frontendPlugin.entry.restart)
+                                                    restartConfirm.ask(id, on, frontendPlugin.entry.name)
+                                                else
+                                                    dialog.frontend.frontendPlugins.setEnabled(id, on)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            // Before a plugin change that restarts OpenGhost: nothing
+                            // changes (the toggle included) unless Restart is chosen.
+                            Popup {
+                                id: restartConfirm
+                                objectName: "restartConfirm"
+                                property string pluginId
+                                property bool turnOn: false
+                                property string pluginName
+                                function ask(id, on, name) {
+                                    pluginId = id
+                                    turnOn = on
+                                    pluginName = name
+                                    open()
+                                }
+                                parent: Overlay.overlay
+                                x: Math.round((parent ? parent.width - width : 0) / 2)
+                                y: Math.round((parent ? parent.height - height : 0) / 2)
+                                width: 400
+                                padding: 24
+                                modal: true
+                                focus: true
+                                closePolicy: Popup.CloseOnEscape
+                                Overlay.modal: Rectangle { color: Theme.backdrop }
+                                background: Rectangle {
+                                    radius: 16
+                                    antialiasing: true
+                                    color: Theme.composerBg
+                                    border.width: 1
+                                    border.color: Theme.composerBorder
+                                }
+                                contentItem: Column {
+                                    spacing: 12
+                                    Accessible.role: Accessible.AlertMessage
+                                    Accessible.name: restartTitle.text
+                                    CssText {
+                                        id: restartTitle
+                                        objectName: "restartConfirmText"
+                                        width: parent.width
+                                        text: "Changing " + restartConfirm.pluginName
+                                              + " requires OpenGhost to restart."
+                                        size: 15
+                                        cssWeight: 500
+                                        color: Theme.text
+                                        wrapMode: Text.Wrap
+                                    }
+                                    CssText {
+                                        width: parent.width
+                                        text: "Any active run will be stopped, and unsaved or in-progress work may be lost."
+                                        size: 13
+                                        line: 18
+                                        color: Theme.secondary
+                                        wrapMode: Text.Wrap
+                                    }
+                                    CssText {
+                                        width: parent.width
+                                        text: "Do you want to restart OpenGhost now?"
+                                        size: 13
+                                        line: 18
+                                        color: Theme.secondary
+                                        wrapMode: Text.Wrap
+                                    }
+                                    Item {
+                                        width: parent.width
+                                        height: 32 + 8
+                                        Row {
+                                            anchors.right: parent.right
+                                            anchors.bottom: parent.bottom
+                                            spacing: 8
+                                            PillButton {
+                                                objectName: "restartConfirmCancel"
+                                                text: "Cancel"
+                                                focus: true
+                                                onClicked: restartConfirm.close()
+                                            }
+                                            PillButton {
+                                                objectName: "restartConfirmAccept"
+                                                text: "Restart OpenGhost"
+                                                onClicked: {
+                                                    restartConfirm.close()
+                                                    dialog.frontend.restartWithPlugin(
+                                                        restartConfirm.pluginId, restartConfirm.turnOn)
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }

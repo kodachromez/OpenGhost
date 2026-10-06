@@ -116,19 +116,25 @@ bool FrontendPlugins::setEnabled(const QString &id, bool enabled)
         return false;
     if (bool(slot->context) == enabled)
         return true;
-    if (m_store) {
-        auto preferences = m_store->value();
-        preferences.frontendPlugins.insert(id, enabled);
-        if (!m_store->save(preferences))
-            return false; // The store says why; the plugin stays as it was.
-    } else {
-        m_choices.insert(id, enabled);
-    }
+    if (!saveChoice(id, enabled))
+        return false; // The store says why; the plugin stays as it was.
     if (enabled)
         start(*slot);
     else
         stop(*slot);
     return true;
+}
+bool FrontendPlugins::saveChoice(const QString &id, bool enabled)
+{
+    if (!find(id))
+        return false;
+    if (!m_store) {
+        m_choices.insert(id, enabled);
+        return true;
+    }
+    auto preferences = m_store->value();
+    preferences.frontendPlugins.insert(id, enabled);
+    return m_store->save(preferences);
 }
 bool FrontendPlugins::enabled(const QString &id) const
 {
@@ -207,6 +213,7 @@ QVariantList FrontendPlugins::entries() const
                                 {"description", slot->info.description},
                                 {"status", slot->plugin->status()},
                                 {"enabled", bool(slot->context)},
+                                {"restart", slot->info.restart},
                                 {"placement", slot->info.placement},
                                 {"options", options}});
     }

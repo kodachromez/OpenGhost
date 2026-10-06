@@ -19,6 +19,9 @@ class FrontendPlugins;
 struct FrontendPluginInfo {
     QString id, name, description;
     bool enabledByDefault = false; // Until the user turns it on or off.
+    // Non-empty: changing this plugin from Settings requires an app restart.
+    // The string explains why.
+    QString restart = {};
     // Where Settings offers its on/off, in one place only: "" under Plugins;
     // "chat" under Appearance → Chat Settings (Plugins then leaves it out).
     QString placement = {};

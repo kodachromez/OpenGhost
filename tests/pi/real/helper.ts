@@ -2,8 +2,15 @@
 // would make them. `/og-ask` waits on a select dialog, then says what it got;
 // `/og-fail` fails. `/og-dialogs` waits on each of select, confirm, input and
 // editor in turn and says what it got; `/og-model` says the og-faux model's name
-// in Pi's registry and in this session.
+// in Pi's registry and in this session. `/og-mode` says the access mode
+// plugin-permissions itself enforces (its own handle), or "none" without it.
+// A reply calling a tool with `og-exit` in its input makes this Pi exit soon after,
+// as a crashed Pi would, while the call still waits on its approval.
 export default function (pi) {
+  pi.on("message_end", (event) => {
+    if (event.message?.role === "assistant" && JSON.stringify(event.message.content ?? "").includes("og-exit"))
+      setTimeout(() => process.exit(1), 1500);
+  });
   pi.registerCommand("og-ask", {
     description: "Asks a question in a dialog",
     handler: async (_args, ctx) => {
@@ -28,6 +35,14 @@ export default function (pi) {
     handler: async (_args, ctx) => {
       const registry = ctx.modelRegistry.runtime.getModel("og-faux", "faux")?.name;
       ctx.ui.notify(`og-model registry=${registry} session=${ctx.model?.name}`, "warning");
+    },
+  });
+  pi.registerCommand("og-mode", {
+    description: "Says the access mode plugin-permissions enforces",
+    handler: async (_args, ctx) => {
+      const plugin = globalThis[Symbol.for("openghost:plugin-permissions")];
+      const held = plugin?.mode?.();
+      ctx.ui.notify(`og-mode got ${held ? `${held.mode} ${held.seq}` : "none"}`, "warning");
     },
   });
   pi.registerCommand("og-fail", {

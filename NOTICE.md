@@ -26,6 +26,16 @@ Retained terms and historical notices:
 - [Ghosty's original native attribution](licenses/ghosty-native-NOTICE.md).
 - [Ghosty's original OpenGhost attribution](licenses/ghosty-openghost-NOTICE.md).
 
+`src/backend/pi/plugin-permissions/` (plugin-permissions, OpenGhost's Pi
+permission plugin) is derived from
+[`@gotgenes/pi-permission-system`](https://github.com/gotgenes/pi-packages)
+40.0.0 (commit `191011f3585f96796b44a29dd20c70bfac49febe`), itself a fork of
+MasuRii/pi-permission-system, under the MIT License, Copyright (c) 2026 MasuRii
+and Christopher D. Lasher. Its bundle also contains zod, web-tree-sitter and
+tree-sitter-bash (MIT). See [PROVENANCE.md](src/backend/pi/plugin-permissions/PROVENANCE.md),
+[the donor's license](licenses/plugin-permissions-LICENSE) and
+[the bundled packages' licenses](licenses/plugin-permissions-third-party.md).
+
 Historical notices describe their original directory layout and may mention
 components not imported here; they are preserved for provenance. The source-code
 MIT grant does **not** cover the excluded name, artwork, animations or visual

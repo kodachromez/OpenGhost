@@ -1522,7 +1522,34 @@ void ChatService::stop()
 {
     if (!canCancel())
         return;
-    auto &chat = editable();
+    stopChat(editable());
+}
+void ChatService::stopAll()
+{
+    QSet<QString> asking;
+    for (const auto &p : std::as_const(m_approvals))
+        asking.insert(p.data.sessionId);
+    for (const auto &p : std::as_const(m_earlyApprovals))
+        asking.insert(p.data.sessionId);
+    for (const auto &session : std::as_const(asking))
+        dismissApprovals(session, QStringLiteral("cancelled"));
+    QStringList ids;
+    for (auto it = m_chats.cbegin(); it != m_chats.cend(); ++it)
+        if (!it->turn.clientId.isEmpty() && !it->turn.terminal && !it->turn.stopped)
+            ids.append(it.key());
+    for (const auto &id : std::as_const(ids))
+        if (auto it = m_chats.find(id); it != m_chats.end())
+            stopChat(*it);
+    emit changed();
+}
+bool ChatService::running() const
+{
+    return std::any_of(m_chats.cbegin(), m_chats.cend(), [](const ChatRecord &chat) {
+        return !chat.turn.clientId.isEmpty() && !chat.turn.terminal;
+    });
+}
+void ChatService::stopChat(ChatRecord &chat)
+{
     chat.turn.stopped = true; // freeze before any request/response
     endTurn(chat, {TurnStatus::Cancelled, {}, {}}, false, true);
     if (!chat.turn.remoteId.isEmpty()) {
@@ -1540,13 +1567,17 @@ void ChatService::stop()
 void ChatService::cancelRemote(ChatRecord &chat)
 {
     m_cancelling = true;
+    ++m_stops;
     const auto id = chat.id;
     const auto client = chat.turn.clientId;
     call(CancelTurn{id, chat.turn.remoteId}, [this, id, client](const Result &result) {
         m_cancelling = false;
+        --m_stops;
         auto it = m_chats.find(id);
-        if (it == m_chats.end())
+        if (it == m_chats.end()) {
+            emit changed(); // A restart may be waiting for this stop.
             return;
+        }
         if (!value<Null>(result)) {
             it->reconciled = false;
             it->turn.retryable = true; // Reconciliation only, never an automatic resend.
@@ -2258,6 +2289,28 @@ void ChatService::approve(RequestId id, bool allow)
         return;
     m_approvals.erase(it); // Exactly once, even if answer() immediately emits events.
     m_backend->answer(id, ApprovalAnswer{allow ? Decision::Allow : Decision::Deny, {}});
+    emit changed();
+}
+void ChatService::decide(RequestId id, const QString &action, const QString &note,
+                         const QString &scope)
+{
+    const auto it = std::find_if(m_approvals.begin(), m_approvals.end(),
+                                 [id](const auto &p) { return p.request == id; });
+    if (it == m_approvals.end() || it->data.sessionId != m_current)
+        return;
+    const auto &offered = it->data.actions;
+    if (std::none_of(offered.cbegin(), offered.cend(),
+                     [&](const ApprovalAction &a) { return a.id == action; }))
+        return;
+    const bool allow = action.startsWith(QStringLiteral("approve"));
+    ApprovalAnswer answer{allow ? Decision::Allow : Decision::Deny, {}, action, {}, {}};
+    if (action == QStringLiteral("denyWithReason") && !note.trimmed().isEmpty())
+        answer.note = note.trimmed();
+    if (allow && it->data.scopes &&
+        (scope == QStringLiteral("subagent") || scope == QStringLiteral("session")))
+        answer.scope = scope;
+    m_approvals.erase(it); // Exactly once, even if answer() immediately emits events.
+    m_backend->answer(id, answer);
     emit changed();
 }
 void ChatService::dismissApprovals(const QString &session, const QString &reason)

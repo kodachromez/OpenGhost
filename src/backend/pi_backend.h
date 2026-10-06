@@ -30,8 +30,11 @@ namespace openghost
 // credential. Each sign-in is a flow of its own: a cancelled or superseded one's
 // steps and outcome never reach the newer one.
 //
-// OpenGhost owns no permission policy: whether a tool call may run is Pi's and its
-// permission plugin's. Ask / Auto / Full is relayed as the chat's mode (the
+// OpenGhost owns no permission policy: whether a tool call may run is decided by
+// plugin-permissions (src/backend/pi/plugin-permissions, docs/plugin-permissions.md),
+// which every chat's child loads beside the bridge. A card decision beyond Allow and
+// Deny (allow for the session, deny with a reason) is relayed to it before the
+// confirm, which stays the answer. Ask / Auto / Full is relayed as the chat's mode (the
 // bridge's `mode`, said to Pi's extensions), set on the chat's child before every
 // run and as soon as the chat changes mode (idle or not); a later update always
 // wins. A permission request is Pi's own extension UI confirm titled
@@ -52,6 +55,12 @@ class PiBackend final : public Backend
     void answer(RequestId id, const ReverseResult &result) override;
     void browserChanged(const BrowserState &) override {}
     QString sessionFile(const QString &session) const;
+    // Whether chat children load plugin-permissions (the frontend's Permissions
+    // switch; on by default). Off: a waiting approval is declined and withdrawn,
+    // a request a child still asks is declined at once, and OpenGhost enforces
+    // nothing itself (it says permissions are not enforced). A chat's idle child
+    // started the other way is restarted before its next run.
+    void setPermissionsEnabled(bool enabled) override;
 
   private:
     using Done = PiProcess::Done;
@@ -108,6 +117,8 @@ class PiBackend final : public Backend
         std::optional<QJsonObject> context; // what this child's bridge holds
         std::optional<PermissionMode> mode; // the access mode this child's bridge holds
         quint64 modeSent = 0;                // the latest mode update sent to this child
+        bool unenforcedSaid = false;         // told that this child enforces no permissions
+        bool permissions = false;            // this child loaded plugin-permissions
         int auth = 0;                       // the configuration generation its Pi has read
         QVector<RequestId> deletes;          // DeleteSession calls awaiting erasure
     };
@@ -118,7 +129,8 @@ class PiBackend final : public Backend
     };
     void dispatch(RequestId id, const Command &command);
     Result execute(const Command &command);
-    PiProcess *spawn(const QStringList &args, const QString &cwd, QString *error);
+    PiProcess *spawn(const QStringList &args, const QString &cwd, QString *error,
+                     bool permissions = false);
     PiProcess *child(const QString &session, const QString &cwd, QString *error);
     void retire(Chat &chat, std::function<void()> gone = {});
     void exited(const QString &session);
@@ -162,6 +174,8 @@ class PiBackend final : public Backend
     void remember(Journal journal, bool latest);
     QTemporaryDir m_bridgeDir, m_ownSessions;
     QString m_bridgePath, m_sessionDir;
+    QString m_permissionsPath; // plugin-permissions, unpacked beside the bridge
+    bool m_loadPermissions = true;
     PiProcess *m_control = nullptr; // catalog, providers and sign-in
     std::map<QString, Chat> m_chats; // node-based: references survive insertion
     QHash<QString, Journal> m_journal; // session + '\n' + client turn

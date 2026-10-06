@@ -1122,6 +1122,8 @@ ApplicationWindow {
                                 detailsOpen: window.approvalDetails
                                 onDetailsToggled: open => window.approvalDetails = open
                                 onAnswer: allow => window.frontend.approve(approval.requestId, allow)
+                                onDecision: (action, note, scope) =>
+                                    window.frontend.decide(approval.requestId, action, note, scope)
                                 onGone: window.dropApproval(approval.requestId)
                             }
                         }
@@ -1795,6 +1797,14 @@ ApplicationWindow {
         button: modePicker
         backdrop: window.contentItem
         onPicked: id => window.frontend.setPermissionMode(id)
+        // Permissions turned off: the dock goes with the picker.
+        Connections {
+            target: window.frontend
+            function onPermissionsChanged() {
+                if (!window.frontend.permissions)
+                    modeDock.close(false)
+            }
+        }
     }
 
     ModelStage {

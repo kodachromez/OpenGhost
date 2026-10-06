@@ -1296,7 +1296,134 @@ class PiTest final : public QObject
         QCOMPARE(modes, 1);
     }
 
-    // OpenGhost decides nothing with the mode: Full is relayed to Pi, and a call Pi
+    // A card decision beyond Allow and Deny (Pi's plugin-permissions offers it):
+    // only one the request offered is taken, its choice reaches the asker before the
+    // confirm, and the confirm alone says allow or deny.
+    void cardChoicesReachTheAskerBeforeItsAnswer()
+    {
+        Harness h;
+        QTRY_VERIFY(h.chat.ready());
+        QVERIFY(h.chat.send(QStringLiteral("approve")));
+        QTRY_COMPARE(h.chat.approvals().size(), 1);
+        auto card = h.chat.approvals().first();
+        QCOMPARE(card.data.actions.size(), 4);
+        QCOMPARE(card.data.actions[1].id, QStringLiteral("approveSession"));
+        QCOMPARE(card.data.actions[1].key, QStringLiteral("s"));
+        QCOMPARE(card.data.actions[1].detail,
+                 QStringLiteral("Yes, allow bash \"touch *\" for this session"));
+        QVERIFY(card.data.doublePressToConfirm);
+        QVERIFY(!card.data.scopes);
+        h.chat.decide(card.request, QStringLiteral("approveSessionBoth"), {}, {}); // not offered
+        QCOMPARE(h.chat.approvals().size(), 1);
+        h.chat.decide(card.request, QStringLiteral("approveSession"), QStringLiteral("ignored"),
+                      QStringLiteral("session"));
+        QTRY_VERIFY(h.settled());
+        QVERIFY(h.text(DisplayRow::Role::Assistant).endsWith(QStringLiteral("\n\nran")));
+        const auto order = [this](const QString &type) {
+            const auto list = records();
+            for (qsizetype i = 0; i < list.size(); ++i)
+                if (list[i].value("type").toString() == type)
+                    return i;
+            return qsizetype(-1);
+        };
+        const auto choice = records().at(order(QStringLiteral("choice")));
+        QCOMPARE(choice.value("approvalId").toString(), QStringLiteral("og-approval-1"));
+        // No reason on an Allow, no reach without the asker's scopes.
+        QCOMPARE(choice.value("choice").toObject(), (QJsonObject{{"action", "approveSession"}}));
+        QVERIFY(order(QStringLiteral("choice")) < order(QStringLiteral("ui_response")));
+
+        QVERIFY(h.chat.send(QStringLiteral("approve")));
+        QTRY_COMPARE(h.chat.approvals().size(), 1);
+        card = h.chat.approvals().first();
+        h.chat.decide(card.request, QStringLiteral("denyWithReason"), QStringLiteral("  not now "), {});
+        QTRY_VERIFY(h.settled());
+        QVERIFY(h.text(DisplayRow::Role::Assistant).endsWith(QStringLiteral("\n\nblocked")));
+        QVector<QJsonObject> choices, answers;
+        for (const auto &record : records()) {
+            if (record.value("type").toString() == QStringLiteral("choice"))
+                choices.append(record);
+            if (record.value("type").toString() == QStringLiteral("ui_response"))
+                answers.append(record);
+        }
+        QCOMPARE(choices.size(), 2);
+        QCOMPARE(choices.last().value("choice").toObject(),
+                 (QJsonObject{{"action", "denyWithReason"}, {"reason", "not now"}}));
+        QCOMPARE(answers.size(), 2);
+        QVERIFY(answers.first().value("confirmed").toBool());
+        QVERIFY(!answers.last().value("confirmed").toBool());
+        h.chat.decide(card.request, QStringLiteral("approve"), {}, {}); // answered: nothing more
+        int after = 0;
+        for (const auto &record : records())
+            after += record.value("type").toString() == QStringLiteral("ui_response");
+        QCOMPARE(after, 2);
+    }
+
+    // The Permissions switch off: the waiting card is declined to the Pi that asked
+    // and withdrawn, a request Pi still asks is declined at once (no card, nothing
+    // left waiting), and the chat's idle Pi restarts without plugin-permissions.
+    // On again, the next run's Pi loads it and its requests are cards again.
+    void permissionsOffDeclinesWaitingRequestsAndUnloadsThePlugin()
+    {
+        Harness h;
+        QTRY_VERIFY(h.chat.ready());
+        const auto answers = [this] {
+            QVector<bool> confirmed;
+            for (const auto &record : records())
+                if (record.value("type").toString() == QStringLiteral("ui_response"))
+                    confirmed.append(record.value("confirmed").toBool());
+            return confirmed;
+        };
+        QVERIFY(h.chat.send(QStringLiteral("loaded")));
+        QTRY_VERIFY(h.settled());
+        QCOMPARE(h.text(DisplayRow::Role::Assistant), QStringLiteral("plugin-permissions: loaded"));
+
+        QVERIFY(h.chat.send(QStringLiteral("approve")));
+        QTRY_COMPARE(h.chat.approvals().size(), 1);
+        h.chat.setPermissionsEnabled(false);
+        QVERIFY(h.chat.approvals().isEmpty());
+        QTRY_VERIFY(h.settled());
+        QVERIFY(h.text(DisplayRow::Role::Assistant).endsWith(QStringLiteral("\n\nblocked")));
+        QCOMPARE(answers(), QVector<bool>{false});
+
+        QVERIFY(h.chat.send(QStringLiteral("loaded")));
+        QTRY_VERIFY(h.settled());
+        QCOMPARE(h.text(DisplayRow::Role::Assistant), QStringLiteral("plugin-permissions: absent"));
+        // Another asker's request while off: declined at once, never a card.
+        bool carded = false;
+        const auto watch = connect(&h.chat, &ChatService::changed, this,
+                                   [&] { carded |= !h.chat.approvals().isEmpty(); });
+        QVERIFY(h.chat.send(QStringLiteral("approve")));
+        QTRY_VERIFY(h.settled());
+        disconnect(watch);
+        QVERIFY(!carded);
+        QVERIFY(h.text(DisplayRow::Role::Assistant).endsWith(QStringLiteral("\n\nblocked")));
+
+        h.chat.setPermissionsEnabled(true);
+        QVERIFY(h.chat.send(QStringLiteral("loaded")));
+        QTRY_VERIFY(h.settled());
+        QCOMPARE(h.text(DisplayRow::Role::Assistant), QStringLiteral("plugin-permissions: loaded"));
+        QVERIFY(h.chat.send(QStringLiteral("approve")));
+        QTRY_COMPARE(h.chat.approvals().size(), 1);
+        h.chat.approve(h.chat.approvals().first().request, true);
+        QTRY_VERIFY(h.settled());
+        QVERIFY(h.text(DisplayRow::Role::Assistant).endsWith(QStringLiteral("\n\nran")));
+        QCOMPARE(answers().size(), 3);
+        QCOMPARE(answers().last(), true);
+    }
+
+    // After a restart with Permissions off, the backend is told before any chat
+    // runs (main registers the plugin as the window starts): the first chat's Pi
+    // starts without plugin-permissions, so what Settings shows is what Pi loaded.
+    void permissionsOffAtStartLoadsNoPlugin()
+    {
+        Harness h;
+        h.backend.setPermissionsEnabled(false);
+        QTRY_VERIFY(h.chat.ready());
+        QVERIFY(h.chat.send(QStringLiteral("loaded")));
+        QTRY_VERIFY(h.settled());
+        QCOMPARE(h.text(DisplayRow::Role::Assistant), QStringLiteral("plugin-permissions: absent"));
+    }
+
     // still asks about is a card in Full too. A change reaches the idle and the
     // running Pi at once; what it does to a waiting request is Pi's to say.
     void modesAreRelayedAndPiDecides()
@@ -1329,8 +1456,8 @@ class PiTest final : public QObject
         QTRY_VERIFY(records().mid(before).contains(
             QJsonObject{{"type", "mode"}, {"mode", "auto"}, {"session", session}}));
         QCOMPARE(h.chat.approvals().size(), 1);
-        // Full: the stand-in plugin allows the waiting call itself and takes the
-        // request back; the card goes without an answer from OpenGhost.
+        // Full: the (scripted) permission plugin allows the waiting call itself and
+        // takes the request back; the card goes without an answer from OpenGhost.
         h.chat.setMode(PermissionMode::Full);
         QTRY_VERIFY(h.settled());
         QVERIFY(h.text(DisplayRow::Role::Assistant).endsWith(QStringLiteral("\n\nran")));

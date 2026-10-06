@@ -19,6 +19,10 @@ class Backend : public QObject
     virtual void cancelRequest(RequestId id) = 0; // NOT a rollback or turn.cancel
     virtual void answer(RequestId id, const ReverseResult &result) = 0;
     virtual void browserChanged(const BrowserState &state) = 0;
+    // Whether the backend's permission plugin is on (the frontend's Permissions
+    // switch). Off: no permission request is left waiting on a card the window
+    // no longer shows; one already waiting is declined and withdrawn.
+    virtual void setPermissionsEnabled(bool enabled) { Q_UNUSED(enabled) }
   signals:
     void replied(openghost::RequestId id, const openghost::Result &result);
     void sessionEvent(const openghost::SessionEvent &event);
