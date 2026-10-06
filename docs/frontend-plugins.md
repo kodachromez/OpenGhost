@@ -71,6 +71,11 @@ and their `y`/`s`/`b`/`n`/`r` shortcuts are gone, a mode pick or card decision
 is ignored, a waiting request is declined and withdrawn, and chats' Pi start
 without plugin-permissions. On again, all of it returns.
 
+Its `FrontendPluginInfo::restart` is set, so Settings shows *Requires restart*
+beside its toggle and changes it only through a confirmed restart
+(`WindowController::restartWithPlugin`, then `restartRequested`, on which
+`main.cpp` quits and starts OpenGhost again). Any plugin can set it.
+
 
 Built in (`OPENGHOST_TOOL_CALLS`, default ON) and registered by `main.cpp`;
 **on by default**, shown in Settings → Plugins as *Tool Calls* with an On/Off

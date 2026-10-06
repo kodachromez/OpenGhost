@@ -163,7 +163,22 @@ itself. A shortcut key held down never counts as its second press.
 ## Turning it off
 
 Settings → Plugins → *Permissions* (`openghost.plugin-permissions`, on by
-default) is the switch for the plugin and OpenGhost's permission UI.
+default) is the switch for the plugin and OpenGhost's permission UI. Changing
+it restarts OpenGhost:
+
+- Its row shows **Requires restart** (a warning icon; hovering says "Enabling or
+  disabling Permissions restarts OpenGhost.") before the toggle is touched.
+- The toggle asks first: "Changing Permissions requires OpenGhost to restart.
+  Any active run will be stopped, and unsaved or in-progress work may be lost.
+  Do you want to restart OpenGhost now?" **Cancel** changes nothing (the toggle
+  included).
+- **Restart OpenGhost** saves the choice without applying it, declines and
+  closes every waiting approval, stops every chat's running turn and waits for
+  the backend to confirm each stop (at most 10 s), then quits. Once Pi's
+  processes have exited, OpenGhost starts again with the same arguments and the
+  choice applies from the start: the toggle shows what Pi loads.
+
+The window never switches a running Pi half way. What each state means:
 
 - **Off.** The Ask / Auto / Full picker, the approval card's decisions (Allow
   for session, the links, the reason step) and the `y` / `s` / `b` / `n` / `r`
@@ -173,9 +188,11 @@ default) is the switch for the plugin and OpenGhost's permission UI.
   run, and a request a Pi still running with the plugin asks is declined at
   once. Pi's tools run without asking, and OpenGhost says permissions are not
   enforced.
-- **On again.** The picker, decisions and shortcuts return, and each chat's Pi
-  restarts with the plugin before its next run. A turn already running without
-  the plugin finishes unenforced.
+- **On.** The picker, decisions and shortcuts return, and every chat's Pi
+  loads the plugin.
+
+`FrontendPlugins::setEnabled` still switches it live (each idle chat's Pi
+restarting before its next run); Settings does not use it.
 
 ## The boundary
 
@@ -256,12 +273,17 @@ The suites:
 - **`native_pi_test`.** A card choice reaches the asker before its confirm; only
   offered decisions are taken. Turning Permissions off declines and withdraws
   the waiting card, declines later requests at once and restarts the chat's Pi
-  without the plugin; on again, with it. Plus the existing lifecycle tests: Stop,
+  without the plugin; on again, with it. Told off before its first chat (after
+  a restart), the chat's Pi starts without it. Plus the existing lifecycle tests: Stop,
   deletion, staleness, answer-once and mode relay.
 - **`native_fake_ui_smoke`.** The card's shortcuts (arming, Escape, double
   press), Allow for session, and the reason step's Cancel and Send. Permissions
   off withdraws a waiting card and hides the mode picker, and a card then has
-  only Allow and Deny with no shortcuts; on again, all of it returns.
+  only Allow and Deny with no shortcuts; on again, all of it returns. The
+  restart: the row's Requires restart warning, Cancel, Off and On each through
+  Restart OpenGhost (the active run stopped and its approval closed first, the
+  choice saved but not applied), and after each restart the toggle, the
+  permission UI and the backend's loaded plugin agree.
 
 Pi validates and coerces a call's arguments against the tool's schema before
 the `tool_call` hook runs, and hands the plugin those same arguments: the

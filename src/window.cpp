@@ -15,6 +15,7 @@
 #include <QQmlNetworkAccessManagerFactory>
 #include <QQuickStyle>
 #include <QQuickTextDocument>
+#include <QTimer>
 #include <QUuid>
 #include <algorithm>
 
@@ -109,6 +110,10 @@ WindowController::WindowController(openghost::Backend *backend, QString preferen
     });
     connect(&m_frontendPlugins, &openghost::FrontendPlugins::entriesChanged, this,
             &WindowController::syncPermissions);
+    connect(&m_chat, &openghost::ChatService::changed, this, [this] {
+        if (m_restarting)
+            restartWhenStopped();
+    });
     connect(&m_frontendPlugins, &openghost::FrontendPlugins::rowsChanged, this,
             &WindowController::sync);
     // A row kind's renderer came or went (a plugin turned on or off): the open
@@ -461,6 +466,27 @@ void WindowController::syncPermissions()
     emit approvalsChanged();
     emit changed();
 }
+bool WindowController::restartWithPlugin(const QString &id, bool enabled)
+{
+    if (m_restarting || !m_frontendPlugins.registered(id) || !m_frontendPlugins.saveChoice(id, enabled))
+        return false;
+    m_restarting = true;
+    emit restartingChanged();
+    m_chat.stopAll();
+    QTimer::singleShot(RestartDeadline, this, [this] {
+        if (!std::exchange(m_restartRequested, true))
+            emit restartRequested(); // A stop the backend never answered: Pi is closed anyway.
+    });
+    restartWhenStopped();
+    return true;
+}
+void WindowController::restartWhenStopped()
+{
+    if (m_chat.stopping() || m_chat.running() || !m_chat.approvals().isEmpty())
+        return;
+    if (!std::exchange(m_restartRequested, true))
+        emit restartRequested();
+}
 QVariantMap WindowController::modes() const
 {
     if (!m_permissions)
@@ -479,6 +505,8 @@ void WindowController::setPermissionMode(const QString &name)
 }
 quint64 WindowController::send(const QString &text, const QVariantList &files)
 {
+    if (m_restarting)
+        return 0; // Nothing new starts while OpenGhost stops to restart.
     QStringList tokens;
     for (const auto &token : files)
         tokens.append(token.toString());

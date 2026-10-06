@@ -517,6 +517,7 @@ void FakeBackend::advance()
 // decisions can be seen.
 void FakeBackend::setPermissionsEnabled(bool enabled)
 {
+    m_permissions = enabled;
     if (enabled)
         return;
     const auto waiting = m_approvals.keys();

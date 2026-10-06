@@ -1285,7 +1285,19 @@ class PiTest final : public QObject
         QCOMPARE(answers().last(), true);
     }
 
-    // OpenGhost decides nothing with the mode: Full is relayed to Pi, and a call Pi
+    // After a restart with Permissions off, the backend is told before any chat
+    // runs (main registers the plugin as the window starts): the first chat's Pi
+    // starts without plugin-permissions, so what Settings shows is what Pi loaded.
+    void permissionsOffAtStartLoadsNoPlugin()
+    {
+        Harness h;
+        h.backend.setPermissionsEnabled(false);
+        QTRY_VERIFY(h.chat.ready());
+        QVERIFY(h.chat.send(QStringLiteral("loaded")));
+        QTRY_VERIFY(h.settled());
+        QCOMPARE(h.text(DisplayRow::Role::Assistant), QStringLiteral("plugin-permissions: absent"));
+    }
+
     // still asks about is a card in Full too. A change reaches the idle and the
     // running Pi at once; what it does to a waiting request is Pi's to say.
     void modesAreRelayedAndPiDecides()

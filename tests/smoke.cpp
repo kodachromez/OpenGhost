@@ -173,6 +173,7 @@ bool retireSplashDuringRender(QQmlApplicationEngine &engine, QQuickWindow *windo
 
 int pluginSmoke(QQmlApplicationEngine &engine, QQuickWindow *window);
 int frontendPluginSmoke(QQmlApplicationEngine &engine, QQuickWindow *window);
+int permissionsRestartSmoke(QQmlApplicationEngine &engine, QQuickWindow *window);
 #ifdef OPENGHOST_TOOL_CALLS
 int toolCallsSmoke(QQuickWindow *window, WindowController &controller);
 #endif
@@ -1180,6 +1181,7 @@ int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
         failures += toolCallsSmoke(window, controller);
 #endif
     failures += frontendPluginSmoke(engine, window);
+    failures += permissionsRestartSmoke(engine, window);
     failures += pluginSmoke(engine, window);
     check(!engine.property("smokeWarnings").toBool(), "no QML binding/load warnings");
     QSignalSpy closing(&controller, &WindowController::closeRequested);

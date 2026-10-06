@@ -193,6 +193,12 @@ class ChatService final : public QObject
     static QJsonArray entries(const QVector<DisplayRow> &rows);
     static QVector<DisplayRow> rowsOf(const QJsonArray &saved);
     void stop();
+    // Before OpenGhost restarts: every waiting approval is declined and closed, and
+    // every chat's running turn is stopped. stopping() holds until the backend
+    // has answered each stop.
+    void stopAll();
+    bool stopping() const { return m_stops > 0; }
+    bool running() const;
     void choose(const ModelSelection &selection, bool thinkingPreference);
     void setMode(PermissionMode mode);
     void rename(const QString &id, const QString &title);
@@ -234,6 +240,7 @@ class ChatService final : public QObject
     void endTurn(ChatRecord &chat, const TurnCompleted &done, bool replay = false,
                  bool local = false);
     void cancelRemote(ChatRecord &chat);
+    void stopChat(ChatRecord &chat);
     void updateMetrics(ChatRecord &chat, ChatRecord::Turn &turn);
     SessionParams params(const ChatRecord &chat) const;
     quint64 steer(const Input &input);
@@ -259,6 +266,7 @@ class ChatService final : public QObject
     QHash<RequestId, QPair<QString, QString>> m_hostRequests; // -> session, tool call
     QHash<RequestId, Completion> m_calls;
     QHash<QString, ChatRecord> m_chats;
+    int m_stops = 0; // CancelTurn calls not yet answered
     ChatRecord m_draft;
     QString m_current, m_status;
     QVector<Model> m_models;

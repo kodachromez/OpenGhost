@@ -134,8 +134,10 @@ what Pi reports and no more:
   an action reachable through an allowed tool is limited only by the rules and Pi's
   process permissions. An explicit `deny` always wins over a session approval;
   it offers no durable "always allow". Turning Permissions off (Settings →
-  Plugins) leaves Pi's tools unasked; turning it back on reaches a chat at its
-  next run, so a turn already running without the plugin finishes unenforced. Its committed bundle is rebuilt with Node (`npm run bundle`);
+  Plugins, which restarts OpenGhost) leaves Pi's tools unasked. The relaunch
+  (`QProcess::startDetached` once the app has quit) is not exercised by the
+  headless tests, which stop at `restartRequested` and rebuild the window on the
+  same profile. Its committed bundle is rebuilt with Node (`npm run bundle`);
   the CTest bundle check catches drift. Auto's risky-command list is a rule list,
   not an exhaustive risk model; the engine's wrapper/unparseable floors and the
   outside-folder boundary still apply.

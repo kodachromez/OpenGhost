@@ -18,6 +18,8 @@ class FakeBackend final : public Backend
     void answer(RequestId id, const ReverseResult &result) override;
     void browserChanged(const BrowserState &) override {}
     void setPermissionsEnabled(bool enabled) override;
+    // Whether its stand-in permission plugin is loaded, as last told (on at start).
+    bool permissionsEnabled() const { return m_permissions; }
     void advance(); // One deterministic streaming step; intervalMs=0 disables timer.
   private:
     struct Turn {
@@ -43,7 +45,7 @@ class FakeBackend final : public Backend
     QHash<QString, Session> m_sessions;
     QSet<RequestId> m_pending;
     QTimer m_timer;
-    bool m_initialized = false, m_connected = true, m_waiting = false;
+    bool m_initialized = false, m_connected = true, m_waiting = false, m_permissions = true;
     RequestId m_reverse = 0;
     QHash<RequestId, QString> m_approvals;
     quint64 m_loginGeneration = 0;

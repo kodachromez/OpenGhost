@@ -7,6 +7,6 @@ FrontendPluginInfo PermissionsPlugin::info() const
     return {Id, QStringLiteral("Permissions"),
             QStringLiteral("Pi's permission plugin (plugin-permissions): Ask, Auto and Full, and "
                            "the approval card's decisions. Off, Pi's tools run without asking."),
-            true};
+            true, QStringLiteral("Enabling or disabling Permissions restarts OpenGhost.")};
 }
 } // namespace openghost

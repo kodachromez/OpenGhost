@@ -19,6 +19,9 @@ class FrontendPlugins;
 struct FrontendPluginInfo {
     QString id, name, description;
     bool enabledByDefault = false; // Until the user turns it on or off.
+    // Non-empty: turning it on or off restarts OpenGhost (Settings warns, asks,
+    // and WindowController::restartWithPlugin applies it). Says why, for the warning.
+    QString restart{};
 };
 
 // Something that happened in the frontend. Plugins subscribe by name.

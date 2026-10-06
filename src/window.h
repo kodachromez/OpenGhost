@@ -45,6 +45,8 @@ class WindowController final : public QObject
     // The Permissions plugin is on (or not registered): the mode picker, the
     // approval card's decisions and their shortcuts show only then.
     Q_PROPERTY(bool permissions READ permissions NOTIFY permissionsChanged)
+    // A restart was accepted (restartWithPlugin) and OpenGhost is stopping for it.
+    Q_PROPERTY(bool restarting READ restarting NOTIFY restartingChanged)
     Q_PROPERTY(QVariantMap modes READ modes NOTIFY changed)
     Q_PROPERTY(QVariantList approvals READ approvals NOTIFY approvalsChanged)
     // Its own NOTIFY: the Settings pages (and tab delegates) change only with support.
@@ -96,6 +98,15 @@ class WindowController final : public QObject
     QVariantMap emptyMap() const { return {}; }
     QVariantMap modes() const;
     bool permissions() const { return m_permissions; }
+    bool restarting() const { return m_restarting; }
+    // A plugin whose change restarts OpenGhost (FrontendPluginInfo::restart), turned
+    // on or off once the user accepted the restart: the choice is saved (not
+    // applied here), waiting approvals are declined and closed, every running
+    // turn is stopped, and once the backend has answered those stops (or after
+    // RestartDeadline) restartRequested asks main to quit and start again.
+    // False, and nothing changes, when the choice cannot be saved.
+    Q_INVOKABLE bool restartWithPlugin(const QString &id, bool enabled);
+    static constexpr int RestartDeadline = 10000;
     QVariantList approvals() const;
     bool runtimePlugins() const { return m_chat.plugins()->supported(); }
     bool pluginsLoading() const { return m_chat.plugins()->loading(); }
@@ -187,6 +198,8 @@ class WindowController final : public QObject
     void changed();
     void approvalsChanged();
     void permissionsChanged();
+    void restartingChanged();
+    void restartRequested();
     void pluginsChanged();
     void runtimePluginsChanged();
     void accepted(quint64 submission); // Validated acceptance, never completion.
@@ -209,6 +222,7 @@ class WindowController final : public QObject
     void syncPlugins();
     void applyRenderers();
     void syncPermissions();
+    void restartWhenStopped();
     void keepPictures(const QVector<openghost::Attachment> &sent);
     void catalog();
     QObject *m_browser = nullptr;
@@ -216,6 +230,7 @@ class WindowController final : public QObject
     openghost::FrontendPlugins m_frontendPlugins;
     QString m_openSession; // The session last published as session.opened.
     bool m_permissions = true; // permissions(), as last told to the backend
+    bool m_restarting = false, m_restartRequested = false;
     std::unique_ptr<openghost::KeyStore> m_store;
     std::unique_ptr<openghost::KeyStore> m_usageStore; // only with a separate usagePath
     openghost::Library m_library;

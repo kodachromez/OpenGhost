@@ -21,6 +21,7 @@
 #include <QFont>
 #include <QGuiApplication>
 #include <QIcon>
+#include <QProcess>
 #include <QQmlApplicationEngine>
 #include <QStandardPaths>
 #include <QTemporaryDir>
@@ -103,6 +104,19 @@ int main(int argc, char *argv[])
     QtWebEngineQuick::initialize();
 #endif
     QGuiApplication app(argc, argv);
+    // A plugin change Settings restarts OpenGhost for (Permissions): once the app
+    // has quit and everything below, Pi's processes included, is gone, the same
+    // program starts again with the same arguments.
+    struct Relaunch {
+        bool wanted = false;
+        QString program;
+        QStringList arguments;
+        ~Relaunch()
+        {
+            if (wanted && !QProcess::startDetached(program, arguments))
+                std::fprintf(stderr, "OpenGhost could not restart itself.\n");
+        }
+    } relaunch;
     platform::afterApplication();
     app.setApplicationName(QStringLiteral("openghost-cpp"));
     app.setApplicationDisplayName(QStringLiteral("OpenGhost C++"));
@@ -280,5 +294,10 @@ int main(int argc, char *argv[])
         return splashFrames(engine, parser.value(QStringLiteral("splash-frames")),
                             parser.value(QStringLiteral("splash-every")).toInt());
 #endif
+    QObject::connect(&controller, &WindowController::restartRequested, &app, [&relaunch] {
+        relaunch = {true, QCoreApplication::applicationFilePath(),
+                    QCoreApplication::arguments().mid(1)};
+        QCoreApplication::quit();
+    });
     return app.exec();
 }

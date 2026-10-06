@@ -18,7 +18,8 @@ class PreferencesStore;
 class FrontendPlugins final : public QObject
 {
     Q_OBJECT
-    // Settings entries in registration order: {pluginId, name, description, status, enabled}.
+    // Settings entries in registration order: {pluginId, name, description, status,
+    // enabled, restart}.
     Q_PROPERTY(QVariantList entries READ entries NOTIFY entriesChanged)
     Q_PROPERTY(int count READ count NOTIFY countChanged)
     // UI targets enabled plugins show (true) or hide (false); absent: no plugin's say.
@@ -37,6 +38,9 @@ class FrontendPlugins final : public QObject
     // False when unknown or the choice could not be saved (nothing changes).
     Q_INVOKABLE bool setEnabled(const QString &id, bool enabled);
     bool enabled(const QString &id) const;
+    // Saves an on/off choice without applying it: it takes effect when the plugin
+    // is next registered (after a restart). False when unknown or not saved.
+    bool saveChoice(const QString &id, bool enabled);
     bool registered(const QString &id) const { return find(id) != nullptr; }
 
     QVariantList entries() const;

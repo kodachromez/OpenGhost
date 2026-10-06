@@ -4,7 +4,9 @@
 namespace openghost
 {
 // Permissions: the switch for Pi's permission plugin (plugin-permissions) and
-// OpenGhost's permission UI (docs/plugin-permissions.md). On, every chat's Pi
+// OpenGhost's permission UI (docs/plugin-permissions.md). Settings changes it
+// only by restarting OpenGhost (FrontendPluginInfo::restart), so Pi and the
+// window never run half switched. On, every chat's Pi
 // loads plugin-permissions and the window shows the Ask / Auto / Full picker
 // and the approval card's decisions and shortcuts. Off, Pi starts chats
 // without it (its tools run without asking, and OpenGhost says so), a request

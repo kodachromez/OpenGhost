@@ -168,7 +168,7 @@ if(OPENGHOST_BUILD_SMOKE_TEST)
     enable_testing()
     find_package(Qt6 6.11 REQUIRED COMPONENTS Test GuiPrivate)
     target_sources(openghost-cpp PRIVATE tests/smoke.cpp tests/plugin_smoke.cpp
-        tests/frontend_plugin_smoke.cpp tests/parity/native.cpp tests/splash_frames.cpp)
+        tests/frontend_plugin_smoke.cpp tests/permissions_restart_smoke.cpp tests/parity/native.cpp tests/splash_frames.cpp)
     target_link_libraries(openghost-cpp PRIVATE Qt6::Test Qt6::GuiPrivate)
     target_compile_definitions(openghost-cpp PRIVATE OPENGHOST_SMOKE_TEST)
     add_executable(native_contract_test tests/contract.cpp src/settings.cpp)
