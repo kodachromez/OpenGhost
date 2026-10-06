@@ -2,16 +2,62 @@
 # A scripted stand-in for `pi --mode rpc` (test only): the RPC records PiBackend
 # relies on, shaped as Pi 1.0.4 emits them. No model, network or credentials.
 # The prompt text picks the run: reject, handled, fail, length, tools, slow,
-# delay; anything else is echoed. While "slow" runs, steers queue; a steer
-# containing "now" delivers the queue in order. FAKE_PI_LOG records commands.
+# delay, switch (an extension changes the model); anything else is echoed. While "slow" runs, steers queue; a steer
+# containing "now" delivers the queue in order. FAKE_PI_LOG records commands
+# and, per run, the standing instructions its system prompt carried.
+# With --session <file>, entries persist there as Pi's do: the file appears with
+# the first user or assistant message, then grows one JSON line per entry.
 import json, os, select, sys, time
 
 bridge = sys.argv[sys.argv.index("-e") + 1] if "-e" in sys.argv else ""
+session = sys.argv[sys.argv.index("--session") + 1] if "--session" in sys.argv else ""
 log = open(os.environ["FAKE_PI_LOG"], "a") if os.environ.get("FAKE_PI_LOG") else None
 streaming = False
 queue = []
 last_stop = None
 timers = []  # (due, callback)
+entries = []
+flushed = False
+model = None  # (provider, id) Pi has selected
+instructions = ""
+if session and os.path.exists(session):
+    with open(session) as saved:
+        entries = [json.loads(line) for line in saved if line.strip()][1:]
+    flushed = True
+    for entry in entries:
+        if entry.get("type") == "message" and entry["message"].get("role") == "assistant":
+            last_stop = entry["message"].get("stopReason")
+        if entry.get("type") == "model_change":
+            model = (entry["provider"], entry["modelId"])
+
+
+def selected():
+    return model or ("p", "m")
+
+
+def append(entry):
+    global flushed
+    entry = dict(entry, id="e%d" % (len(entries) + 1))
+    entries.append(entry)
+    if not session:
+        return
+    conversation = any(e.get("type") == "message" and e["message"].get("role") in ("user", "assistant")
+                       for e in entries)
+    if not flushed and conversation:
+        with open(session, "w") as out_file:
+            out_file.write(json.dumps({"type": "session", "id": "s", "cwd": os.getcwd()}) + "\n")
+            for e in entries:
+                out_file.write(json.dumps(e) + "\n")
+        flushed = True
+    elif flushed:
+        with open(session, "a") as out_file:
+            out_file.write(json.dumps(entry) + "\n")
+
+
+def note(record):
+    if log:
+        log.write(json.dumps(dict(record, session=os.path.basename(session))) + "\n")
+        log.flush()
 
 
 def out(record):
@@ -37,7 +83,7 @@ def usage(inp, outp, read=0, write=0):
 def assistant(text, stop="stop", spent=None, error=None):
     global last_stop
     message = {"role": "assistant", "content": [{"type": "text", "text": text}] if text else [],
-               "api": "fake", "provider": "p", "model": "m",
+               "api": "fake", "provider": selected()[0], "model": selected()[1],
                "usage": spent or usage(0, 0), "stopReason": stop, "timestamp": 0}
     if error:
         message["errorMessage"] = error
@@ -46,6 +92,7 @@ def assistant(text, stop="stop", spent=None, error=None):
         out({"type": "message_update", "usage": message["usage"],
              "assistantMessageEvent": {"type": "text_delta", "contentIndex": 0, "delta": text}})
     out({"type": "message_end", "message": message})
+    append({"type": "message", "message": message})
     last_stop = stop
 
 
@@ -53,6 +100,7 @@ def user(text):
     message = {"role": "user", "content": [{"type": "text", "text": text}], "timestamp": 0}
     out({"type": "message_start", "message": message})
     out({"type": "message_end", "message": message})
+    append({"type": "message", "message": message})
 
 
 def settle():
@@ -70,6 +118,7 @@ def status(token, value):
 def run(text):
     global streaming
     streaming = True
+    note({"type": "run", "instructions": instructions})  # before_agent_start's section
     out({"type": "agent_start"})
     user(text)
     if text == "fail":
@@ -79,9 +128,13 @@ def run(text):
     elif text == "tools":
         assistant("Let me check.", "toolUse", usage(40, 4))
         assistant("Done.", "stop", usage(60, 6, 40))
+    elif text == "switch":  # An extension changes Pi's model (pi.setModel) mid-run.
+        globals()["model"] = ("p", "m2")
+        append({"type": "model_change", "provider": "p", "modelId": "m2"})
+        assistant("Switched.", "stop", usage(8, 2))
     elif text in ("slow", "delay"):
         out({"type": "message_start", "message": {"role": "assistant", "content": [],
-             "provider": "p", "model": "m", "stopReason": "pending", "usage": usage(0, 0)}})
+             "provider": selected()[0], "model": selected()[1], "stopReason": "pending", "usage": usage(0, 0)}})
         out({"type": "message_update", "usage": usage(50, 1),
              "assistantMessageEvent": {"type": "text_delta", "contentIndex": 0, "delta": "working"}})
         return  # Still streaming: steer, or abort.
@@ -105,13 +158,21 @@ def bridged(cid, request):
             respond(cid, "prompt", data={"disposition": "handled"})
             # A continuation: the hidden trigger, no user message, then the reply.
             globals()["streaming"] = True
+            note({"type": "run", "instructions": instructions})  # the base prompt's section
             out({"type": "agent_start"})
             trigger = {"role": "custom", "customType": "openghost-retry", "content": [], "display": False}
             out({"type": "message_start", "message": trigger})
             out({"type": "message_end", "message": trigger})
+            append({"type": "custom_message", "customType": "openghost-retry", "content": [], "display": False})
             assistant("Recovered.", "stop", usage(12, 3))
             settle()
             return
+    elif op == "instructions":
+        globals()["instructions"] = request.get("text", "")
+        status(token, {"ok": True})
+    elif op == "mark":
+        append({"type": "custom", "customType": "openghost-turn", "data": request.get("entry")})
+        status(token, {"ok": True})
     else:
         status(token, {"ok": True})
     respond(cid, "prompt", data={"disposition": "handled"})
@@ -120,16 +181,28 @@ def bridged(cid, request):
 def handle(command):
     global streaming, queue
     kind, cid = command.get("type"), command.get("id")
-    if log:
-        log.write(json.dumps({k: command[k] for k in ("type", "message") if k in command}) + "\n")
-        log.flush()
+    note({k: command[k] for k in ("type", "message", "provider", "modelId") if k in command})
     if kind == "get_commands":
         respond(cid, kind, data={"commands": [{"name": "openghost", "source": "extension",
                                                "sourceInfo": {"path": bridge}}]})
     elif kind == "get_available_models":
-        respond(cid, kind, data={"models": [{"id": "m", "provider": "p", "name": "M", "input": ["text"]}]})
+        respond(cid, kind, data={"models": [{"id": "m", "provider": "p", "name": "M", "input": ["text"]},
+                                            {"id": "m2", "provider": "p", "name": "M2", "input": ["text"]}]})
     elif kind == "set_model":
-        respond(cid, kind, data={})
+        if command.get("modelId") == "gone":
+            return respond(cid, kind, False, error="Model not found: %s/gone" % command.get("provider"))
+        globals()["model"] = (command["provider"], command["modelId"])
+        append({"type": "model_change", "provider": command["provider"], "modelId": command["modelId"]})
+        respond(cid, kind, data={"id": command["modelId"], "provider": command["provider"], "name": "M"})
+    elif kind == "get_state":
+        data = {"isStreaming": streaming, "sessionFile": session}
+        if model:
+            data["model"] = {"provider": model[0], "id": model[1]}
+        elif not session:  # The control child: Pi's own default.
+            data["model"] = {"provider": "p", "id": "m2"}
+        respond(cid, kind, data=data)
+    elif kind == "get_entries":
+        respond(cid, kind, data={"entries": entries, "leafId": entries[-1]["id"] if entries else None})
     elif kind == "prompt":
         text = command.get("message", "")
         if text.startswith("/openghost "):
@@ -157,7 +230,7 @@ def handle(command):
         respond(cid, kind, data={"disposition": "queued"})
         if "now" in text:
             out({"type": "message_end", "message": {"role": "assistant", "content": [{"type": "text", "text": "working"}],
-                 "provider": "p", "model": "m", "stopReason": "stop", "usage": usage(50, 1)}})
+                 "provider": selected()[0], "model": selected()[1], "stopReason": "stop", "usage": usage(50, 1)}})
             while queue:
                 item = queue.pop(0)
                 out({"type": "queue_update", "steering": list(queue), "followUp": []})
@@ -171,7 +244,7 @@ def handle(command):
     elif kind == "abort":
         if streaming:
             out({"type": "message_end", "message": {"role": "assistant", "content": [{"type": "text", "text": "working"}],
-                 "provider": "p", "model": "m", "stopReason": "aborted", "usage": usage(50, 3)}})
+                 "provider": selected()[0], "model": selected()[1], "stopReason": "aborted", "usage": usage(50, 3)}})
             globals()["last_stop"] = "aborted"
             settle()
         respond(cid, kind)

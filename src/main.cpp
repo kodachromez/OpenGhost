@@ -111,7 +111,7 @@ int main(int argc, char *argv[])
         {QStringLiteral("fake-backend"),
          QStringLiteral("Use the in-memory fake backend (no model, tools or credentials).")});
     parser.addOption({QStringLiteral("pi"),
-                      QStringLiteral("Proof of concept: chat through `pi --mode rpc --no-session`.")});
+                      QStringLiteral("Chat through Pi (`pi --mode rpc`), one Pi session per chat.")});
     parser.addHelpOption();
     parser.addVersionOption();
 #ifdef OPENGHOST_SMOKE_TEST
@@ -144,7 +144,7 @@ int main(int argc, char *argv[])
     selectControlsStyle();
     QString appearancePath;
     QString preferencesPath;
-    QString dataPath, usagePath;
+    QString dataPath, usagePath, piSessions;
     QString browserPath, browserStorage, browserDownloads;
 #ifdef OPENGHOST_SMOKE_TEST
     QTemporaryDir testSettings;
@@ -177,14 +177,18 @@ int main(int argc, char *argv[])
         // Display caches, recovery markers, chat index and usage ledger: local
         // frontend state, never backend history or credentials. The fake's
         // sessions die with the process, so its chats never enter the profile.
-        if (!parser.isSet(QStringLiteral("fake-backend")) && !parser.isSet(QStringLiteral("pi")))
+        // Pi keeps each chat's history in its own session file (piSessions), so
+        // Pi's chats share the profile's library.
+        if (!parser.isSet(QStringLiteral("fake-backend")))
             dataPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) +
                        QStringLiteral("/library");
-        // Pi's chats are not kept yet, but its spend is real: Pi's usage ledger
-        // persists on its own, apart from the in-memory chats.
-        else if (!parser.isSet(QStringLiteral("fake-backend")))
+        // Pi's spend is real: its usage ledger is kept apart from the profile's.
+        if (parser.isSet(QStringLiteral("pi")) && !parser.isSet(QStringLiteral("fake-backend"))) {
             usagePath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) +
                         QStringLiteral("/pi-usage");
+            piSessions = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) +
+                         QStringLiteral("/pi-sessions");
+        }
     }
 #ifdef OPENGHOST_SMOKE_TEST
     if (parser.isSet(QStringLiteral("parity-manifest"))) {
@@ -210,7 +214,7 @@ int main(int argc, char *argv[])
     if (parser.isSet(QStringLiteral("fake-backend")))
         backend = std::make_unique<openghost::FakeBackend>();
     else if (parser.isSet(QStringLiteral("pi")))
-        backend = std::make_unique<openghost::PiBackend>();
+        backend = std::make_unique<openghost::PiBackend>(piSessions);
     std::unique_ptr<openghost::Browser> browser;
 #ifdef OPENGHOST_BROWSER
     // The desktop panel exists with or without an agent backend.
