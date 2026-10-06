@@ -144,7 +144,7 @@ int main(int argc, char *argv[])
     selectControlsStyle();
     QString appearancePath;
     QString preferencesPath;
-    QString dataPath;
+    QString dataPath, usagePath;
     QString browserPath, browserStorage, browserDownloads;
 #ifdef OPENGHOST_SMOKE_TEST
     QTemporaryDir testSettings;
@@ -180,6 +180,11 @@ int main(int argc, char *argv[])
         if (!parser.isSet(QStringLiteral("fake-backend")) && !parser.isSet(QStringLiteral("pi")))
             dataPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) +
                        QStringLiteral("/library");
+        // Pi's chats are not kept yet, but its spend is real: Pi's usage ledger
+        // persists on its own, apart from the in-memory chats.
+        else if (!parser.isSet(QStringLiteral("fake-backend")))
+            usagePath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) +
+                        QStringLiteral("/pi-usage");
     }
 #ifdef OPENGHOST_SMOKE_TEST
     if (parser.isSet(QStringLiteral("parity-manifest"))) {
@@ -216,7 +221,8 @@ int main(int argc, char *argv[])
     Q_UNUSED(browserStorage)
     Q_UNUSED(browserDownloads)
 #endif
-    WindowController controller(backend.get(), preferencesPath, dataPath, browser.get());
+    WindowController controller(backend.get(), preferencesPath, dataPath, browser.get(),
+                                usagePath);
     QObject::connect(&controller, &WindowController::closeRequested, &app, &QCoreApplication::quit);
     QQmlApplicationEngine engine;
 #ifdef OPENGHOST_SMOKE_TEST

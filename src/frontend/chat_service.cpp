@@ -1425,6 +1425,8 @@ void ChatService::endTurn(ChatRecord &chat, const TurnCompleted &done, bool repl
         note = QStringLiteral("The response was filtered.");
     else if (finish == "insufficient_system_resource")
         note = QStringLiteral("The provider ran out of resources and stopped.");
+    else if (finish == "handled")
+        note = QStringLiteral("Handled as a command; no reply was started.");
     else if (std::none_of(turn.messages.cbegin(), turn.messages.cend(),
                           [](const auto &m) { return !m.text.trimmed().isEmpty(); }))
         note = QStringLiteral("The model returned no text.");

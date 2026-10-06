@@ -1,0 +1,200 @@
+#!/usr/bin/env python3
+# A scripted stand-in for `pi --mode rpc` (test only): the RPC records PiBackend
+# relies on, shaped as Pi 1.0.4 emits them. No model, network or credentials.
+# The prompt text picks the run: reject, handled, fail, length, tools, slow,
+# delay; anything else is echoed. While "slow" runs, steers queue; a steer
+# containing "now" delivers the queue in order. FAKE_PI_LOG records commands.
+import json, os, select, sys, time
+
+bridge = sys.argv[sys.argv.index("-e") + 1] if "-e" in sys.argv else ""
+log = open(os.environ["FAKE_PI_LOG"], "a") if os.environ.get("FAKE_PI_LOG") else None
+streaming = False
+queue = []
+last_stop = None
+timers = []  # (due, callback)
+
+
+def out(record):
+    sys.stdout.write(json.dumps(record) + "\n")
+    sys.stdout.flush()
+
+
+def respond(cid, command, ok=True, data=None, error=None):
+    record = {"id": cid, "type": "response", "command": command, "success": ok}
+    if data is not None:
+        record["data"] = data
+    if error is not None:
+        record["error"] = error
+    out(record)
+
+
+def usage(inp, outp, read=0, write=0):
+    return {"input": inp, "output": outp, "cacheRead": read, "cacheWrite": write,
+            "totalTokens": inp + outp + read + write,
+            "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "total": 0}}
+
+
+def assistant(text, stop="stop", spent=None, error=None):
+    global last_stop
+    message = {"role": "assistant", "content": [{"type": "text", "text": text}] if text else [],
+               "api": "fake", "provider": "p", "model": "m",
+               "usage": spent or usage(0, 0), "stopReason": stop, "timestamp": 0}
+    if error:
+        message["errorMessage"] = error
+    out({"type": "message_start", "message": dict(message, content=[], stopReason="pending")})
+    if text:
+        out({"type": "message_update", "usage": message["usage"],
+             "assistantMessageEvent": {"type": "text_delta", "contentIndex": 0, "delta": text}})
+    out({"type": "message_end", "message": message})
+    last_stop = stop
+
+
+def user(text):
+    message = {"role": "user", "content": [{"type": "text", "text": text}], "timestamp": 0}
+    out({"type": "message_start", "message": message})
+    out({"type": "message_end", "message": message})
+
+
+def settle():
+    global streaming
+    out({"type": "agent_end", "messages": [], "willRetry": False})
+    out({"type": "agent_settled"})
+    streaming = False
+
+
+def status(token, value):
+    out({"type": "extension_ui_request", "id": "ui-" + token, "method": "setStatus",
+         "statusKey": "openghost:" + token, "statusText": json.dumps(value)})
+
+
+def run(text):
+    global streaming
+    streaming = True
+    out({"type": "agent_start"})
+    user(text)
+    if text == "fail":
+        assistant("partial", "error", usage(10, 2), "boom 500")
+    elif text == "length":
+        assistant("cut", "length", usage(5, 7))
+    elif text == "tools":
+        assistant("Let me check.", "toolUse", usage(40, 4))
+        assistant("Done.", "stop", usage(60, 6, 40))
+    elif text in ("slow", "delay"):
+        out({"type": "message_start", "message": {"role": "assistant", "content": [],
+             "provider": "p", "model": "m", "stopReason": "pending", "usage": usage(0, 0)}})
+        out({"type": "message_update", "usage": usage(50, 1),
+             "assistantMessageEvent": {"type": "text_delta", "contentIndex": 0, "delta": "working"}})
+        return  # Still streaming: steer, or abort.
+    else:
+        assistant("Echo: " + text, "stop", usage(100, 20, 30, 5))
+    settle()
+
+
+def bridged(cid, request):
+    token = request.get("token", "")
+    op = request.get("op")
+    if op == "providers":
+        status(token, {"ok": True, "providers": []})
+    elif op == "retry":
+        if streaming:
+            status(token, {"ok": False, "error": "Pi is still busy."})
+        elif last_stop != "error":
+            status(token, {"ok": False, "error": "Pi's latest reply did not fail, so there is nothing to retry."})
+        else:
+            status(token, {"ok": True})
+            respond(cid, "prompt", data={"disposition": "handled"})
+            # A continuation: the hidden trigger, no user message, then the reply.
+            globals()["streaming"] = True
+            out({"type": "agent_start"})
+            trigger = {"role": "custom", "customType": "openghost-retry", "content": [], "display": False}
+            out({"type": "message_start", "message": trigger})
+            out({"type": "message_end", "message": trigger})
+            assistant("Recovered.", "stop", usage(12, 3))
+            settle()
+            return
+    else:
+        status(token, {"ok": True})
+    respond(cid, "prompt", data={"disposition": "handled"})
+
+
+def handle(command):
+    global streaming, queue
+    kind, cid = command.get("type"), command.get("id")
+    if log:
+        log.write(json.dumps({k: command[k] for k in ("type", "message") if k in command}) + "\n")
+        log.flush()
+    if kind == "get_commands":
+        respond(cid, kind, data={"commands": [{"name": "openghost", "source": "extension",
+                                               "sourceInfo": {"path": bridge}}]})
+    elif kind == "get_available_models":
+        respond(cid, kind, data={"models": [{"id": "m", "provider": "p", "name": "M", "input": ["text"]}]})
+    elif kind == "set_model":
+        respond(cid, kind, data={})
+    elif kind == "prompt":
+        text = command.get("message", "")
+        if text.startswith("/openghost "):
+            return bridged(cid, json.loads(text[len("/openghost "):]))
+        if streaming:
+            return respond(cid, kind, False, error="Agent is already processing.")
+        if text == "reject":
+            return respond(cid, kind, False, error="No API key found for p.")
+        if text == "handled":
+            return respond(cid, kind, data={"disposition": "handled"})
+        if text == "delay":  # Accepted only after a pause.
+            due = time.time() + 0.3
+            timers.append((due, lambda: (respond(cid, kind, data={"disposition": "started"}), run(text))))
+            return
+        respond(cid, kind, data={"disposition": "started"})
+        run(text)
+    elif kind == "steer":
+        text = command.get("message", "")
+        if text == "drop":
+            return respond(cid, kind, data={"disposition": "handled"})
+        if text.startswith("/t "):  # An input handler's transformation.
+            text = "expanded: " + text[3:]
+        queue.append(text)
+        out({"type": "queue_update", "steering": list(queue), "followUp": []})
+        respond(cid, kind, data={"disposition": "queued"})
+        if "now" in text:
+            out({"type": "message_end", "message": {"role": "assistant", "content": [{"type": "text", "text": "working"}],
+                 "provider": "p", "model": "m", "stopReason": "stop", "usage": usage(50, 1)}})
+            while queue:
+                item = queue.pop(0)
+                out({"type": "queue_update", "steering": list(queue), "followUp": []})
+                user(item)
+            assistant("Steered.", "stop", usage(70, 5))
+            settle()
+    elif kind == "clear_queue":
+        cleared, queue = queue, []
+        out({"type": "queue_update", "steering": [], "followUp": []})
+        respond(cid, kind, data={"steering": cleared, "followUp": []})
+    elif kind == "abort":
+        if streaming:
+            out({"type": "message_end", "message": {"role": "assistant", "content": [{"type": "text", "text": "working"}],
+                 "provider": "p", "model": "m", "stopReason": "aborted", "usage": usage(50, 3)}})
+            globals()["last_stop"] = "aborted"
+            settle()
+        respond(cid, kind)
+    else:
+        respond(cid, kind, False, error="Unknown command: %s" % kind)
+
+
+buffer = b""
+while True:
+    wait = None
+    if timers:
+        wait = max(0.0, min(due for due, _ in timers) - time.time())
+    ready, _, _ = select.select([sys.stdin.buffer], [], [], wait)
+    for due, callback in [t for t in timers if t[0] <= time.time()]:
+        timers.remove((due, callback))
+        callback()
+    if not ready:
+        continue
+    chunk = os.read(sys.stdin.fileno(), 65536)
+    if not chunk:
+        break
+    buffer += chunk
+    while b"\n" in buffer:
+        line, buffer = buffer.split(b"\n", 1)
+        if line.strip():
+            handle(json.loads(line))
