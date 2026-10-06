@@ -28,7 +28,14 @@
 // files ({name, text}, in Pi's own `<file name>` form), each its own named
 // section: system prompt, never history, so compaction keeps them. {op: "mark", entry} records an OpenGhost turn's start or
 // end in Pi's session (a custom entry: kept in the session file, never context).
+// {op: "levels", models: [{provider, id}]} answers each model's effort levels as
+// Pi derives them from its own model metadata (getSupportedThinkingLevels: the
+// model's `reasoning` flag and thinkingLevelMap, for built-in and models.json
+// models alike), and the level a new chat on it starts with: Pi's per-model or
+// global default, clamped by Pi to what the model supports. A model without
+// reasoning has none (Pi's lone "off" is no choice).
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
+import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 
 const RETRY = "openghost-retry"; // The custom message that starts a retry run.
 const MARK = "openghost-turn"; // OpenGhost's turn records in Pi's session.
@@ -226,6 +233,17 @@ export default function (pi) {
         } else if (request.op === "mark") {
           pi.appendEntry(MARK, request.entry);
           status("", { ok: true });
+        } else if (request.op === "levels") {
+          const settings = SettingsManager.create(ctx.cwd);
+          const models = (Array.isArray(request.models) ? request.models : []).map(({ provider, id }) => {
+            const model = runtime.getModel(provider, id);
+            const levels = model ? getSupportedThinkingLevels(model) : [];
+            if (levels.length < 2) return { provider, id, levels: [] };
+            // As a new Pi session picks it; "medium" is Pi's DEFAULT_THINKING_LEVEL.
+            const wanted = settings.getModelThinkingLevel(provider, id) ?? settings.getDefaultThinkingLevel() ?? "medium";
+            return { provider, id, levels, default: clampThinkingLevel(model, wanted) };
+          });
+          status("", { ok: true, models });
         } else if (request.op === "logout") {
           await runtime.logout(request.provider, { signal: AbortSignal.timeout(15_000) });
           status("", { ok: true });

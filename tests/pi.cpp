@@ -1020,6 +1020,67 @@ class PiTest final : public QObject
         QCOMPARE(h.chat.current().selection.model, QStringLiteral("m"));
     }
 
+    // Each model's effort levels are what Pi derives for it (asked per model through
+    // the bridge); a chosen level reaches the chat's own Pi, and Pi's held level is
+    // the canonical one shown.
+    void effortLevelsAndChoicesAreThePis()
+    {
+        Harness h;
+        QTRY_VERIFY(h.chat.ready());
+        const auto model = [&](const QString &id) {
+            for (const auto &m : h.chat.models())
+                if (m.id == id)
+                    return m;
+            return Model{};
+        };
+        QCOMPARE(model("m").thinkingLevels,
+                 (QStringList{"off", "minimal", "low", "medium", "high"}));
+        QCOMPARE(model("m").defaultThinking, std::optional<QString>("medium"));
+        QCOMPARE(model("v").thinkingLevels,
+                 (QStringList{"off", "low", "medium", "high", "xhigh", "max"}));
+        QVERIFY(model("m2").thinkingLevels.isEmpty() && !model("m2").defaultThinking);
+        const auto setLevels = [this](const QString &session, const QString &level) {
+            const auto all = records();
+            return std::count_if(all.cbegin(), all.cend(), [&](const QJsonObject &r) {
+                return r.value("type").toString() == QStringLiteral("set_thinking_level") &&
+                       r.value("session").toString() == session &&
+                       r.value("level").toString() == level;
+            });
+        };
+        // A draft's effort goes with its first run; Pi's level comes back.
+        h.chat.choose({QStringLiteral("p"), QStringLiteral("v"), QStringLiteral("xhigh")}, true);
+        QVERIFY(h.chat.send(QStringLiteral("hello")));
+        QTRY_VERIFY(h.settled());
+        const auto a = h.chat.current().id;
+        QCOMPARE(h.chat.current().selection.thinking, std::optional<QString>("xhigh"));
+        QCOMPARE(setLevels(piName(h, a), QStringLiteral("xhigh")), 1);
+        // In a chat with history a choice reaches its Pi at once, before any run.
+        h.chat.choose({QStringLiteral("p"), QStringLiteral("v"), QStringLiteral("low")}, true);
+        QTRY_VERIFY(!h.chat.pending());
+        QCOMPARE(h.chat.current().selection.thinking, std::optional<QString>("low"));
+        QCOMPARE(setLevels(piName(h, a), QStringLiteral("low")), 1);
+        // A level the model lacks is Pi's to clamp; the chat shows what Pi holds.
+        h.chat.choose({QStringLiteral("p"), QStringLiteral("m"), QStringLiteral("max")}, false);
+        QTRY_VERIFY(!h.chat.pending());
+        QCOMPARE(h.chat.current().selection.thinking, std::optional<QString>("high"));
+        // A model that does not reason: Pi holds "off", and no level is sent.
+        const auto before = records().size();
+        h.chat.choose({QStringLiteral("p"), QStringLiteral("m2"), {}}, false);
+        QTRY_VERIFY(!h.chat.pending());
+        QCOMPARE(h.chat.current().selection.thinking, std::optional<QString>("off"));
+        const auto after = records().mid(before);
+        QVERIFY(std::none_of(after.cbegin(), after.cend(), [](const QJsonObject &r) {
+            return r.value("type").toString() == QStringLiteral("set_thinking_level");
+        }));
+        // A run keeps the chat's effort: a fresh chat on "m" with "minimal".
+        h.chat.newChat();
+        h.chat.choose({QStringLiteral("p"), QStringLiteral("m"), QStringLiteral("minimal")}, true);
+        QVERIFY(h.chat.send(QStringLiteral("again")));
+        QTRY_VERIFY(h.settled());
+        QCOMPARE(h.chat.current().selection.thinking, std::optional<QString>("minimal"));
+        QCOMPARE(setLevels(piName(h, h.chat.current().id), QStringLiteral("minimal")), 1);
+    }
+
     void instructionsReachEveryRunAsSystemPrompt()
     {
         Harness h({}, QStringLiteral("Be brief."));

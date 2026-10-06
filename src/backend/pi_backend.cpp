@@ -5,6 +5,7 @@
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QPointer>
 #include <QUuid>
 #include <algorithm>
 #include <cstdio>
@@ -375,6 +376,25 @@ QVector<Model> modelsOf(const QJsonArray &catalog)
     }
     return models;
 }
+// The bridge's effort levels ({provider, id, levels, default}) onto Pi's catalog.
+void levelsOf(QVector<Model> &models, const QJsonArray &levels)
+{
+    for (const auto &entry : levels) {
+        const auto item = entry.toObject();
+        for (auto &model : models) {
+            if (model.provider != item.value("provider").toString() ||
+                model.id != item.value("id").toString())
+                continue;
+            model.thinkingLevels.clear();
+            for (const auto &level : item.value("levels").toArray())
+                if (!level.toString().isEmpty())
+                    model.thinkingLevels.append(level.toString());
+            const auto fallback = item.value("default").toString();
+            if (model.thinkingLevels.contains(fallback))
+                model.defaultThinking = fallback;
+        }
+    }
+}
 // The turn whose start record names `client`, rebuilt from Pi's own session
 // entries: its prompt, each assistant message with its usage, and its outcome.
 // Only a turn Pi took; a run that never ended (OpenGhost or Pi exited) is said so.
@@ -592,6 +612,21 @@ void PiBackend::dispatch(RequestId id, const Command &command)
                     }
                     auto models =
                         modelsOf(reply.value("data").toObject().value("models").toArray());
+                    QJsonArray wanted;
+                    for (const auto &model : std::as_const(models))
+                        wanted.append(QJsonObject{{"provider", model.provider}, {"id", model.id}});
+                    // Each model's effort levels, as Pi derives them: none if Pi cannot say.
+                    m_control->bridge({{"op", "levels"}, {"models", wanted}}, [this, id, models](
+                                                    const QJsonObject &levels) mutable {
+                    if (!m_control)
+                        return emit replied(id, failure(QStringLiteral("backend_unavailable"),
+                                                        QStringLiteral("Pi is not running.")));
+                    if (succeeded(levels))
+                        levelsOf(models, levels.value("models").toArray());
+                    else
+                        report(QStringLiteral("warning"),
+                               QStringLiteral("Pi could not list its models' effort levels: ") +
+                                   errorOf(levels, QStringLiteral("no reason given.")));
                     m_control->rpc({{"type", "get_state"}}, [this, id, models](
                                                                 const QJsonObject &state) mutable {
                         if (!state.value("success").toBool()) {
@@ -610,6 +645,7 @@ void PiBackend::dispatch(RequestId id, const Command &command)
                             std::rotate(models.begin(), it, it + 1);
                         emit replied(id, Reply{models});
                     });
+                    }, StepDeadline);
                 });
             },
             StepDeadline);
@@ -1085,7 +1121,7 @@ bool PiBackend::recoverJournal(const QString &session, const QString &client, co
     remember(journal, false);
     return true;
 }
-// session.configure: the chat's own Pi switches model; Pi's reply is canonical.
+// session.configure: the chat's own Pi switches model and effort; Pi's replies are canonical.
 void PiBackend::configure(RequestId id, const ConfigureSession &configure)
 {
     load(configure.sessionId, [this, id, configure](std::optional<Error> error) {
@@ -1095,15 +1131,18 @@ void PiBackend::configure(RequestId id, const ConfigureSession &configure)
         else if (!error && chat.version != configure.sessionVersion)
             error = failure(QStringLiteral("session_conflict"), QStringLiteral("This chat changed in Pi."));
         const bool model = configure.model && configure.provider && !configure.model->isEmpty();
-        // A model switch waits for the running turn; an access mode applies at once.
-        if (!error && (chat.run || chat.stopping) && model)
+        const bool thinking = configure.thinking.has_value();
+        // A model or effort switch waits for the running turn; an access mode applies at once.
+        if (!error && (chat.run || chat.stopping) && (model || thinking))
             error = failure(QStringLiteral("busy"), QStringLiteral("A turn is already running."));
         if (error) {
             emit replied(id, *error);
             return;
         }
-        const auto switchModel = [this, id, configure, model](SessionConfigured configured) {
-            if (!model) {
+        // The model first (Pi re-clamps the effort on a switch), then the effort.
+        const auto switchModel = [this, id, configure, model,
+                                  thinking](SessionConfigured configured) {
+            if (!model && !thinking) {
                 emit replied(id, Reply{configured});
                 return;
             }
@@ -1113,16 +1152,32 @@ void PiBackend::configure(RequestId id, const ConfigureSession &configure)
                 emit replied(id, failure(QStringLiteral("backend_unavailable"), problem));
                 return;
             }
+            const auto setEffort = [this, id, pi, configure,
+                                    thinking](SessionConfigured configured) {
+                if (!thinking)
+                    return emit replied(id, Reply{configured});
+                setThinking(pi, configure.thinking,
+                            [this, id, configured](std::optional<Error> error,
+                                                   const QString &level) mutable {
+                                if (error)
+                                    return emit replied(id, *error);
+                                if (!level.isEmpty()) // Unsaid: the chat's stays.
+                                    configured.thinking.emplace(level);
+                                emit replied(id, Reply{configured});
+                            });
+            };
+            if (!model)
+                return setEffort(configured);
             setModel(pi, *configure.provider, *configure.model,
-                     [this, id, configured](std::optional<Error> error,
-                                            const ModelSelection &actual) mutable {
+                     [this, id, configured, setEffort](std::optional<Error> error,
+                                                       const ModelSelection &actual) mutable {
                          if (error) {
                              emit replied(id, *error);
                              return;
                          }
                          configured.model = actual.model;
                          configured.provider = actual.provider;
-                         emit replied(id, Reply{configured});
+                         setEffort(configured);
                      });
         };
         if (!configure.permissionMode)
@@ -1387,16 +1442,18 @@ void PiBackend::advance(const QString &session, const QString &turn)
                            (model.value("provider").toString() == chosen.provider &&
                             model.value("id").toString() == chosen.model)) {
                     running(session, turn)->chosen = {model.value("provider").toString(),
-                                                      model.value("id").toString(), {}};
+                                                      model.value("id").toString(), chosen.thinking};
                     advance(session, turn);
                 } else if (auto *pi = m_chats[session].pi) {
                     setModel(pi, chosen.provider, chosen.model,
-                             [this, session, turn](std::optional<Error> error, const ModelSelection &actual) {
+                             [this, session, turn, thinking = chosen.thinking](
+                                 std::optional<Error> error, ModelSelection actual) {
                                  if (!running(session, turn))
                                      return;
                                  if (error)
                                      refuse(session, *error);
                                  else {
+                                     actual.thinking = thinking;
                                      running(session, turn)->chosen = actual;
                                      advance(session, turn);
                                  }
@@ -1406,7 +1463,21 @@ void PiBackend::advance(const QString &session, const QString &turn)
             StepDeadline);
         return;
     }
-    case 4: { // Pictures go only to a model Pi says sees images; Pi would replace
+    case 4: { // The chat's effort on that model; Pi's level is the canonical one.
+        setThinking(chat.pi, run->chosen.thinking,
+                    [this, session, turn](std::optional<Error> error, const QString &level) {
+                        if (!running(session, turn))
+                            return;
+                        if (error)
+                            return refuse(session, *error);
+                        auto &chosen = running(session, turn)->chosen;
+                        chosen.thinking =
+                            level.isEmpty() ? std::nullopt : std::optional<QString>(level);
+                        advance(session, turn);
+                    });
+        return;
+    }
+    case 5: { // Pictures go only to a model Pi says sees images; Pi would replace
               // them with a placeholder for any other.
         if (run->images.isEmpty())
             return advance(session, turn);
@@ -1432,7 +1503,7 @@ void PiBackend::advance(const QString &session, const QString &turn)
             StepDeadline);
         return;
     }
-    case 5: { // Its start, in Pi's session before Pi can take it.
+    case 6: { // Its start, in Pi's session before Pi can take it.
         QJsonObject entry{{"event", "start"}, {"version", run->version}, {"client", run->client},
                           {"turn", run->turn}, {"retry", run->retry}};
         if (run->input)
@@ -1813,6 +1884,34 @@ void PiBackend::setModel(PiProcess *pi, const QString &provider, const QString &
             done(std::nullopt, {provider, model, {}});
         },
         StepDeadline);
+}
+// set_thinking_level on one chat's Pi (none asked: Pi's own is kept), then the
+// level Pi actually holds, which is canonical: Pi clamps to what its model supports.
+// Empty when Pi says none and none was asked; an asked level Pi does not confirm fails.
+void PiBackend::setThinking(PiProcess *pi, const std::optional<QString> &level,
+                            std::function<void(std::optional<Error>, QString)> done)
+{
+    const bool asked = level && !level->isEmpty();
+    const auto held = [pi = QPointer<PiProcess>(pi), done, asked](const QJsonObject &reply) {
+        if (!reply.value("success").toBool() || !pi)
+            return done(failure(QStringLiteral("backend_error"),
+                                errorOf(reply, QStringLiteral("Pi could not set the effort."))),
+                        {});
+        pi->rpc(
+            {{"type", "get_state"}},
+            [done, asked](const QJsonObject &state) {
+                const auto level = state.value("data").toObject().value("thinkingLevel").toString();
+                if (!state.value("success").toBool() || (asked && level.isEmpty()))
+                    return done(failure(QStringLiteral("protocol_error"),
+                                        errorOf(state, QStringLiteral("Pi did not report its effort."))),
+                                {});
+                done(std::nullopt, level);
+            },
+            StepDeadline);
+    };
+    if (!asked)
+        return held({{"success", true}});
+    pi->rpc({{"type", "set_thinking_level"}, {"level", *level}}, held, StepDeadline);
 }
 // Pi's auth event or prompt, as the sign-in step Settings shows for that provider.
 // The sign-in page and device code stay offered until the sign-in ends.

@@ -79,9 +79,7 @@ int parityTest(QQmlApplicationEngine &engine, WindowController &controller, cons
             window->setHeight(f["height"].toInt(840));
             QTest::mouseMove(window, QPoint(window->width() - 2, 2));
             run("splashLoader.active=false; Theme.reducedMotion=true; Selection.clear();");
-            auto *effortPanel = window->findChild<QObject *>("effortPanel");
-            if (effortPanel)
-                QMetaObject::invokeMethod(effortPanel, "close");
+            run("thinkingChoice.popup.close();");
             QTest::qWait(30);
             Theme::setSystemDark(f["systemDark"].toBool(true));
             Theme::choose(f["theme"].toString("dark"));
@@ -359,6 +357,8 @@ int parityTest(QQmlApplicationEngine &engine, WindowController &controller, cons
             const auto image = window->grabWindow();
             if (image.isNull() || !image.save(output + "/" + id + (pass ? ".repeat.png" : ".png")))
                 qFatal("Could not capture %s", qPrintable(id));
+            auto *effort = visual(window->contentItem(), "thinkingChoice");
+            auto *effortPanel = effort ? effort->property("popup").value<QObject *>() : nullptr;
             QJsonObject geometry{
                 {"model", controller.settings()->model()},
                 {"levels", QJsonArray::fromStringList(controller.settings()->levels())},

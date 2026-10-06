@@ -27,6 +27,12 @@ export default function (pi) {
     apiKey: "faux",
     baseUrl: "http://127.0.0.1:9",
     streamSimple: core.streamSimple,
-    models: [{ id: "faux", name: "Faux", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 100000, maxTokens: 1000 }],
+    // "faux" does not reason; "faux-think" does, at Pi's standard levels; "faux-wide"
+    // maps xhigh and max but not minimal (effort levels come from this metadata alone).
+    models: [
+      { id: "faux", name: "Faux", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 100000, maxTokens: 1000 },
+      { id: "faux-think", name: "Faux Think", reasoning: true, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 100000, maxTokens: 1000 },
+      { id: "faux-wide", name: "Faux Wide", reasoning: true, thinkingLevelMap: { minimal: null, xhigh: "xhigh", max: "max" }, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 100000, maxTokens: 1000 },
+    ],
   });
 }

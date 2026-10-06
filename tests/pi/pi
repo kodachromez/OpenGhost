@@ -14,6 +14,7 @@
 # containing "now" delivers the queue in order. FAKE_PI_LOG records commands
 # (with their prompt images) and, per run, the standing instructions and pinned
 # files its system prompt carried. Model "v" sees images; "m" and "m2" do not.
+# FAKE_PI_LOG also records set_thinking_level's level.
 # With --session <file>, entries persist there as Pi's do: the file appears with
 # the first user or assistant message, then grows one JSON line per entry.
 import json, os, select, sys, time
@@ -35,6 +36,11 @@ approval = None  # (approvalId, dialog id) the permission plugin waits on
 logins = {}  # provider -> (flow token, promptId)
 files = []  # the bridge's pinned files: [{name, text}]
 INPUTS = {"m": ["text"], "m2": ["text"], "v": ["text", "image"], "alias": ["text"]}
+# Each model's effort levels as the bridge answers them (Pi derives them from the
+# model's metadata); "m2" does not reason. Pi clamps a level its model lacks.
+LEVELS = {"m": ["off", "minimal", "low", "medium", "high"], "m2": [],
+          "v": ["off", "low", "medium", "high", "xhigh", "max"], "alias": ["off", "minimal", "low", "medium", "high"]}
+thinking = "medium"  # the level Pi holds
 if session and os.path.exists(session):
     with open(session) as saved:
         entries = [json.loads(line) for line in saved if line.strip()][1:]
@@ -48,6 +54,13 @@ if session and os.path.exists(session):
 
 def selected():
     return model or ("p", "m")
+
+
+def clamp(level):
+    levels = LEVELS.get(selected()[1], [])
+    if not levels:
+        return "off"
+    return level if level in levels else levels[-1]
 
 
 def append(entry):
@@ -398,6 +411,11 @@ def bridged(cid, request):
             status(flow + ":prompt", {"promptId": "late", "type": "text", "message": "Stale?"})
             status(flow, {"ok": False, "error": "Login cancelled"})
         status(token, {"ok": True})
+    elif op == "levels":
+        status(token, {"ok": True, "models": [
+            dict({"provider": m["provider"], "id": m["id"], "levels": LEVELS.get(m["id"], [])},
+                 **({"default": "medium"} if LEVELS.get(m["id"]) else {}))
+            for m in request.get("models", [])]})
     elif op == "mark":
         append({"type": "custom", "customType": "openghost-turn", "data": request.get("entry")})
         status(token, {"ok": True})
@@ -409,7 +427,7 @@ def bridged(cid, request):
 def handle(command):
     global streaming, queue
     kind, cid = command.get("type"), command.get("id")
-    record = {k: command[k] for k in ("type", "message", "provider", "modelId") if k in command}
+    record = {k: command[k] for k in ("type", "message", "provider", "modelId", "level") if k in command}
     if "images" in command:
         record["images"] = [{"mimeType": i.get("mimeType"), "bytes": len(i.get("data", ""))} for i in command["images"]]
     note(record)
@@ -432,18 +450,22 @@ def handle(command):
             return respond(cid, kind, data={})
         canonical = "m" if command["modelId"] == "alias" else command["modelId"]
         globals()["model"] = (command["provider"], canonical)
+        globals()["thinking"] = clamp(thinking)
         append({"type": "model_change", "provider": command["provider"], "modelId": canonical})
         respond(cid, kind, data={"id": canonical, "provider": command["provider"], "name": "M"})
     elif kind == "get_state":
         if not session and os.environ.get("FAKE_PI_BAD_DEFAULT"):
             return respond(cid, kind, False, error="Default model unavailable")
-        data = {"isStreaming": streaming, "sessionFile": session}
+        data = {"isStreaming": streaming, "sessionFile": session, "thinkingLevel": clamp(thinking)}
         if model:
             data["model"] = {"provider": model[0], "id": model[1], "name": model[1].upper(),
                              "input": INPUTS.get(model[1], ["text"])}
         elif not session:  # The control child: Pi's own default.
             data["model"] = {"provider": "p", "id": "m2", "name": "M2", "input": ["text"]}
         respond(cid, kind, data=data)
+    elif kind == "set_thinking_level":
+        globals()["thinking"] = clamp(command.get("level", ""))
+        respond(cid, kind)
     elif kind == "get_entries":
         respond(cid, kind, data={"entries": entries, "leafId": entries[-1]["id"] if entries else None})
     elif kind == "prompt":

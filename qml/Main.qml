@@ -1749,12 +1749,12 @@ ApplicationWindow {
                             }
                         }
                     }
-                    EffortControl {
+                    // The selected model's effort levels, as a plain dropdown.
+                    EffortMenu {
                         id: thinkingChoice
                         objectName: "thinkingChoice"
                         locked: window.frontend.busy
                         settings: window.settings
-                        backdrop: window.contentItem
                     }
                     // .composer-send: the white round button, dark arrow; it
                     // looks the same when there is nothing to send, and a

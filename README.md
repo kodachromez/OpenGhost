@@ -85,8 +85,8 @@ to **OFF** and enables all four checks:
 - `native_ui_smoke`: disconnected QML launch, splash handoff, themes/settings,
   refusal paths and Markdown/TeX/diagram rendering, plus a reply's picture
   stack, click-to-load plate, lost links and video cards from fixture bytes.
-- `native_fake_ui_smoke`: the same UI plus production effort-slider visibility,
-  seven levels, keyboard/pointer selection, busy locking and model changes;
+- `native_fake_ui_smoke`: the same UI plus the composer's effort dropdown:
+  only advertised levels, keyboard/pointer selection, busy locking and model changes;
   actual composer submission, streaming, Escape, steering, Retry,
   attachment/approval cards, deletion and fixture auth.
   Both UI smokes also drive the production Plugins page over a scripted backend:
@@ -192,12 +192,12 @@ local file read by the frontend.
 
 **Fake Echo** advertises the reference's full effort set: **Instant, Low, Medium,
 High, Extra high, Max, Ultra**, defaulting to Medium. On a fresh profile Echo is
-selected, so the existing segmented effort button appears between the model and
-Send buttons. Click it to open the production slider above it. A saved model
-preference is still respected; select Fake Echo in the model picker to try all
-seven levels. **Fake Brief** retains only Low/High (default Low), exercising
-model-dependent notches and preference fallback. Effort stays visible but dimmed
-and locked during a reply. Choices update the draft or configure the existing
+selected, so the Effort dropdown appears between the model and Send buttons.
+It lists only the selected model's levels (the reference's slider is not shown
+for now). A saved model preference is still respected; select Fake Echo in the
+model picker to try all seven levels. **Fake Brief** retains only Low/High
+(default Low), exercising model-dependent options and preference fallback.
+Effort stays visible but dimmed and locked during a reply. Choices update the draft or configure the existing
 fake session through the same frontend contract used by a future backend;
 no real thinking/generation occurs.
 

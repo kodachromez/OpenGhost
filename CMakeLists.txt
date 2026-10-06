@@ -129,7 +129,7 @@ target_link_libraries(openghost-cpp PRIVATE native_window openghost_thinking Qt6
 native_warnings(openghost-cpp)
 foreach(name Main ChatEntry LiveText Sidebar SettingsDialog Markdown Block InlineText CodeBlock
         TableBlock DiagramBlock WorkingGhost WelcomeGhost Splash EffortControl Metrics
-        IconButton Spring ModelGlyph ModelButton ModelStage EffortStage Feather UsagePage
+        IconButton Spring ModelGlyph ModelButton ModelStage EffortStage EffortMenu Feather UsagePage
         AppearancePage GeneralPage OverlayScrollBar JumpButton CopyButton Entrance SelectArea
         SelectDriver SelectableLabel SelectionMenu SelectionVeil VeilFilter TitleTip ButtonTip
         Backdrop RowLift TextGlow ApprovalCard ModePicker ModeDock MediaBlock MediaStack MediaGlass)

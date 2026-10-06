@@ -146,6 +146,8 @@ class PiBackend final : public Backend
     void auth(RequestId id, const QString &provider, QJsonObject request);
     void setModel(PiProcess *pi, const QString &provider, const QString &model,
                   std::function<void(std::optional<Error>, ModelSelection)> done);
+    void setThinking(PiProcess *pi, const std::optional<QString> &level,
+                     std::function<void(std::optional<Error>, QString)> done);
     void step(const QString &token, const QString &kind, const QJsonObject &value);
     bool dialog(const QString &session, PiProcess *pi, const QJsonObject &request);
     void approvalEnded(const QString &session, const QString &approvalId, const QJsonObject &value);

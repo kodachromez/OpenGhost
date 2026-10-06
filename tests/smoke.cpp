@@ -218,12 +218,13 @@ int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
     auto *effort = findVisual(window->contentItem(), QStringLiteral("thinkingChoice"));
     check(effort && effort->isVisible() == !controller.settings()->levels().isEmpty(),
           "effort control is absent (not an empty toolbar slot) without advertised levels");
-    auto *effortPanel = window->findChild<QObject *>(QStringLiteral("effortPanel"));
-    auto *effortButton = findVisual(window->contentItem(), QStringLiteral("effortButton"));
+    auto *effortPopup = effort ? effort->property("popup").value<QObject *>() : nullptr;
     auto *modelButton = findVisual(window->contentItem(), QStringLiteral("modelChoice"));
     auto *sendButton = findVisual(window->contentItem(), QStringLiteral("send"));
-    check(effortPanel && effortButton && modelButton && sendButton,
-          "production effort controls found");
+    check(effort && effortPopup && modelButton && sendButton &&
+              effort->inherits("QQuickComboBox") &&
+              !window->findChild<QObject *>(QStringLiteral("effortPanel")),
+          "effort is a plain dropdown beside the model, not the slider");
     if (!fake && modelButton && sendButton) {
         check(effort && !effort->isVisible() && !effort->isEnabled(),
               "no catalog means no effort control");
@@ -267,97 +268,86 @@ int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
                   controller.settings()->thinking() == "medium" &&
                   controller.settings()->levels() == levels && effort && effort->isVisible() &&
                   effort->isEnabled(),
-              "fresh fake launch exposes the production slider with all reference levels");
-        const auto clickEffort = [&] {
-            if (effortButton)
-                QTest::mouseClick(
-                    window, Qt::LeftButton, Qt::NoModifier,
-                    effortButton->mapToScene(QPointF(effortButton->width() / 2, 17)).toPoint());
-            check(
-                QTest::qWaitFor(
-                    [&] { return effortPanel && effortPanel->property("opened").toBool(); }, 1000),
-                "real effort button opens the production popup");
+              "fresh fake launch offers every level the model advertises");
+        const auto shown = [&] { return effort->property("displayText").toString(); };
+        const auto options = [&] {
+            QStringList names;
+            for (int i = 0; i < effort->property("count").toInt(); ++i) {
+                QVariant name;
+                QMetaObject::invokeMethod(effort, "nameOf", Q_RETURN_ARG(QVariant, name),
+                                          Q_ARG(QVariant, controller.settings()->levels().value(i)));
+                names << name.toString();
+            }
+            return names;
         };
-        if (effort && effortButton && effortPanel && modelButton && sendButton) {
+        if (effort && effortPopup && modelButton && sendButton) {
             QSignalSpy chosen(controller.settings(), &Settings::chosen);
             for (const auto &canonical : {QString(), QStringLiteral("unlisted")}) {
                 controller.settings()->use({"fake", "echo", canonical});
-                check(effort->property("value").toInt() == 0 &&
+                check(effort->property("currentIndex").toInt() == -1 && shown() == "Effort" &&
                           controller.settings()->thinking() == canonical && chosen.isEmpty(),
-                      "absent/unlisted canonical effort rests at first notch without choosing it");
+                      "absent/unlisted canonical effort shows no level and chooses none");
             }
             controller.settings()->use({"fake", "echo", "medium"});
-            clickEffort();
+            check(shown() == "Medium" && effort->property("count").toInt() == 7 &&
+                      options() == QStringList{"Instant", "Low", "Medium", "High", "Extra high",
+                                               "Max", "Ultra"},
+                  "one option per advertised level, and only those");
+            check(effort->height() == 34 && QTest::qWaitFor([&] {
+                      return qAbs(effort->x() - modelButton->x() - modelButton->width() - 4) < 0.01 &&
+                             qAbs(sendButton->x() - effort->x() - effort->width() - 4) < 0.01;
+                  }, 1000),
+                  "dropdown sits between model and send in the composer row");
+            QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier,
+                              effort->mapToScene(QPointF(effort->width() / 2, 17)).toPoint());
+            check(QTest::qWaitFor([&] { return effortPopup->property("opened").toBool(); }, 1000),
+                  "a click opens the dropdown");
             check(chosen.isEmpty(), "opening effort is not an explicit selection");
-            auto *slider = findVisual(window->contentItem(), QStringLiteral("effortSlider"));
-            auto *segments = window->findChild<QObject *>(QStringLiteral("effortSegments"));
-            auto *notches = window->findChild<QObject *>(QStringLiteral("effortNotches"));
-            check(segments && segments->property("count").toInt() == 7 && notches &&
-                      notches->property("count").toInt() == 5,
-                  "one button segment per level, with five inner notches");
-            check(qAbs(effortButton->width() - (7 * 22 + 6 * 8) * 16.0 / 60 - 16) < 0.01 &&
-                      effort->height() == 34 &&
-                      qAbs(effort->x() - modelButton->x() - modelButton->width() - 4) < 0.01 &&
-                      qAbs(sendButton->x() - effort->x() - effort->width() - 4) < 0.01,
-                  "reference segment sizing and model/effort/send spacing");
-            check(effortPanel->property("width").toDouble() == 264 &&
-                      effortPanel->property("height").toDouble() == 48 &&
-                      effortPanel->property("y").toDouble() == -58 &&
-                      qAbs(effortPanel->property("x").toDouble() + 264 - effortButton->width()) <
-                          0.01 &&
-                      slider && slider->x() == 14 && slider->y() == 6 && slider->height() == 36 &&
-                      slider->property("inset").toDouble() == 22 &&
-                      slider->property("trackWidth").toDouble() == 192,
-                  "reference popup placement, padding and track geometry");
-            if (slider) {
-                auto *repeater = qobject_cast<QQuickItem *>(notches);
-                int ticks = 0;
-                if (repeater && repeater->parentItem())
-                    for (auto *tick : repeater->parentItem()->childItems()) {
-                        if (tick->objectName() != "effortNotch")
-                            continue;
-                        ++ticks;
-                        check(tick->width() == 4 && tick->height() == 4 && tick->y() == 16 &&
-                                  qAbs(tick->x() -
-                                       (20 + 32 * (tick->property("index").toInt() + 1))) < 0.01,
-                              "reference notch size and even spacing");
-                    }
-                check(ticks == 5, "all reference inner notches instantiated");
-            }
-            for (int i = 0; i < levels.size(); ++i) {
-                QTest::keyClick(window, i == 0 ? Qt::Key_Home : Qt::Key_Right);
-                check(controller.settings()->thinking() == levels[i] &&
-                          effort->property("value").toInt() == i,
-                      "slider keyboard changes the real draft selection through Settings");
-            }
-            check(chosen.size() == 7, "each changed notch emits exactly one frontend selection");
-            QTest::keyClick(window, Qt::Key_Right);
-            check(chosen.size() == 7, "last notch does not wrap or emit a duplicate choice");
-            // A pointer choice uses the same production path, not a test-only slider.
-            QTest::qWait(500);
-            if (slider) {
+            // The dropdown's list is in the window's overlay, beside the content.
+            // The dropdown's list is in the window's overlay, made as it opens.
+            QQuickItem *high = nullptr;
+            check(QTest::qWaitFor([&] {
+                      high = findVisual(window->contentItem(), QStringLiteral("effortOption-high"));
+                      return high && high->isVisible();
+                  }, 1000),
+                  "the dropdown lists the High option");
+            if (high)
                 QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier,
-                                  slider->mapToScene(QPointF(86, 18)).toPoint());
-                check(controller.settings()->thinking() == "medium",
-                      "pointer picks the medium notch");
-            }
-            QTest::keyClick(window, Qt::Key_End);
-            QTest::keyClick(window, Qt::Key_Escape);
-            check(QTest::qWaitFor([&] { return !effortPanel->property("visible").toBool(); }, 1000),
-                  "Escape closes the real effort popup");
+                                  high->mapToScene(QPointF(high->width() / 2, high->height() / 2))
+                                      .toPoint());
+            check(controller.settings()->thinking() == "high" && shown() == "High" &&
+                      chosen.size() == 1,
+                  "picking an option is one explicit selection through Settings");
+            check(QTest::qWaitFor([&] { return !effortPopup->property("visible").toBool(); }, 1000),
+                  "the dropdown closes after a pick");
+            effort->forceActiveFocus();
+            for (int i = 0; i < 6; ++i)
+                QTest::keyClick(window, Qt::Key_Up);
+            check(controller.settings()->thinking() == "none" && chosen.size() == 4,
+                  "keyboard steps through the levels, one selection per change");
+            QTest::keyClick(window, Qt::Key_Up);
+            check(chosen.size() == 4, "first level does not wrap or emit a duplicate choice");
+            for (int i = 0; i < 6; ++i)
+                QTest::keyClick(window, Qt::Key_Down);
+            check(controller.settings()->thinking() == "ultra" && shown() == "Ultra",
+                  "keyboard reaches the last level");
             modelButton->forceActiveFocus();
             QTest::keyClick(window, Qt::Key_End);
             check(controller.settings()->model() == "brief" &&
                       controller.settings()->thinking() == "low" && effort->isVisible() &&
-                      effort->property("count").toInt() == 2 && notches &&
-                      notches->property("count").toInt() == 0,
-                  "model picker changes supported levels and falls back to advertised default");
+                      effort->property("count").toInt() == 2 && shown() == "Low",
+                  "model switch refreshes the levels and falls back to the advertised default");
+            check(options() == QStringList{"Low", "High"},
+                  "the other model's options are its own levels only");
             QTest::keyClick(window, Qt::Key_Home);
             check(controller.settings()->model() == "echo" &&
                       controller.settings()->thinking() == "ultra" && effort->isVisible() &&
                       effort->property("count").toInt() == 7,
                   "selecting full-effort fake model restores the user's supported preference");
-            clickEffort(); // Sending with the popup open must lock and close it.
+            QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier,
+                              effort->mapToScene(QPointF(effort->width() / 2, 17)).toPoint());
+            check(QTest::qWaitFor([&] { return effortPopup->property("opened").toBool(); }, 1000),
+                  "dropdown open before sending"); // Sending must lock and close it.
         }
         auto *composer = findVisual(window->contentItem(), QStringLiteral("composer"));
         check(composer, "real composer found");
@@ -369,17 +359,14 @@ int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
             check(effort && effort->isVisible() && !effort->isEnabled() &&
                       effort->property("lockHint").toString() ==
                           "You can change effort when OpenGhost finishes" &&
-                      effortPanel && !effortPanel->property("showing").toBool(),
-                  "busy effort stays visible, disabled and closes its popup as in the reference");
-            auto *buttonContent = effortButton
-                                      ? effortButton->property("contentItem").value<QQuickItem *>()
-                                      : nullptr;
-            check(buttonContent && buttonContent->opacity() == 0.3,
-                  "locked effort fades to reference opacity");
+                      effortPopup &&
+                      QTest::qWaitFor([&] { return !effortPopup->property("visible").toBool(); },
+                                      1000),
+                  "busy effort stays visible, disabled and closes its dropdown");
             const auto runningEffort = controller.settings()->thinking();
-            check(effort &&
-                      QMetaObject::invokeMethod(effort, "choose", Q_ARG(QVariant, QVariant(0))) &&
-                      controller.settings()->thinking() == runningEffort,
+            effort->forceActiveFocus();
+            QTest::keyClick(window, Qt::Key_Up);
+            check(controller.settings()->thinking() == runningEffort,
                   "disabled effort cannot change the running selection");
             check(QTest::qWaitFor([&] { return accepted.count() == 1; }, 1000),
                   "backend accepts once");
@@ -401,26 +388,20 @@ int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
                   "stopped output never resumes");
             check(effort && effort->isEnabled(), "effort unlocks after Stop");
             if (effort) {
-                check(QTest::qWaitFor(
-                          [&] { return effortPanel && !effortPanel->property("visible").toBool(); },
-                          1000),
-                      "busy popup close settles before reopening");
-                clickEffort();
                 bool configuring = false;
                 const auto observed =
                     QObject::connect(&controller, &WindowController::changed, &controller,
                                      [&] { configuring |= controller.admitting(); });
                 effort->forceActiveFocus();
-                QTest::keyClick(window, Qt::Key_Home);
+                for (int i = 0; i < 6; ++i)
+                    QTest::keyClick(window, Qt::Key_Up);
                 QObject::disconnect(observed);
-                check(configuring, "existing session slider dispatches ConfigureSession");
+                check(configuring, "an effort pick in an existing chat dispatches ConfigureSession");
                 check(
                     QTest::qWaitFor([&] { return !controller.admitting(); }, 1000) &&
-                        controller.settings()->thinking() == "none",
+                        controller.settings()->thinking() == "none" &&
+                        effort->property("displayText").toString() == "Instant",
                     "canonical fake session effort returns through the existing frontend contract");
-                check(effortPanel && effortPanel->property("opened").toBool(),
-                      "idle session configuration keeps the effort slider open");
-                QTest::keyClick(window, Qt::Key_Escape);
             }
             controller.settings()->choose(QStringLiteral("fake"), QStringLiteral("brief"));
             check(QTest::qWaitFor([&] { return !controller.admitting(); }, 1000),
@@ -952,41 +933,14 @@ int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
               "no extra Notifications tab or bell animation");
         check(QMetaObject::invokeMethod(dialog, "close"), "settings closes");
     }
-    QObject *effortStage = nullptr;
-    for (auto *object : window->findChildren<QObject *>())
-        if (QByteArray(object->metaObject()->className()).startsWith("EffortStage_"))
-            effortStage = object;
-    QVariant instant, off, hint;
-    check(effortStage &&
-              QMetaObject::invokeMethod(effortStage, "nameOf", Q_RETURN_ARG(QVariant, instant),
-                                        Q_ARG(QVariant, QVariant("none"))) &&
-              QMetaObject::invokeMethod(effortStage, "nameOf", Q_RETURN_ARG(QVariant, off),
+    QVariant off, local;
+    check(effort &&
+              QMetaObject::invokeMethod(effort, "nameOf", Q_RETURN_ARG(QVariant, off),
                                         Q_ARG(QVariant, QVariant("off"))) &&
-              QMetaObject::invokeMethod(effortStage, "hintOf", Q_RETURN_ARG(QVariant, hint),
-                                        Q_ARG(QVariant, QVariant("off"))) &&
-              instant.toString() == "Instant" && off.toString() == "Off" &&
-              hint.toString().isEmpty(),
-          "effort stage follows reference none/unknown-level labels, without aliasing off");
-    const QStringList effortLevels{"none", "low", "medium", "high", "xhigh", "max", "ultra"};
-    const QStringList effortNames{"Instant", "Low", "Medium", "High", "Extra high", "Max", "Ultra"};
-    const QStringList effortHints{"Answers right away, without thinking",
-                                  "A quick thought first",
-                                  "Thinks it over",
-                                  "Thinks it through",
-                                  "Thinks longer on hard problems",
-                                  "Thinks as long as it takes",
-                                  "Thinks with everything the model has"};
-    for (int i = 0; i < effortLevels.size(); ++i) {
-        QVariant name, description;
-        check(effortStage &&
-                  QMetaObject::invokeMethod(effortStage, "nameOf", Q_RETURN_ARG(QVariant, name),
-                                            Q_ARG(QVariant, effortLevels[i])) &&
-                  QMetaObject::invokeMethod(effortStage, "hintOf",
-                                            Q_RETURN_ARG(QVariant, description),
-                                            Q_ARG(QVariant, effortLevels[i])) &&
-                  name.toString() == effortNames[i] && description.toString() == effortHints[i],
-              "all seven effort names and hints match the reference");
-    }
+              QMetaObject::invokeMethod(effort, "nameOf", Q_RETURN_ARG(QVariant, local),
+                                        Q_ARG(QVariant, QVariant("turbo"))) &&
+              off.toString() == "Off" && local.toString() == "Turbo",
+          "Pi's off and any other advertised level get a readable name");
     if (dialog) {
         Account account;
         account.providersLoaded = true;

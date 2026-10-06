@@ -43,7 +43,7 @@ def fixtures():
     add('models-picker',models=models,native='modelStage.openStage(false);',reference='modelStage.open(false);')
     add('models-picker-light',theme='light',models=models,native='modelStage.openStage(false);',reference='modelStage.open(false);')
     for level in ['off','low','medium','high']:
-        add('effort-'+level,models=models,native=f"window.settings.chooseThinking('{level}'); thinkingChoice.toggle(false);",reference=f"settings.effort='{level}'; effortSlider.setEfforts(settings.efforts); effortSlider.open();",nativeAfter='',notes='Settled effort stage, not a timing/spring equivalence claim.')
+        add('effort-'+level,models=models,native=f"window.settings.chooseThinking('{level}'); thinkingChoice.popup.open();",reference=f"settings.effort='{level}'; effortSlider.setEfforts(settings.efforts); effortSlider.open();",nativeAfter='',notes='Native effort is a plain dropdown for now (the reference slider is not shown); an expected visual difference.')
     add('mode-menu',native='modeDock.show(false);',reference="modeButton.click();")
     add('chat-basic',rows=[prompt,reply('Hello. How can I help?')])
     add('chat-user-quotes',rows=[dict(prompt,text='> Quoted source\n\nMy question about it.'),reply('Here is the explanation.')])

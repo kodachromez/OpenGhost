@@ -243,6 +243,74 @@ class PiRealTest final : public QObject
         QCOMPARE(h.reply(), QStringLiteral("model: Changed outside OpenGhost"));
     }
 
+    // Effort levels are Pi's own per model (getSupportedThinkingLevels on its
+    // metadata), for an extension's provider and a local models.json one alike,
+    // and the chosen level is what the chat's Pi records.
+    void effortLevelsArePisPerModel()
+    {
+        const auto models = QFileInfo(QString::fromLocal8Bit(qgetenv("PI_CODING_AGENT_DIR")) +
+                                      QStringLiteral("/models.json"))
+                                .filePath();
+        struct Remove {
+            QString path;
+            ~Remove() { QFile::remove(path); }
+        } cleanup{models};
+        QFile file(models);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write(R"({"providers":{"og-local":{"baseUrl":"http://127.0.0.1:9/v1",)"
+                   R"("api":"openai-completions","apiKey":"local","models":[)"
+                   R"({"id":"local-think","reasoning":true,)"
+                   R"("thinkingLevelMap":{"off":null,"minimal":null}},{"id":"local-plain"}]}}})");
+        file.close();
+        Harness h(m_folder);
+        const auto model = [&](const QString &id) {
+            for (const auto &m : h.chat.models())
+                if (m.id == id)
+                    return m;
+            return Model{};
+        };
+        QVERIFY(model("faux").thinkingLevels.isEmpty() && !model("faux").defaultThinking);
+        QCOMPARE(model("faux-think").thinkingLevels,
+                 (QStringList{"off", "minimal", "low", "medium", "high"}));
+        QCOMPARE(model("faux-think").defaultThinking, std::optional<QString>("medium"));
+        QCOMPARE(model("faux-wide").thinkingLevels,
+                 (QStringList{"off", "low", "medium", "high", "xhigh", "max"}));
+        QCOMPARE(model("local-think").provider, QStringLiteral("og-local"));
+        QCOMPARE(model("local-think").thinkingLevels, (QStringList{"low", "medium", "high"}));
+        QCOMPARE(model("local-think").defaultThinking, std::optional<QString>("medium"));
+        QCOMPARE(model("local-plain").provider, QStringLiteral("og-local"));
+        QVERIFY(model("local-plain").thinkingLevels.isEmpty());
+
+        h.chat.choose({QStringLiteral("og-faux"), QStringLiteral("faux-wide"), QStringLiteral("max")},
+                      true);
+        QVERIFY(h.chat.send(QStringLiteral("which model")));
+        QTRY_VERIFY_WITH_TIMEOUT(h.settled(), 30000);
+        QCOMPARE(h.reply(), QStringLiteral("model: Faux Wide"));
+        QCOMPARE(h.chat.current().selection.thinking, std::optional<QString>("max"));
+        // At once in a chat with history: Pi records the change before any run.
+        h.chat.choose({QStringLiteral("og-faux"), QStringLiteral("faux-wide"), QStringLiteral("low")},
+                      true);
+        QTRY_VERIFY_WITH_TIMEOUT(!h.chat.pending(), 30000);
+        QCOMPARE(h.chat.current().selection.thinking, std::optional<QString>("low"));
+        const auto changes = [&] {
+            QStringList levels;
+            QFile session(h.backend.sessionFile(h.chat.current().id));
+            if (session.open(QIODevice::ReadOnly))
+                for (const auto &line : session.readAll().split('\n')) {
+                    const auto entry = QJsonDocument::fromJson(line).object();
+                    if (entry.value("type").toString() == QStringLiteral("thinking_level_change"))
+                        levels.append(entry.value("thinkingLevel").toString());
+                }
+            return levels;
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(changes().endsWith(QStringLiteral("low")), 10000);
+        QVERIFY(changes().contains(QStringLiteral("max")));
+        // To a model without reasoning: Pi holds "off".
+        h.chat.choose({QStringLiteral("og-faux"), QStringLiteral("faux"), {}}, false);
+        QTRY_VERIFY_WITH_TIMEOUT(!h.chat.pending(), 30000);
+        QCOMPARE(h.chat.current().selection.thinking, std::optional<QString>("off"));
+    }
+
     // Access mode updates are numbered, and the bridge in real Pi never lets an
     // older one land after a newer one, whatever order Pi runs them in.
     void anOlderModeUpdateNeverWins()
