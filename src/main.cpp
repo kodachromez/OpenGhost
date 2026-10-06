@@ -6,6 +6,7 @@
 #include "platform/platform.h"
 #include "videoinfo.h"
 #include "window.h"
+#include "thinking_plugin.h"
 #ifdef OPENGHOST_TOOL_CALLS
 #include "tool_calls_plugin.h"
 #include "tooltext.h"
@@ -236,6 +237,7 @@ int main(int argc, char *argv[])
     registerToolCallsTypes();
     controller.frontendPlugins()->add(std::make_unique<openghost::ToolCallsPlugin>());
 #endif
+    controller.frontendPlugins()->add(std::make_unique<openghost::ThinkingPlugin>());
     QObject::connect(&controller, &WindowController::closeRequested, &app, &QCoreApplication::quit);
     QQmlApplicationEngine engine;
 #ifdef OPENGHOST_SMOKE_TEST

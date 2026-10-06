@@ -333,9 +333,13 @@ struct MessageDelta {
 struct MessageCompleted {
     std::optional<QString> text, finishReason;
 };
+// The model's visible thinking for its message: more of it, or (`replace`) all
+// of it as the backend finally has it. Never a provider's signature or an
+// encrypted payload; a redacted part is said to be redacted.
 struct ReasoningDelta {
     QString text;
-}; // intentionally invisible
+    bool replace = false;
+};
 // A tool call the model made, announced once its arguments are complete (never
 // from partial argument JSON). Not proof that it ran. Calls of one assistant
 // message are announced in that message's order.
@@ -495,5 +499,8 @@ struct Preferences {
     // Frontend plugins the user turned on or off, by plugin ID (absent: the
     // plugin's default). Choices for plugins not registered now are kept.
     QMap<QString, bool> frontendPlugins;
+    // Their on/off options the user set, by plugin ID then option key (absent:
+    // the option's default). Kept like the choices above.
+    QMap<QString, QMap<QString, bool>> frontendPluginOptions;
 };
 } // namespace openghost

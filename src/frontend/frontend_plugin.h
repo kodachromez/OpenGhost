@@ -19,6 +19,13 @@ class FrontendPlugins;
 struct FrontendPluginInfo {
     QString id, name, description;
     bool enabledByDefault = false; // Until the user turns it on or off.
+    // Where Settings offers its on/off, in one place only: "" under Plugins;
+    // "chat" under Appearance → Chat Settings (Plugins then leaves it out).
+    QString placement = {};
+    // Its own on/off settings and their defaults, by key. Saved like its
+    // on/off and kept while it is off; the plugin reads them through its
+    // context and hears of changes in optionChanged().
+    QMap<QString, bool> options = {};
 };
 
 // Something that happened in the frontend. Plugins subscribe by name.
@@ -39,7 +46,7 @@ inline const QString ReplyDelta = QStringLiteral("reply.delta"); // A reply's te
 // One displayed transcript row, read-only, as the chat rendering hook sees it.
 struct ChatRowView {
     QString sessionId, key;
-    QString role; // "user", "assistant", "note" or "tool"
+    QString role; // "user", "assistant", "note", "tool" or "thinking"
     QString text, state;
 };
 
@@ -51,9 +58,9 @@ struct SelectionText {
 };
 
 // How a plugin draws the transcript rows of one kind the host keeps but does
-// not draw itself ("tool": a tool call; later "thinking"). The host keeps the
-// rows' data whether or not a renderer is registered; without one, it shows
-// them as it always has.
+// not draw itself ("tool": a tool call; "thinking": a message's thinking). The
+// host keeps the rows' data whether or not a renderer is registered; without
+// one, it shows them as it always has (not at all).
 struct RowRenderer {
     // The packaged QML component drawing a row (qrc:, never a backend's URL).
     // It is made with `row`: the row's ChatEntry (its model roles, column,
@@ -66,7 +73,8 @@ struct RowRenderer {
     // The path of the text whose front the host trims as live output streams
     // (its `trimmed` role counts the units), if any.
     QString trimmedText;
-    // Rows arrive open rather than shut (the reader's toggles still win).
+    // Rows arrive open rather than shut (the reader's toggles still win, until
+    // the renderer is registered again starting them the other way).
     bool startExpanded = false;
 };
 
@@ -101,6 +109,9 @@ class FrontendPluginContext final
     void clearVisible(const QString &target);
     // The plugin's status() changed: republish its Settings entry.
     void update();
+    // One of the plugin's options (FrontendPluginInfo::options): the user's
+    // saved value, else its default; false for an undeclared key.
+    bool option(const QString &key) const;
 
   private:
     friend class FrontendPlugins;
@@ -132,5 +143,7 @@ class FrontendPlugin
     virtual void disable() {}
     // A line under the plugin's name in Settings; "" for none.
     virtual QString status() const { return {}; }
+    // One of its options changed (saved already) while it is on.
+    virtual void optionChanged(const QString &key) { Q_UNUSED(key) }
 };
 } // namespace openghost

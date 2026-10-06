@@ -23,7 +23,9 @@ struct Attachment {
 // the GUI thread does not duplicate unchanged rows.
 struct Entry {
     // Tool: a tool call, drawn by the frontend plugin that renders tool rows.
-    enum Kind { User, Assistant, Note, Tool };
+    // Thinking: a message's thinking (text; preview: its newest item while
+    // live), drawn by the plugin that renders thinking rows.
+    enum Kind { User, Assistant, Note, Tool, Thinking };
     Kind kind = Note;
     QString key;       // Same for a live row and its canonical replacement.
     QString text;      // Message or notice.
@@ -37,9 +39,9 @@ struct Entry {
     // (ms since the epoch; -1 unknown).
     QString metrics;
     qint64 started = -1, completed = -1;
-    // How the row follows the one before it: separate messages or parts of
-    // one reply. The view chooses the spacing.
-    enum Join { Apart, Joined };
+    // How the row follows the one before it: separate messages, parts of
+    // one reply, or its message's thinking. The view chooses the spacing.
+    enum Join { Apart, Joined, AfterThinking };
     Join join = Apart;
     // Enabled frontend plugins' presentation data, by plugin ID; empty without any.
     QVariantMap decorations;

@@ -18,7 +18,8 @@ class PreferencesStore;
 class FrontendPlugins final : public QObject
 {
     Q_OBJECT
-    // Settings entries in registration order: {pluginId, name, description, status, enabled}.
+    // Settings entries in registration order: {pluginId, name, description, status,
+    // enabled, placement, options (key -> current value)}.
     Q_PROPERTY(QVariantList entries READ entries NOTIFY entriesChanged)
     Q_PROPERTY(int count READ count NOTIFY countChanged)
     // UI targets enabled plugins show (true) or hide (false); absent: no plugin's say.
@@ -37,6 +38,11 @@ class FrontendPlugins final : public QObject
     // False when unknown or the choice could not be saved (nothing changes).
     Q_INVOKABLE bool setEnabled(const QString &id, bool enabled);
     bool enabled(const QString &id) const;
+    // A plugin's option: the saved value, else its default; false if unknown.
+    Q_INVOKABLE bool option(const QString &id, const QString &key) const;
+    // False when the plugin or key is unknown or the value could not be saved
+    // (nothing changes); else saved, then told to the plugin if it is on.
+    Q_INVOKABLE bool setOption(const QString &id, const QString &key, bool value);
 
     QVariantList entries() const;
     int count() const { return int(m_slots.size()); }
@@ -77,6 +83,7 @@ class FrontendPlugins final : public QObject
     void stop(Slot &slot, bool notify = true);
     PreferencesStore *m_store;
     QMap<QString, bool> m_choices; // Without a store.
+    QMap<QString, QMap<QString, bool>> m_options; // Without a store.
     std::vector<std::unique_ptr<Slot>> m_slots; // Stable: plugin code may add or remove.
     quint64 m_generation = 0, m_renderGeneration = 0;
 };

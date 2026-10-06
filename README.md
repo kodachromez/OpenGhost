@@ -106,6 +106,13 @@ to **OFF** and enables all four checks:
   `native_pi_test` maps the scripted Pi's tool events to cards (order, snapshots,
   results, Stop, restart), and `native_fake_ui_smoke` draws the cards in the
   real transcript and switches the plugin Off/On twice while a call waits.
+- Thinking and Settings → Appearance → Chat Settings: `native_pi_test` maps the
+  scripted Pi's thinking (live, redacted, saved, restart) to thinking rows,
+  `native_contract_test` their placement, bounds and display cache, and
+  `native_frontend_plugins_test` saved plugin options. Both UI smokes click
+  Show Tool Calls, Show Thinking and Start Collapsed in the real Settings sheet
+  (live effect, greyed-out Start Collapsed, nothing repeated under Plugins,
+  restart); `native_fake_ui_smoke` also streams thinking shut and open.
 - `native_pi_real_test`: `PiBackend` against the installed `pi` (skipped without
   one) with Pi AI's faux model in a throwaway agent directory: Ask/Auto/Full
   relayed to Pi, approval cards for a test-only stand-in Pi permission plugin's

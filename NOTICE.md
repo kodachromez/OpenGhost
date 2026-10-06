@@ -11,7 +11,9 @@ rules. `resources/openghost.png` is the unchanged upstream icon (also present
 in `reference/openghost/desktop/icon.png`). Source revisions are recorded in
 `docs/native-import.json`. The Tool Calls frontend plugin (`plugins/tool_calls/`)
 adapts Ghosty's native tool card (`ToolCard.qml`, `toolcard.*`) and its tool
-entrance motion; Ghosty's subagent activity panel is not included.
+entrance motion; Ghosty's subagent activity panel is not included. The
+Thinking frontend plugin (`plugins/thinking/`) adapts Ghosty's native thinking
+row and its newest-item preview (`ChatEntry.qml`, `transcript.cpp`).
 
 **Ghosty's custom mascot splash, its assets/font, alternate/ripple animations,
 and custom appearance choices are not included.** This fork is not official

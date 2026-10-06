@@ -125,7 +125,8 @@ QJsonArray displayAttachments(const QJsonObject &entry)
 
 QJsonArray Library::displayMessages(const QJsonArray &messages)
 {
-    static const QStringList roles{"user", "assistant", "compact", "stats", "moved", "tool"};
+    static const QStringList roles{"user",  "assistant", "compact", "stats",
+                                   "moved", "tool",      "thinking"};
     static const QStringList toolStates{"running", "done", "error", "cancelled", "missing",
                                         "unconfirmed"};
     static const QStringList receipts{"queued", "applied", "notApplied", "unconfirmed"};
@@ -173,6 +174,17 @@ QJsonArray Library::displayMessages(const QJsonArray &messages)
                 out.insert("turn", entry.value("turn"));
             if (entry.value("joined") == QJsonValue(true))
                 out.insert("joined", true);
+            result.append(out);
+            continue;
+        }
+        if (role == "thinking") {
+            // A message's thinking, as shown (bounded as the chat keeps it).
+            const auto text = entry.value("content").toString().left(64 * 1024);
+            if (text.trimmed().isEmpty())
+                continue;
+            out.insert("content", text);
+            if (entry.value("turn").isString())
+                out.insert("turn", entry.value("turn"));
             result.append(out);
             continue;
         }

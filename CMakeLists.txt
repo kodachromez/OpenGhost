@@ -112,10 +112,20 @@ if(OPENGHOST_TOOL_CALLS)
     native_warnings(openghost_tool_calls)
 endif()
 
+# Thinking, a frontend plugin (plugins/thinking): Ghosty's thinking row as the
+# renderer of the transcript's thinking rows. Always built; Settings → Appearance
+# turns it on or off (off: thinking is kept but not drawn).
+add_library(openghost_thinking STATIC plugins/thinking/thinking_plugin.h
+    plugins/thinking/thinking_plugin.cpp)
+target_include_directories(openghost_thinking PUBLIC plugins/thinking)
+target_link_libraries(openghost_thinking PUBLIC native_contract)
+native_warnings(openghost_thinking)
+
 qt_add_executable(openghost-cpp src/main.cpp)
 set_target_properties(openghost-cpp PROPERTIES WIN32_EXECUTABLE TRUE MACOSX_BUNDLE TRUE
     MACOSX_BUNDLE_GUI_IDENTIFIER "org.openghost.cpp")
-target_link_libraries(openghost-cpp PRIVATE native_window Qt6::Qml Qt6::QuickDialogs2)
+target_link_libraries(openghost-cpp PRIVATE native_window openghost_thinking Qt6::Qml
+    Qt6::QuickDialogs2)
 native_warnings(openghost-cpp)
 foreach(name Main ChatEntry LiveText Sidebar SettingsDialog Markdown Block InlineText CodeBlock
         TableBlock DiagramBlock WorkingGhost WelcomeGhost Splash EffortControl Metrics
@@ -126,6 +136,10 @@ foreach(name Main ChatEntry LiveText Sidebar SettingsDialog Markdown Block Inlin
     set_source_files_properties(qml/${name}.qml PROPERTIES QT_RESOURCE_ALIAS ${name}.qml)
     list(APPEND qml_files qml/${name}.qml)
 endforeach()
+# The Thinking plugin's row, in the window's module (it uses LiveText and SelectArea).
+set_source_files_properties(plugins/thinking/qml/ThinkingEntry.qml
+    PROPERTIES QT_RESOURCE_ALIAS ThinkingEntry.qml)
+list(APPEND qml_files plugins/thinking/qml/ThinkingEntry.qml)
 if(OPENGHOST_TOOL_CALLS)
     # The plugin's card, in the window's module (it uses LiveText and SelectArea).
     foreach(name ToolEntry ToolCard)
@@ -157,7 +171,8 @@ if(OPENGHOST_BUILD_SMOKE_TEST)
     enable_testing()
     find_package(Qt6 6.11 REQUIRED COMPONENTS Test GuiPrivate)
     target_sources(openghost-cpp PRIVATE tests/smoke.cpp tests/plugin_smoke.cpp
-        tests/frontend_plugin_smoke.cpp tests/parity/native.cpp tests/splash_frames.cpp)
+        tests/frontend_plugin_smoke.cpp tests/chat_settings_smoke.cpp tests/parity/native.cpp
+        tests/splash_frames.cpp)
     target_link_libraries(openghost-cpp PRIVATE Qt6::Test Qt6::GuiPrivate)
     target_compile_definitions(openghost-cpp PRIVATE OPENGHOST_SMOKE_TEST)
     add_executable(native_contract_test tests/contract.cpp src/settings.cpp)

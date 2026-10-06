@@ -84,6 +84,28 @@ QString textOf(const QJsonValue &content)
             text += block.toObject().value("text").toString();
     return text;
 }
+// A finished assistant message's thinking as shown: its thinking blocks, a
+// paragraph each; a redacted block is only said to be one (its payload is
+// never shown). Bounded to 64 Ki units, as Ghosty bounds a message's thinking.
+constexpr qsizetype Thinking = 64 * 1024;
+QString thinkingOf(const QJsonValue &content)
+{
+    QStringList parts;
+    for (const auto &value : content.toArray()) {
+        const auto block = value.toObject();
+        if (block.value("type").toString() != QStringLiteral("thinking"))
+            continue;
+        const auto text = block.value("redacted").toBool()
+                              ? QStringLiteral("[Redacted thinking]")
+                              : block.value("thinking").toString().trimmed();
+        if (!text.isEmpty())
+            parts.append(text);
+    }
+    auto text = parts.join(QStringLiteral("\n\n"));
+    if (text.size() > Thinking)
+        text = text.left(text.at(Thinking - 1).isHighSurrogate() ? Thinking - 1 : Thinking);
+    return text;
+}
 // Tool calls as the transcript shows them. Identities longer than 256 units are
 // refused rather than truncated into collisions; arguments are shown up to 4 Ki
 // units (Ghosty's display bounds), a clipped text no longer parsing as JSON.
@@ -403,6 +425,8 @@ rebuilt(const QJsonArray &entries, const QString &client, TurnStatus *status)
         stopReason = message.value("stopReason").toString();
         errorMessage = message.value("errorMessage").toString();
         events.append(started);
+        if (const auto thought = thinkingOf(message.value("content")); !thought.isEmpty())
+            events.append(ReasoningDelta{thought, true});
         events.append(MessageCompleted{textOf(message.value("content")), finishOf(stopReason)});
         if (const auto usage = usageOf(message))
             events.append(*usage);
@@ -1052,6 +1076,7 @@ bool PiBackend::recoverJournal(const QString &session, const QString &client, co
         if (std::holds_alternative<MessageStarted>(payload))
             message = uuid();
         const bool part = std::holds_alternative<MessageStarted>(payload) ||
+                          std::holds_alternative<ReasoningDelta>(payload) ||
                           std::holds_alternative<MessageCompleted>(payload) ||
                           std::holds_alternative<Usage>(payload);
         journal.events.append({{session, next(chat), journal.turn,
@@ -2031,6 +2056,7 @@ void PiBackend::runEvent(const QString &session, const QString &type, const QJso
             return;
         if (type == QStringLiteral("message_start")) {
             run.message = uuid();
+            run.thought = -1;
             MessageStarted started;
             if (!message.value("model").toString().isEmpty())
                 started.model = message.value("model").toString();
@@ -2043,6 +2069,9 @@ void PiBackend::runEvent(const QString &session, const QString &type, const QJso
         }
         run.stopReason = message.value("stopReason").toString();
         run.errorMessage = message.value("errorMessage").toString();
+        // Its thinking as Pi saved it replaces what streamed (when it had any).
+        if (const auto thought = thinkingOf(message.value("content")); !thought.isEmpty())
+            publish(session, ReasoningDelta{thought, true}, true);
         publish(session, MessageCompleted{textOf(message.value("content")), finishOf(run.stopReason)},
                 true);
         if (const auto usage = usageOf(message))
@@ -2083,13 +2112,26 @@ void PiBackend::runEvent(const QString &session, const QString &type, const QJso
                                            : std::nullopt});
     } else if (type == QStringLiteral("message_update")) {
         const auto event = object.value("assistantMessageEvent").toObject();
-        if (event.value("type").toString() != QStringLiteral("text_delta"))
+        const auto kind = event.value("type").toString();
+        if (kind != QStringLiteral("text_delta") && kind != QStringLiteral("thinking_delta"))
             return;
         if (run.message.isEmpty()) {
             run.message = uuid();
+            run.thought = -1;
             publish(session, MessageStarted{}, true);
         }
-        publish(session, MessageDelta{event.value("delta").toString()}, true);
+        if (kind == QStringLiteral("text_delta")) {
+            publish(session, MessageDelta{event.value("delta").toString()}, true);
+            return;
+        }
+        // Another thinking block of the message starts a new paragraph.
+        const int block = event.value("contentIndex").toInt();
+        QString text = event.value("delta").toString();
+        if (run.thought >= 0 && block != run.thought)
+            text.prepend(QStringLiteral("\n\n"));
+        run.thought = block;
+        if (!text.isEmpty())
+            publish(session, ReasoningDelta{text}, true);
     } else if (type == QStringLiteral("extension_error")) {
         // The bridge's retry trigger failed before Pi started anything.
         if (run.retry && !run.active &&
@@ -2138,11 +2180,17 @@ void PiBackend::publish(const QString &session, EventPayload payload, bool messa
                         message ? std::optional<QString>(run.message) : std::nullopt, run.client},
                        std::move(payload)};
     if (auto journal = m_journal.find(journalKey(session, run.client)); journal != m_journal.end()) {
-        // Recovery needs a message's final text, not every delta that led to it.
+        // Recovery needs a message's final text and thinking, not every delta
+        // that led to them.
         if (const auto *done = std::get_if<MessageCompleted>(&event.payload); done && done->text)
             journal->events.removeIf([&](const SessionEvent &e) {
                 return e.identity.messageId == event.identity.messageId &&
                        std::holds_alternative<MessageDelta>(e.payload);
+            });
+        if (const auto *thought = std::get_if<ReasoningDelta>(&event.payload); thought && thought->replace)
+            journal->events.removeIf([&](const SessionEvent &e) {
+                return e.identity.messageId == event.identity.messageId &&
+                       std::holds_alternative<ReasoningDelta>(e.payload);
             });
         // Nor every snapshot of a call's output: the latest, until its result.
         const auto *progress = std::get_if<ToolProgress>(&event.payload);

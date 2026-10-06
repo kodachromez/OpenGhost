@@ -15,7 +15,9 @@ struct DisplayRow {
     // Moved: a mini chat's "caught up" line. Preserved: a saved entry this port
     // does not draw (compaction/stats), kept unchanged for the next save.
     // Tool: one tool call's card (its text is the call's output).
-    enum class Role { User, Assistant, Note, Moved, Preserved, Tool } role = Role::Note;
+    // Thinking: one assistant message's thinking, just above its reply part
+    // (its text is the thinking; state live while it streams, else done).
+    enum class Role { User, Assistant, Note, Moved, Preserved, Tool, Thinking } role = Role::Note;
     DisplayRow() = default;
     DisplayRow(Role role, QString key, QString text, QString state,
                QVector<DisplayAttachment> attachments, QString metrics, QString tip, qint64 started,
@@ -52,7 +54,8 @@ struct DisplayRow {
         // of the first line kept; `trimmed` counts UTF-16 units (not saved).
         double omittedLines = 0, omittedCharacters = 0, trimmed = 0;
         qsizetype removed = 0; // Units of the latest output snapshot not kept.
-        QString after;         // The reply part (row key) whose message made the call.
+        QString after;         // The reply part (row key) whose message made the call
+                               // (Thinking: whose message thought it, the row below).
         bool saved = false;    // Settled by the backend's saved result.
     } tool;
 };
@@ -96,6 +99,7 @@ struct ChatRecord {
         struct Message {
             QString id, text, rowKey;
             bool sealed = false;
+            QString thought = {}; // Its thinking row's key, once it thought aloud.
         };
         QVector<Message> messages;
     } turn;
@@ -230,6 +234,8 @@ class ChatService final : public QObject
     void publishReply(ChatRecord &chat);
     DisplayRow *toolRow(ChatRecord &chat, const QString &callId);
     DisplayRow *addTool(ChatRecord &chat, const QString &callId, const QString &name);
+    DisplayRow *thinkingRow(ChatRecord &chat, ChatRecord::Turn::Message &message, bool replace);
+    void settleThinking(ChatRecord &chat);
     void chooseSaved(const ModelSelection &selection, bool thinkingPreference);
     ModelSelection preferredModel() const;
     void problem(const Error &error);

@@ -22,7 +22,8 @@ Item {
     required property double started
     required property double completed
     // How it follows the row before (Entry::Join): messages are 28 px apart
-    // (.thread-list); parts of one reply are 14 px apart.
+    // (.thread-list); parts of one reply are 14 px apart, and 12 px after
+    // their message's thinking.
     required property int join
     // A tool call's row (kind "tool"; drawn by the frontend plugin that renders
     // tool rows): the call, how it ended, the live output's dropped front, and
@@ -41,7 +42,7 @@ Item {
     // The reading column (.thread-list): at most 680 px, 24 px from the edges.
     readonly property real column: Math.min(680, width - 48)
     readonly property real columnX: (width - column) / 2
-    readonly property real gap: index === 0 ? 0 : join === 1 ? 14 : 28
+    readonly property real gap: index === 0 ? 0 : join === 2 ? 12 : join === 1 ? 14 : 28
     height: gap + (content.item ? content.item.implicitHeight
                                 : plugged.item ? plugged.item.implicitHeight : 0)
     // Its full height when the list places it: a row that grows after it

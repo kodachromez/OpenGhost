@@ -85,7 +85,8 @@ struct Harness {
     // The chat's drawn rows: user, assistant, note or tool, in order.
     QStringList shape() const
     {
-        static const char *const names[] = {"user", "assistant", "note", "moved", "preserved", "tool"};
+        static const char *const names[] = {"user",      "assistant", "note",    "moved",
+                                            "preserved", "tool",      "thinking"};
         QStringList out;
         for (const auto &row : chat.current().rows)
             if (!row.hidden)
@@ -325,6 +326,70 @@ class PiTest final : public QObject
         QCOMPARE(saved[3].text, tools[1].text);
         QVERIFY(saved[4].continued);
         QCOMPARE(commands().count(QStringLiteral("prompt toolcards")), 1);
+    }
+
+    // Pi's thinking becomes one row per assistant message just above its
+    // reply part, streamed live, settled by text or calls, and replaced by the
+    // message's saved thinking (a redacted block only said to be one).
+    void thinkingFollowsPi()
+    {
+        Harness h;
+        QTRY_VERIFY(h.chat.ready());
+        QVERIFY(h.chat.send(QStringLiteral("thinks")));
+        QTRY_VERIFY(h.settled());
+        QCOMPARE(h.shape(),
+                 (QStringList{"user", "thinking", "assistant", "tool", "thinking", "assistant"}));
+        const auto &rows = h.chat.current().rows;
+        QCOMPARE(rows[1].text, QStringLiteral("**Plan**\nLook first.\n\n[Redacted thinking]"));
+        QVERIFY(!rows[1].text.contains(QStringLiteral("opaque")));
+        QCOMPARE(rows[1].tool.after, rows[2].key);
+        QCOMPARE(rows[2].text, QStringLiteral("Let me look."));
+        QCOMPARE(rows[3].tool.after, rows[2].key);
+        QCOMPARE(rows[4].text, QStringLiteral("Wrap up."));
+        QCOMPARE(rows[4].tool.after, rows[5].key);
+        QCOMPARE(rows[5].text, QStringLiteral("Done."));
+        QVERIFY(rows[5].continued);
+        for (const int i : {1, 4})
+            QCOMPARE(rows[i].state, QStringLiteral("done"));
+        QCOMPARE(h.usage.size(), 2); // Thinking adds no usage.
+        // The display cache keeps it, above the same reply parts.
+        const auto saved = ChatService::rowsOf(ChatService::entries(rows));
+        QCOMPARE(saved.size(), rows.size());
+        QCOMPARE(saved[1].role, DisplayRow::Role::Thinking);
+        QCOMPARE(saved[1].text, rows[1].text);
+        QCOMPARE(saved[1].tool.after, saved[2].key);
+        QCOMPARE(saved[4].tool.after, saved[5].key);
+        QCOMPARE(saved[4].state, QStringLiteral("done"));
+    }
+
+    void restartShowsSavedThinking()
+    {
+        QTemporaryDir profile;
+        QString a;
+        {
+            Harness h(profile.path());
+            QTRY_VERIFY(h.chat.ready());
+            QVERIFY(h.chat.send(QStringLiteral("thinks")));
+            QTRY_VERIFY(h.settled());
+            a = h.chat.current().id;
+            QVERIFY(h.chat.send(QStringLiteral("thinkcut")));
+            QTRY_VERIFY(h.tools().size() == 2);
+            QCOMPARE(h.count(DisplayRow::Role::Thinking), 3);
+        } // OpenGhost exits while the call runs.
+        Harness h(profile.path());
+        QTRY_VERIFY(h.chat.ready());
+        h.chat.open(a);
+        QTRY_VERIFY(!h.chat.pending());
+        QVERIFY(h.chat.current().reconciled);
+        QStringList thoughts;
+        for (const auto &row : h.chat.current().rows)
+            if (row.role == DisplayRow::Role::Thinking)
+                thoughts.append(row.text);
+        // The finished turn's from the display cache; the cut-off turn's
+        // rebuilt from Pi's saved message. Nothing reran.
+        QCOMPARE(thoughts, (QStringList{QStringLiteral("**Plan**\nLook first.\n\n[Redacted thinking]"),
+                                        QStringLiteral("Wrap up."), QStringLiteral("Run it.")}));
+        QCOMPARE(commands().count(QStringLiteral("prompt thinkcut")), 1);
     }
 
     void stopLeavesARunningCallUnconfirmed()

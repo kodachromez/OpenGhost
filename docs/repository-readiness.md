@@ -114,6 +114,17 @@ what Pi reports and no more:
   motion and reduced motion were not compared on screen. Offscreen smokes check
   structure, texts, states and switching only.
 
+### Thinking plugin limits
+
+- Only what Pi streams and saves is shown: providers that send no thinking (or
+  only redacted thinking, shown as *[Redacted thinking]*) show none. A message's
+  thinking is bounded to 64 Ki units; Pi's saved thinking replaces what streamed.
+- Caches written before thinking rows existed have none; a turn being recovered
+  gets its thinking from Pi's saved messages.
+- **Not visually verified**: the Chat Settings checkboxes and the thinking row
+  were not compared with Ghosty on screen. Offscreen smokes check structure,
+  texts, states, live switching and saved choices only.
+
 ### Toolchain, platform and packaging qualification
 
 - Resolve or separately qualify the two [GCC metatype warnings](cpp-port.md#known-gcc-metatype-warnings)

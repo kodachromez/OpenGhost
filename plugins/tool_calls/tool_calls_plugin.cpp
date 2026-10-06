@@ -5,10 +5,12 @@ namespace openghost
 {
 FrontendPluginInfo ToolCallsPlugin::info() const
 {
-    return {Id, QStringLiteral("Tool Calls"),
-            QStringLiteral("Shows each tool call as a card with its arguments, output and "
-                           "result. Off, replies show their text only."),
-            true};
+    FrontendPluginInfo info{Id, QStringLiteral("Tool Calls"),
+                            QStringLiteral("Shows each tool call as a card with its arguments, "
+                                           "output and result. Off, replies show their text only."),
+                            true};
+    info.placement = QStringLiteral("chat"); // Appearance → Chat Settings: Show Tool Calls.
+    return info;
 }
 void ToolCallsPlugin::enable(FrontendPluginContext &context)
 {

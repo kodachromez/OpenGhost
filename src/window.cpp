@@ -70,6 +70,46 @@ std::unique_ptr<openghost::KeyStore> keyStore(const QString &path)
         return std::make_unique<openghost::MemoryKeyStore>();
     return std::make_unique<openghost::FileKeyStore>(path);
 }
+// Live thinking's newest item, for its header (Ghosty's latestThought): the
+// latest heading line ("**Running tests**", one still streaming included, or
+// "# Plan") when the thinking has any, otherwise its last line, with emphasis
+// markers dropped; at most 160 units.
+QString latestThought(const QString &text)
+{
+    const auto lines = QStringView(text).split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+    QString last;
+    for (qsizetype i = lines.size() - 1; i >= 0; --i) {
+        QString line = lines.at(i).trimmed().toString();
+        if (line.isEmpty())
+            continue;
+        if (last.isEmpty())
+            last = line;
+        bool heading = false;
+        if (line.startsWith(QLatin1Char('#'))) {
+            qsizetype marks = 0;
+            while (marks < line.size() && line.at(marks) == QLatin1Char('#'))
+                ++marks;
+            heading = marks <= 6 && marks < line.size() && line.at(marks).isSpace();
+            if (heading)
+                line = line.mid(marks);
+        } else if (line.size() > 2 && line.startsWith(QLatin1String("**"))) {
+            // Bold from end to end, or still open on the last line.
+            const qsizetype close = line.indexOf(QLatin1String("**"), 2);
+            heading = (close > 2 && close == line.size() - 2) ||
+                      (close < 0 && i == lines.size() - 1);
+        }
+        if (heading) {
+            last = line;
+            break;
+        }
+    }
+    last.remove(QLatin1String("**"));
+    last.remove(QLatin1String("__"));
+    last = last.trimmed();
+    if (last.size() > 160)
+        last.truncate(last.at(159).isHighSurrogate() ? 159 : 160);
+    return last;
+}
 } // namespace
 
 WindowController::WindowController(openghost::Backend *backend, QString preferencesPath,
@@ -303,20 +343,30 @@ void WindowController::sync()
     // transcript is as it was before tool rows: a turn's reply is one message
     // and its calls are not shown.
     const bool tools = m_frontendPlugins.renderer(QStringLiteral("tool")) != nullptr;
+    // Thinking likewise: without its renderer a reply reads as it always has.
+    const bool thinking = m_frontendPlugins.renderer(QStringLiteral("thinking")) != nullptr;
     QString turnOf; // The backend turn of the last entry, while it is its reply.
-    QHash<QString, QString> after; // Tool entries: the reply part whose message made them.
+    // Tool and thinking entries: the reply part whose message made them.
+    QHash<QString, QString> after;
+    // The entry before is the thinking of the message whose reply part is `part`.
+    const auto thoughtOf = [&](const QString &part) {
+        return !rows.isEmpty() && rows.last().kind == Entry::Thinking && !part.isEmpty() &&
+               after.value(rows.last().key) == part;
+    };
     for (qsizetype i = 0; i < chat.rows.size(); ++i) {
         const auto &row = chat.rows.at(i);
         if (row.hidden || row.role == openghost::DisplayRow::Role::Preserved ||
             row.role == openghost::DisplayRow::Role::Moved)
             continue; // Pending parts and undrawn saved entries; moved is mini-only.
-        if (row.role == openghost::DisplayRow::Role::Tool && !tools)
+        if ((row.role == openghost::DisplayRow::Role::Tool && !tools) ||
+            (row.role == openghost::DisplayRow::Role::Thinking && !thinking))
             continue;
         const bool assistant = row.role == openghost::DisplayRow::Role::Assistant;
-        if (!tools && assistant && row.continued && !rows.isEmpty() &&
+        if (assistant && row.continued && !rows.isEmpty() &&
             rows.last().kind == Entry::Assistant && turnOf == row.backendTurn) {
-            // Without tool cards a reply that went on after its calls is one
-            // message, as before: its parts' text, the latest state and metrics.
+            // A reply that went on after calls or thinking that are not shown
+            // is one message, as before: its parts' text, the latest state and
+            // metrics.
             auto &reply = rows.last();
             if (!row.text.isEmpty())
                 reply.text = reply.text.isEmpty() ? row.text : reply.text + "\n\n" + row.text;
@@ -334,11 +384,16 @@ void WindowController::sync()
         if (tools && assistant && row.text.isEmpty() && i + 1 < chat.rows.size() &&
             chat.rows.at(i + 1).role == openghost::DisplayRow::Role::Tool)
             continue;
+        // A finished message that only thought aloud: its thinking says it all.
+        if (assistant && row.text.isEmpty() && row.state != QStringLiteral("live") &&
+            row.metrics.isEmpty() && thoughtOf(row.key))
+            continue;
         Entry entry;
-        entry.kind = row.role == openghost::DisplayRow::Role::User        ? Entry::User
-                     : assistant                                          ? Entry::Assistant
-                     : row.role == openghost::DisplayRow::Role::Tool      ? Entry::Tool
-                                                                          : Entry::Note;
+        entry.kind = row.role == openghost::DisplayRow::Role::User         ? Entry::User
+                     : assistant                                           ? Entry::Assistant
+                     : row.role == openghost::DisplayRow::Role::Tool       ? Entry::Tool
+                     : row.role == openghost::DisplayRow::Role::Thinking   ? Entry::Thinking
+                                                                           : Entry::Note;
         entry.key = row.key;
         entry.text = row.text;
         entry.state = row.state;
@@ -352,7 +407,12 @@ void WindowController::sync()
                 {"notApplied", "Not applied. Nothing was resent."},
                 {"unconfirmed", "Input not confirmed. Nothing was resent."}};
             entry.preview = receipts.value(row.state);
+        } else if (entry.kind == Entry::Thinking) {
+            entry.preview = row.state == QStringLiteral("live") ? latestThought(row.text) : QString();
+            after.insert(row.key, row.tool.after);
         }
+        if (assistant && thoughtOf(row.key))
+            entry.join = Entry::AfterThinking;
         entry.started = row.started;
         entry.completed = row.completed;
         // A picture's type is known only while its sent copy is kept; text is text.
@@ -372,22 +432,24 @@ void WindowController::sync()
                           call.ending,       call.known,         call.omittedLines,
                           call.omittedCharacters, call.trimmed};
             // One exchange's text and its calls read as one message.
-            if (!rows.isEmpty() && !call.after.isEmpty() &&
+            if (thoughtOf(call.after))
+                entry.join = Entry::AfterThinking;
+            else if (!rows.isEmpty() && !call.after.isEmpty() &&
                 (rows.last().key == call.after ||
-                 (rows.last().kind == Entry::Tool && rows.last().join == Entry::Joined &&
+                 (rows.last().kind == Entry::Tool && rows.last().join != Entry::Apart &&
                   after.value(rows.last().key) == call.after)))
                 entry.join = Entry::Joined;
             after.insert(row.key, call.after);
         }
         if (assistant)
             turnOf = row.backendTurn;
-        else if (entry.kind != Entry::Tool)
+        else if (entry.kind != Entry::Tool && entry.kind != Entry::Thinking)
             turnOf.clear();
         rows.append(entry);
     }
     for (auto &entry : rows) {
         if (decorating) {
-            static const char *const roles[] = {"user", "assistant", "note", "tool"};
+            static const char *const roles[] = {"user", "assistant", "note", "tool", "thinking"};
             entry.decorations = m_frontendPlugins.decorate(
                 {chat.id, entry.key, QString::fromLatin1(roles[entry.kind]), entry.text, entry.state});
         }

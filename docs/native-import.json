@@ -593,6 +593,18 @@
       "destination": "src/frontend/chat_service.cpp",
       "source_sha256": "590001c570c878c8dc4e7f9eec0aa8bbc30f50c81e7d164e168cb260fa56af86",
       "scope": "tool output bounds only: 32 Ki live tail at a line start with omitted line/character counts, first 32 Ki of a result with the display-limit notice"
+    },
+    {
+      "source": "native-ghosty/qml/ChatEntry.qml",
+      "destination": "plugins/thinking/qml/ThinkingEntry.qml",
+      "source_sha256": "6b30a82cd6695e3eb318f02873a513b18302e68ed06e7f214796245b918c3fd5",
+      "scope": "thinking row only (summary, newest item, disclosure, rule and text, selection units k:s/k:t); facade renamed to the plugin's row"
+    },
+    {
+      "source": "native-ghosty/src/transcript.cpp",
+      "destination": "src/window.cpp",
+      "source_sha256": "590001c570c878c8dc4e7f9eec0aa8bbc30f50c81e7d164e168cb260fa56af86",
+      "scope": "latestThought only (live thinking's newest heading or last line, 160 units); 64 Ki per-message thinking bound in chat_service.cpp/pi_backend.cpp"
     }
   ],
   "excluded_custom_animations": [

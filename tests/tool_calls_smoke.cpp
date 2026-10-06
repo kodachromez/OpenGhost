@@ -91,7 +91,7 @@ int toolCallsSmoke(QQuickWindow *window, WindowController &controller)
 
     for (int cycle = 0; cycle < 2; ++cycle) {
         check(plugins->setEnabled(id, false), "Off applies");
-        check(plugins->hooks() == hooks - 1 && plugins->renderers().isEmpty(),
+        check(plugins->hooks() == hooks - 1 && !plugins->renderers().contains("tool"),
               "Off removes its hook");
         check(toolRows().isEmpty() && model->rowCount() == withCards - 1,
               "Off: the transcript as before tool rows");

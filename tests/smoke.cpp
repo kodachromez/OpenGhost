@@ -160,6 +160,8 @@ int frontendPluginSmoke(QQmlApplicationEngine &engine, QQuickWindow *window);
 #ifdef OPENGHOST_TOOL_CALLS
 int toolCallsSmoke(QQuickWindow *window, WindowController &controller);
 #endif
+int chatSettingsSmoke(QQmlApplicationEngine &engine, QQuickWindow *window);
+int thinkingSmoke(QQuickWindow *window, WindowController &controller);
 
 // Bounded offline rendering and optional fake-backend integration check.
 int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
@@ -1025,6 +1027,9 @@ int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
     if (fake)
         failures += toolCallsSmoke(window, controller);
 #endif
+    if (fake)
+        failures += thinkingSmoke(window, controller);
+    failures += chatSettingsSmoke(engine, window);
     failures += frontendPluginSmoke(engine, window);
     failures += pluginSmoke(engine, window);
     check(!engine.property("smokeWarnings").toBool(), "no QML binding/load warnings");

@@ -681,6 +681,77 @@ class ContractTest : public QObject
         chat.stop();
         QTRY_VERIFY(!chat.pending());
     }
+    // Thinking is a row of its message's own, just above its reply part: live
+    // while it streams, done once the message goes on, replaced by the final
+    // thinking, bounded, and kept by the display cache.
+    void thinkingRowsPrecedeTheirReply()
+    {
+        FakeBackend fake(nullptr, 0);
+        PreferencesStore prefs({});
+        ChatService chat(&fake, &prefs);
+        chat.initialize();
+        QTRY_VERIFY(chat.ready());
+        QVERIFY(chat.send("hello"));
+        QTRY_VERIFY(!chat.pending());
+        const auto send = [&](EventPayload payload, std::optional<QString> message = std::nullopt) {
+            const auto &c = chat.current();
+            emit fake.sessionEvent(
+                {{c.id, c.sequence + 1, c.turn.remoteId, message, c.turn.clientId}, payload});
+        };
+        const auto roles = [&] {
+            QStringList out;
+            for (const auto &r : chat.current().rows)
+                out.append(r.role == DisplayRow::Role::Thinking    ? "thinking"
+                           : r.role == DisplayRow::Role::Assistant ? "assistant"
+                           : r.role == DisplayRow::Role::Tool      ? "tool"
+                           : r.role == DisplayRow::Role::User      ? "user"
+                                                                   : "other");
+            return out;
+        };
+        QSignalSpy worked(&chat, &ChatService::worked);
+        send(MessageStarted{}, QStringLiteral("m1"));
+        send(ReasoningDelta{QStringLiteral("**Plan**\n")}, QStringLiteral("m1"));
+        send(ReasoningDelta{QStringLiteral("look")}, QStringLiteral("m1"));
+        QCOMPARE(roles(), (QStringList{"user", "thinking", "assistant"}));
+        auto rows = chat.current().rows;
+        QCOMPARE(rows[1].text, QStringLiteral("**Plan**\nlook"));
+        QCOMPARE(rows[1].state, QStringLiteral("live"));
+        QCOMPARE(rows[1].tool.after, rows[2].key);
+        QCOMPARE(worked.count(), 2);
+        send(ReasoningDelta{QString()}, QStringLiteral("m1")); // nothing to add
+        send(MessageDelta{QStringLiteral("Hi")}, QStringLiteral("m1"));
+        QCOMPARE(chat.current().rows[1].state, QStringLiteral("done"));
+        send(ReasoningDelta{QStringLiteral("**Plan**\nlook first"), true}, QStringLiteral("m1"));
+        QCOMPARE(chat.current().rows[1].text, QStringLiteral("**Plan**\nlook first"));
+        QCOMPARE(chat.current().rows[1].state, QStringLiteral("done")); // final, not live again
+        send(MessageCompleted{QStringLiteral("Hi"), {}}, QStringLiteral("m1"));
+        // A second message sharing that reply part goes on in a new part below its thinking.
+        send(MessageStarted{}, QStringLiteral("m2"));
+        send(ReasoningDelta{QString(70 * 1024, QLatin1Char('x'))}, QStringLiteral("m2"));
+        QCOMPARE(roles(), (QStringList{"user", "thinking", "assistant", "thinking", "assistant"}));
+        rows = chat.current().rows;
+        QCOMPARE(rows[3].text.size(), 64 * 1024); // bounded
+        QCOMPARE(rows[3].tool.after, rows[4].key);
+        QVERIFY(rows[4].continued);
+        send(MessageDelta{QStringLiteral("More.")}, QStringLiteral("m2"));
+        QCOMPARE(chat.current().rows[2].text, QStringLiteral("Hi"));
+        QCOMPARE(chat.current().rows[4].text, QStringLiteral("More."));
+        send(ToolStarted{"c1", "bash", {}, QStringLiteral("{}")}, QStringLiteral("m2"));
+        send(TurnCompleted{});
+        rows = chat.current().rows;
+        QCOMPARE(rows[3].state, QStringLiteral("done"));
+        // The display cache: thinking above the same parts; a sealed message takes no more.
+        const auto saved = ChatService::rowsOf(ChatService::entries(rows));
+        QCOMPARE(saved.size(), rows.size());
+        QCOMPARE(saved[1].role, DisplayRow::Role::Thinking);
+        QCOMPARE(saved[1].text, rows[1].text);
+        QCOMPARE(saved[1].tool.after, saved[2].key);
+        QCOMPARE(saved[3].tool.after, saved[4].key);
+        QJsonArray bad{QJsonObject{{"role", "thinking"}, {"content", "  "}},
+                       QJsonObject{{"role", "thinking"}, {"content", 3}}};
+        QVERIFY(ChatService::rowsOf(bad).isEmpty());
+    }
+
     // Tool calls are rows of their own, in announcement order, and never show
     // an outcome the backend did not report.
     void toolCallsAreTruthfulRows()

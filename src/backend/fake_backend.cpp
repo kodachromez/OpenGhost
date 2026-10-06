@@ -451,6 +451,21 @@ void FakeBackend::advance()
                               QStringLiteral("Simulated result; no host action"),
                               false});
         }
+        // Fixture thinking, a chunk per tick before the reply's text (no model).
+        static const QStringList thoughts{
+            QStringLiteral("**Reading the message**\nA simulated question; nothing is sent.\n\n"),
+            QStringLiteral("**Planning the reply**\nEcho it back, "),
+            QStringLiteral("as the fake backend always does.")};
+        constexpr int ThoughtTicks = 8; // Each chunk shows for a while.
+        if (scenario == "/fake thinking" && turn.thought < thoughts.size() * ThoughtTicks) {
+            if (turn.thought == 0 && turn.offset == 0)
+                publish(it.key(), *it, turn, MessageStarted{}, true);
+            if (turn.thought % ThoughtTicks == 0)
+                publish(it.key(), *it, turn,
+                        ReasoningDelta{thoughts.at(turn.thought / ThoughtTicks)}, true);
+            ++turn.thought;
+            continue;
+        }
         if (!turn.queue.isEmpty()) {
             if (turn.offset)
                 publish(it.key(), *it, turn, MessageCompleted{turn.response.left(turn.offset), {}},
@@ -462,12 +477,15 @@ void FakeBackend::advance()
             turn.response =
                 QStringLiteral("**Fake steering** applied: ") + turn.steering[client].text;
         }
-        if (turn.offset == 0)
+        if (turn.offset == 0 && turn.thought == 0)
             publish(it.key(), *it, turn, MessageStarted{}, true);
         const QString chunk = turn.response.mid(turn.offset, 5);
         turn.offset += chunk.size();
         publish(it.key(), *it, turn, MessageDelta{chunk}, true);
         if (turn.offset == turn.response.size()) {
+            if (turn.thought > 0)
+                publish(it.key(), *it, turn, ReasoningDelta{thoughts.join(QString()).trimmed(), true},
+                        true);
             publish(it.key(), *it, turn, MessageCompleted{turn.response, {}}, true);
             Usage usage;
             usage.provider = "fake";

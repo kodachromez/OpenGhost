@@ -81,6 +81,22 @@ std::optional<QMap<QString, bool>> pluginsFrom(const QJsonValue &value)
     }
     return plugins;
 }
+std::optional<QMap<QString, QMap<QString, bool>>> optionsFrom(const QJsonValue &value)
+{
+    QMap<QString, QMap<QString, bool>> options;
+    if (value.isUndefined())
+        return options;
+    if (!value.isObject())
+        return std::nullopt;
+    const auto o = value.toObject();
+    for (auto it = o.begin(); it != o.end(); ++it) {
+        const auto plugin = pluginsFrom(it.value());
+        if (it.key().isEmpty() || !it.value().isObject() || !plugin)
+            return std::nullopt;
+        options.insert(it.key(), *plugin);
+    }
+    return options;
+}
 } // namespace
 QString modeName(PermissionMode mode)
 {
@@ -122,12 +138,13 @@ PreferencesStore::PreferencesStore(QString path, QObject *parent)
     const auto mode = parseMode(o.value("mode").toString());
     const auto files = filesFrom(o.value("files"));
     const auto plugins = pluginsFrom(o.value("plugins"));
+    const auto pluginOptions = optionsFrom(o.value("pluginOptions"));
     if (error.error != QJsonParseError::NoError || !document.isObject() ||
         o.value("version").toInt() != 1 || !mode || !o.value("instructions").isString() ||
         o.value("instructions").toString().size() > 8000 || !o.value("provider").isString() ||
         !o.value("model").isString() ||
         (!o.value("thinking").isNull() && !o.value("thinking").isString()) || !files ||
-        !plugins) {
+        !plugins || !pluginOptions) {
         m_error = QStringLiteral("Invalid native preferences; file left unchanged.");
         return;
     }
@@ -139,6 +156,7 @@ PreferencesStore::PreferencesStore(QString path, QObject *parent)
     m_value.userContext.instructions = o.value("instructions").toString();
     m_value.userContext.files = *files;
     m_value.frontendPlugins = *plugins;
+    m_value.frontendPluginOptions = *pluginOptions;
 }
 bool PreferencesStore::fail(const QString &message)
 {
@@ -170,6 +188,17 @@ bool PreferencesStore::save(const Preferences &value)
         for (auto it = value.frontendPlugins.cbegin(); it != value.frontendPlugins.cend(); ++it)
             plugins.insert(it.key(), it.value());
         object.insert("plugins", plugins);
+    }
+    if (!value.frontendPluginOptions.isEmpty()) {
+        QJsonObject options;
+        for (auto it = value.frontendPluginOptions.cbegin(); it != value.frontendPluginOptions.cend();
+             ++it) {
+            QJsonObject plugin;
+            for (auto o = it.value().cbegin(); o != it.value().cend(); ++o)
+                plugin.insert(o.key(), o.value());
+            options.insert(it.key(), plugin);
+        }
+        object.insert("pluginOptions", options);
     }
     if (!m_path.isEmpty()) {
         if (!QDir().mkpath(QFileInfo(m_path).absolutePath()))

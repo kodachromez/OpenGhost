@@ -92,6 +92,7 @@ class PiBackend final : public Backend
         bool clearing = false;
         QStringList queue; // Pi's steering queue, as last reported
         QHash<QString, QString> calls; // tool calls shown this run: id -> name
+        int thought = -1; // the streaming message's latest thinking block (content index)
     };
     // One OpenGhost session and the Pi child running its session file.
     struct Chat {

@@ -175,8 +175,9 @@ class TranscriptModel final : public KeyedModel
     Q_INVOKABLE QVariant edit(const QString &key) const;
     // Anything but a string drops the edit.
     Q_INVOKABLE void setEdit(const QString &key, const QVariant &source);
-    // Opens or shuts a row (a tool card): presentation only, kept by key while
-    // the conversation is shown, whichever renderer draws it.
+    // Opens or shuts a row (a tool card, thinking): presentation only, kept by
+    // key while the conversation is shown, whichever renderer draws it.
+    // Rows of a kind whose renderer starts them the other way drop the toggle.
     Q_INVOKABLE void toggle(int row);
     // Plugin-drawn kinds ("tool"), by kind; none: no row of a kind is drawn
     // by a plugin. Rows already shown are told their selectable texts changed.

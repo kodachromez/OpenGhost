@@ -7,8 +7,12 @@ import OpenGhost.Cpp
 // as small windows of the app itself, painted with that theme's own colours.
 // Picking one spreads the new theme from its window over the whole app
 // (Theme.pick; ThemeReveal draws it). Arrows move round the three and pick.
+// Below them, Chat Settings: what a reply shows besides its text.
 Column {
     id: page
+    // The frontend plugins (FrontendPlugins) whose on/off and options Chat
+    // Settings offers; null shows none of them.
+    property var plugins: null
     readonly property var choices: [
         { id: "light", title: "Light" },
         { id: "dark", title: "Dark" },
@@ -46,6 +50,132 @@ Column {
             const item = children[next]
             item.forceActiveFocus(Qt.TabFocusReason)
             item.pick()
+        }
+    }
+
+    // Chat Settings: each box is a frontend plugin's own saved on/off or
+    // option (FrontendPlugins), applied at once and kept across restarts.
+    // Start Collapsed belongs to Show Thinking: indented under it, and greyed
+    // out and unavailable while thinking is not shown.
+    Column {
+        id: chat
+        objectName: "chatSettings"
+        readonly property var entries: page.plugins ? page.plugins.entries : []
+        readonly property var tools: entries.find(e => e.pluginId === "openghost.tool-calls")
+        readonly property var thinking: entries.find(e => e.pluginId === "openghost.thinking")
+        width: parent.width
+        visible: !!tools || !!thinking
+        topPadding: 28
+        Text {
+            width: parent.width
+            text: "Chat Settings"
+            font.pointSize: Theme.points(15)
+            font.weight: Theme.weight(500)
+            lineHeightMode: Text.FixedHeight
+            lineHeight: 22.5
+            topPadding: Theme.halfLeading(font, 22.5)
+            bottomPadding: -Theme.halfLeading(font, 22.5)
+            color: Theme.text
+            textFormat: Text.PlainText
+        }
+        Item { width: 1; height: 6 }
+        ChatCheck {
+            objectName: "showToolCalls"
+            visible: !!chat.tools
+            text: "Show Tool Calls"
+            checked: !!chat.tools && chat.tools.enabled
+            onClicked: page.plugins.setEnabled(chat.tools.pluginId, !checked)
+        }
+        ChatCheck {
+            objectName: "showThinking"
+            visible: !!chat.thinking
+            text: "Show Thinking"
+            checked: !!chat.thinking && chat.thinking.enabled
+            onClicked: page.plugins.setEnabled(chat.thinking.pluginId, !checked)
+        }
+        ChatCheck {
+            objectName: "startCollapsed"
+            visible: !!chat.thinking
+            indent: 28
+            enabled: !!chat.thinking && chat.thinking.enabled
+            text: "Start Collapsed"
+            checked: !!chat.thinking && !!chat.thinking.options.startCollapsed
+            onClicked: page.plugins.setOption(chat.thinking.pluginId, "startCollapsed", !checked)
+        }
+    }
+
+    // A checkbox row: an 18 px box, the accent with the theme card's check
+    // springing in when checked (as the chosen theme's), the composer's line
+    // when not; its label 14 px beside it. Hover lifts the box's line, the
+    // 2 px focus ring as the cards'; unavailable, half opacity. The state is
+    // the plugin's: a click asks for the change, it is not toggled here.
+    component ChatCheck: AbstractButton {
+        id: check
+        property real indent: 0
+        x: indent
+        width: page.width - indent
+        height: visible ? 32 : 0
+        hoverEnabled: true
+        focusPolicy: Qt.StrongFocus
+        opacity: enabled ? 1 : 0.5
+        Behavior on opacity { enabled: !Theme.reducedMotion; NumberAnimation { duration: 200 } }
+        Accessible.role: Accessible.CheckBox
+        Accessible.checkable: true
+        Accessible.checked: checked
+        Accessible.name: text
+        background: null
+        contentItem: Item {
+            Item {
+                id: box
+                y: (check.height - 18) / 2
+                width: 18
+                height: 18
+                Rectangle {
+                    anchors.fill: parent
+                    anchors.margins: -4
+                    radius: 9
+                    antialiasing: true
+                    visible: check.visualFocus
+                    color: "transparent"
+                    border.width: 2
+                    border.color: Theme.alpha(Theme.fg, 0.35)
+                }
+                Rectangle {
+                    anchors.fill: parent
+                    radius: 5
+                    antialiasing: true
+                    color: check.checked ? Theme.accent : "transparent"
+                    border.width: check.checked ? 0 : 1.5
+                    border.color: check.hovered && check.enabled ? Theme.alpha(Theme.fg, 0.45) : Theme.composerBorder
+                    Behavior on color { enabled: !Theme.reducedMotion; ColorAnimation { duration: 200 } }
+                }
+                PathIcon {
+                    objectName: "checkMark"
+                    anchors.centerIn: parent
+                    width: 11
+                    height: 11
+                    name: "check-small"
+                    color: Theme.onAccent
+                    opacity: check.checked ? 1 : 0
+                    scale: check.checked ? 1 : 0.4
+                    Behavior on opacity { enabled: !Theme.reducedMotion; NumberAnimation { duration: 200 } }
+                    Behavior on scale { enabled: !Theme.reducedMotion; NumberAnimation { duration: 500; easing.type: Easing.Bezier; easing.bezierCurve: [0.34, 1.56, 0.64, 1, 1, 1] } }
+                }
+            }
+            Text {
+                x: 28
+                width: check.width - x
+                y: (check.height - 20) / 2
+                text: check.text
+                font.pointSize: Theme.points(14)
+                lineHeightMode: Text.FixedHeight
+                lineHeight: 20
+                topPadding: Theme.halfLeading(font, 20)
+                bottomPadding: -Theme.halfLeading(font, 20)
+                color: Theme.text
+                elide: Text.ElideRight
+                textFormat: Text.PlainText
+            }
         }
     }
 

@@ -134,6 +134,7 @@ const QStringList Receipts{"queued", "applied", "notApplied", "unconfirmed"};
 // keeps its newest 32 Ki units, a result its first 32 Ki and a notice.
 constexpr qsizetype ToolOutput = 32 * 1024;
 constexpr int ToolCards = 256; // Per turn.
+constexpr qsizetype ThinkingText = 64 * 1024; // A message's thinking, as Ghosty bounds it.
 const QString ToolClipped =
     QStringLiteral("\n\n[Display limit reached; additional text is omitted here.]");
 qsizetype codePoints(QStringView text)
@@ -256,6 +257,12 @@ QJsonArray ChatService::entries(const QVector<DisplayRow> &rows)
             if (!reply.isEmpty() && row.tool.after == reply)
                 o.insert("joined", true);
             break;
+        case DisplayRow::Role::Thinking:
+            // Its reply part is the assistant row after it.
+            o = {{"role", "thinking"}, {"content", row.text}};
+            if (!row.remoteTurn.isEmpty())
+                o.insert("turn", row.remoteTurn);
+            break;
         case DisplayRow::Role::Assistant:
             o = {{"role", "assistant"}, {"content", row.text}};
             if (row.continued)
@@ -286,6 +293,7 @@ QVector<DisplayRow> ChatService::rowsOf(const QJsonArray &saved)
 {
     QVector<DisplayRow> rows;
     QString reply;
+    qsizetype thought = -1; // A thinking row awaiting its reply part.
     for (const auto &value : Library::displayMessages(saved)) {
         const auto o = value.toObject();
         const auto role = o.value("role").toString();
@@ -334,6 +342,10 @@ QVector<DisplayRow> ChatService::rowsOf(const QJsonArray &saved)
             row.state = o.value("state").toString();
             if (row.state == QStringLiteral("running"))
                 row.state = QStringLiteral("unconfirmed");
+        } else if (role == "thinking") {
+            row.role = DisplayRow::Role::Thinking;
+            row.text = o.value("content").toString();
+            row.remoteTurn = o.value("turn").toString();
         } else if (role == "moved") {
             row.role = DisplayRow::Role::Moved;
             row.text = QStringLiteral("Caught up with the main chat");
@@ -342,8 +354,12 @@ QVector<DisplayRow> ChatService::rowsOf(const QJsonArray &saved)
             row.hidden = true;
             row.raw = o;
         }
-        if (row.role == DisplayRow::Role::Assistant)
+        if (row.role == DisplayRow::Role::Assistant) {
             reply = row.key;
+            if (thought >= 0)
+                rows[thought].tool.after = row.key;
+        }
+        thought = row.role == DisplayRow::Role::Thinking ? rows.size() : -1;
         rows.append(row);
     }
     return rows;
@@ -1134,6 +1150,65 @@ DisplayRow *ChatService::addTool(ChatRecord &chat, const QString &callId, const 
     turn.continued = true;
     return &chat.rows.last();
 }
+// A message's thinking row, made on its first thinking just above the reply
+// part its text goes to. When that part already shows another message's text,
+// this message's reply goes on in a new part below its thinking instead.
+DisplayRow *ChatService::thinkingRow(ChatRecord &chat, ChatRecord::Turn::Message &message,
+                                     bool replace)
+{
+    const auto find = [&](const QString &key) {
+        return std::find_if(chat.rows.begin(), chat.rows.end(),
+                            [&](const auto &r) { return r.key == key; });
+    };
+    if (!message.thought.isEmpty())
+        if (const auto row = find(message.thought); row != chat.rows.end())
+            return &*row;
+    auto &turn = chat.turn;
+    const auto part = find(message.rowKey);
+    if (part == chat.rows.end())
+        return nullptr;
+    DisplayRow row{DisplayRow::Role::Thinking,
+                   uuid(),
+                   {},
+                   replace ? QStringLiteral("done") : QStringLiteral("live"),
+                   {},
+                   {},
+                   {},
+                   -1,
+                   -1};
+    row.backendTurn = turn.clientId;
+    row.remoteTurn = turn.remoteId;
+    message.thought = row.key;
+    const bool shared = std::any_of(turn.messages.cbegin(), turn.messages.cend(), [&](const auto &m) {
+        return m.rowKey == message.rowKey && m.id != message.id && !m.text.trimmed().isEmpty();
+    });
+    if (!shared) {
+        row.tool.after = part->key;
+        return &*chat.rows.insert(part, row);
+    }
+    DisplayRow next{DisplayRow::Role::Assistant, uuid(), {}, QStringLiteral("live"), {}, {}, {}, -1, -1};
+    next.backendTurn = part->backendTurn;
+    next.remoteTurn = part->remoteTurn;
+    next.model = part->model;
+    next.pendingTurn = part->pendingTurn;
+    next.continued = true;
+    if (turn.replyKey == message.rowKey)
+        turn.replyKey = next.key;
+    message.rowKey = next.key;
+    row.tool.after = next.key;
+    chat.rows.append(row);
+    chat.rows.append(next);
+    publishReply(chat);
+    return &chat.rows[chat.rows.size() - 2];
+}
+// The turn's thinking so far is done: its message went on to text or calls.
+void ChatService::settleThinking(ChatRecord &chat)
+{
+    for (auto &row : chat.rows)
+        if (row.role == DisplayRow::Role::Thinking && row.backendTurn == chat.turn.clientId &&
+            row.state == QStringLiteral("live"))
+            row.state = QStringLiteral("done");
+}
 void ChatService::event(const SessionEvent &event)
 {
     const auto &id = event.identity;
@@ -1278,6 +1353,7 @@ void ChatService::applyEvent(ChatRecord &chat, const SessionEvent &event, bool r
         return id.messageId && m.id == *id.messageId;
     });
     const bool messageOnly = std::holds_alternative<MessageDelta>(event.payload) ||
+                             std::holds_alternative<ReasoningDelta>(event.payload) ||
                              std::holds_alternative<MessageCompleted>(event.payload);
     if (!id.turnId && (!messageOnly || message == turn.messages.end()))
         return;
@@ -1314,14 +1390,32 @@ void ChatService::applyEvent(ChatRecord &chat, const SessionEvent &event, bool r
         if (message == turn.messages.end() || message->sealed)
             return;
         message->text += delta->text;
+        if (!delta->text.trimmed().isEmpty())
+            settleThinking(chat);
         publishReply(chat);
         emit answered();
+    } else if (const auto *thought = std::get_if<ReasoningDelta>(&event.payload)) {
+        // Kept whether or not a renderer shows it; never model input.
+        if (message == turn.messages.end() || message->sealed || thought->text.isEmpty())
+            return;
+        auto *row = thinkingRow(chat, *message, thought->replace);
+        if (!row)
+            return;
+        QString text = thought->replace ? thought->text : row->text + thought->text;
+        if (text.size() > ThinkingText)
+            text.truncate(text.at(ThinkingText - 1).isHighSurrogate() ? ThinkingText - 1
+                                                                      : ThinkingText);
+        row->text = text;
+        if (!thought->replace)
+            row->state = QStringLiteral("live");
+        emit worked();
     } else if (const auto *done = std::get_if<MessageCompleted>(&event.payload)) {
         if (message == turn.messages.end() || message->sealed)
             return;
         if (done->text)
             message->text = *done->text; // including an authoritative empty string
         message->sealed = true;
+        settleThinking(chat);
         if (done->finishReason)
             turn.finishReason = *done->finishReason;
         publishReply(chat);
@@ -1344,6 +1438,7 @@ void ChatService::applyEvent(ChatRecord &chat, const SessionEvent &event, bool r
             row->tool.known = tool->arguments.has_value();
             row->tool.arguments = tool->arguments.value_or(QString());
         }
+        settleThinking(chat);
         turn.activity = tool->title.value_or(tool->name);
         emit worked();
     } else if (const auto *progress = std::get_if<ToolProgress>(&event.payload)) {

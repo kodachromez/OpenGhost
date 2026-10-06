@@ -50,6 +50,7 @@ void FrontendPluginContext::clearVisible(const QString &target)
         emit m_owner->visibilityChanged();
 }
 void FrontendPluginContext::update() { emit m_owner->entriesChanged(); }
+bool FrontendPluginContext::option(const QString &key) const { return m_owner->option(m_id, key); }
 
 FrontendPlugins::FrontendPlugins(PreferencesStore *store, QObject *parent)
     : QObject(parent), m_store(store)
@@ -134,6 +135,35 @@ bool FrontendPlugins::enabled(const QString &id) const
     const auto *slot = find(id);
     return slot && slot->context;
 }
+bool FrontendPlugins::option(const QString &id, const QString &key) const
+{
+    const auto *slot = find(id);
+    if (!slot || !slot->info.options.contains(key))
+        return false;
+    const auto &saved = m_store ? m_store->value().frontendPluginOptions : m_options;
+    return saved.value(id).value(key, slot->info.options.value(key));
+}
+bool FrontendPlugins::setOption(const QString &id, const QString &key, bool value)
+{
+    const auto *slot = find(id);
+    if (!slot || !slot->info.options.contains(key))
+        return false;
+    if (option(id, key) == value)
+        return true;
+    if (m_store) {
+        auto preferences = m_store->value();
+        preferences.frontendPluginOptions[id].insert(key, value);
+        if (!m_store->save(preferences))
+            return false; // The store says why; the option stays as it was.
+    } else {
+        m_options[id].insert(key, value);
+    }
+    emit entriesChanged();
+    // The plugin may have gone while Settings listened.
+    if (auto *current = find(id); current && current->context)
+        current->plugin->optionChanged(key);
+    return true;
+}
 void FrontendPlugins::start(Slot &slot)
 {
     slot.context.reset(new FrontendPluginContext(this, slot.info.id));
@@ -168,12 +198,18 @@ void FrontendPlugins::stop(Slot &slot, bool notify)
 QVariantList FrontendPlugins::entries() const
 {
     QVariantList list;
-    for (const auto &slot : m_slots)
+    for (const auto &slot : m_slots) {
+        QVariantMap options;
+        for (auto it = slot->info.options.cbegin(); it != slot->info.options.cend(); ++it)
+            options.insert(it.key(), option(slot->info.id, it.key()));
         list.append(QVariantMap{{"pluginId", slot->info.id},
                                 {"name", slot->info.name},
                                 {"description", slot->info.description},
                                 {"status", slot->plugin->status()},
-                                {"enabled", bool(slot->context)}});
+                                {"enabled", bool(slot->context)},
+                                {"placement", slot->info.placement},
+                                {"options", options}});
+    }
     return list;
 }
 QVariantMap FrontendPlugins::visibility() const

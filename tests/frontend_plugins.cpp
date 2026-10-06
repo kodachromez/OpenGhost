@@ -41,6 +41,32 @@ class Probe final : public FrontendPlugin
     std::function<void()> onEvent;
 };
 FrontendEvent changed() { return {events::ChatChanged, "s1", {}}; }
+// A plugin with an option, offered under Appearance → Chat Settings.
+class Optioned final : public FrontendPlugin
+{
+  public:
+    FrontendPluginInfo info() const override
+    {
+        FrontendPluginInfo info{"o", "Optioned", {}, true};
+        info.placement = "chat";
+        info.options.insert("shut", true);
+        return info;
+    }
+    void enable(FrontendPluginContext &context) override
+    {
+        m_context = &context;
+        seen = context.option("shut");
+    }
+    void disable() override { m_context = nullptr; }
+    void optionChanged(const QString &key) override
+    {
+        changes.append(key);
+        seen = m_context->option(key);
+    }
+    FrontendPluginContext *m_context = nullptr;
+    bool seen = false;
+    QStringList changes;
+};
 } // namespace
 
 class FrontendPluginsTest final : public QObject
@@ -218,6 +244,63 @@ class FrontendPluginsTest final : public QObject
         plugins.remove("b");
         QVERIFY(plugins.setEnabled("a", false));
         QCOMPARE(store.value().frontendPlugins, (QMap<QString, bool>{{"a", false}, {"b", false}}));
+    }
+    void optionsAreSavedAndToldOnlyWhileOn()
+    {
+        QTemporaryDir dir;
+        const auto path = dir.filePath("preferences.json");
+        {
+            PreferencesStore store(path);
+            FrontendPlugins plugins(&store);
+            auto owned = std::make_unique<Optioned>();
+            auto *plugin = owned.get();
+            plugins.add(std::move(owned));
+            QVERIFY(plugin->seen && plugins.option("o", "shut"));
+            const auto entry = plugins.entries().value(0).toMap();
+            QCOMPARE(entry.value("placement").toString(), QStringLiteral("chat"));
+            QCOMPARE(entry.value("options").toMap(), (QVariantMap{{"shut", true}}));
+            QVERIFY(!plugins.setOption("o", "other", false)); // undeclared
+            QVERIFY(!plugins.setOption("x", "shut", false));  // unknown plugin
+            QVERIFY(!plugins.option("o", "other"));
+            QVERIFY(!QFile::exists(path));
+            QSignalSpy entries(&plugins, &FrontendPlugins::entriesChanged);
+            QVERIFY(plugins.setOption("o", "shut", false));
+            QCOMPARE(plugin->changes, QStringList{"shut"});
+            QVERIFY(!plugin->seen && entries.count() == 1);
+            QVERIFY(!plugins.entries().value(0).toMap().value("options").toMap().value("shut").toBool());
+            QVERIFY(plugins.setOption("o", "shut", false)); // unchanged: not told again
+            QCOMPARE(plugin->changes.size(), 1);
+            // Off: kept and settable, but the plugin is not told.
+            QVERIFY(plugins.setEnabled("o", false));
+            QVERIFY(plugins.setOption("o", "shut", true));
+            QCOMPARE(plugin->changes.size(), 1);
+            QVERIFY(plugins.setOption("o", "shut", false));
+        }
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const auto saved = QJsonDocument::fromJson(file.readAll()).object();
+        QCOMPARE(saved.value("plugins").toObject(), (QJsonObject{{"o", false}}));
+        QCOMPARE(saved.value("pluginOptions").toObject(),
+                 (QJsonObject{{"o", QJsonObject{{"shut", false}}}}));
+        file.close();
+        // A restart reads both back; the plugin starts with its saved option.
+        {
+            PreferencesStore store(path);
+            QVERIFY(store.error().isEmpty());
+            FrontendPlugins plugins(&store);
+            auto owned = std::make_unique<Optioned>();
+            auto *plugin = owned.get();
+            plugins.add(std::move(owned));
+            QVERIFY(!plugins.enabled("o") && !plugins.option("o", "shut"));
+            QVERIFY(plugins.setEnabled("o", true) && !plugin->seen);
+        }
+        // Malformed options are refused, never guessed.
+        QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        file.write(R"({"version":1,"provider":"","model":"","thinking":null,"mode":"ask",)"
+                   R"("instructions":"","pluginOptions":{"o":{"shut":"no"}}})");
+        file.close();
+        PreferencesStore invalid(path);
+        QVERIFY(!invalid.error().isEmpty());
     }
     void unsavedChoiceChangesNothing()
     {

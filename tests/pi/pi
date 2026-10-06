@@ -2,7 +2,9 @@
 # A scripted stand-in for `pi --mode rpc` (test only): the RPC records PiBackend
 # relies on, shaped as Pi 1.0.4 emits them. No model, network or credentials.
 # The prompt text picks the run: reject, handled, fail, length, tools, toolcards
-# (tool calls with output and results), toolslow (a call left running), slow,
+# (tool calls with output and results), toolslow (a call left running), thinks
+# (messages that think aloud, one block redacted), thinkcut (thinking, then a call
+# left running), slow,
 # delay, switch (an extension changes the model); anything else is echoed. While "slow" runs, steers queue; a steer
 # approve: a tool call a stand-in Pi permission plugin asks the user about, in
 # every mode (it allows the waiting one itself once the mode turns full); foreign: another extension's select dialog; ext-error: an extension fails.
@@ -138,6 +140,40 @@ def tool_message(text, calls, spent=None):
     last_stop = "toolUse"
 
 
+def think_message(thoughts, text, calls=(), spent=None):
+    """An assistant message that thinks first, streamed as Pi's RPC does:
+    thinking blocks by contentIndex (a redacted one streams nothing), its text,
+    then its tool calls whole. thoughts: [str, or None for a redacted block]."""
+    global last_stop
+    stop = "toolUse" if calls else "stop"
+    blocks = [{"type": "thinking", "thinking": t, "thinkingSignature": "sig"} if t is not None
+              else {"type": "thinking", "thinking": "", "thinkingSignature": "opaque", "redacted": True}
+              for t in thoughts]
+    blocks += [{"type": "text", "text": text}] if text else []
+    blocks += [{"type": "toolCall", "id": c[0], "name": c[1], "arguments": c[2]} for c in calls]
+    message = {"role": "assistant", "content": blocks, "api": "fake", "provider": selected()[0],
+               "model": selected()[1], "usage": spent or usage(0, 0), "stopReason": stop,
+               "timestamp": 0}
+    out({"type": "message_start", "message": dict(message, content=[], stopReason="pending")})
+    for index, block in enumerate(blocks):
+        event = None
+        if block["type"] == "thinking" and not block.get("redacted"):
+            out({"type": "message_update", "usage": message["usage"], "assistantMessageEvent": {
+                "type": "thinking_start", "contentIndex": index}})
+            half = len(block["thinking"]) // 2
+            for part in (block["thinking"][:half], block["thinking"][half:]):
+                out({"type": "message_update", "usage": message["usage"], "assistantMessageEvent": {
+                    "type": "thinking_delta", "contentIndex": index, "delta": part}})
+            event = {"type": "thinking_end", "contentIndex": index, "content": block["thinking"]}
+        elif block["type"] == "text":
+            event = {"type": "text_delta", "contentIndex": index, "delta": text}
+        if event:
+            out({"type": "message_update", "usage": message["usage"], "assistantMessageEvent": event})
+    out({"type": "message_end", "message": message})
+    append({"type": "message", "message": message})
+    last_stop = stop
+
+
 def tool_event(kind, cid, name, **fields):
     out(dict({"type": "tool_execution_" + kind, "toolCallId": cid, "toolName": name}, **fields))
 
@@ -222,6 +258,21 @@ def run(text, images=None):
         tool_result("call-a", "bash", "a\nb\n", False)
         tool_result("call-b", "read", "ENOENT: notes.md", True)
         assistant("All done.", "stop", usage(50, 5))
+    elif text == "thinks":
+        # Thinking (a redacted block too), text and a call; then thinking and the reply.
+        bash = {"command": "pwd"}
+        think_message(["**Plan**\nLook first.", None], "Let me look.", [("call-t", "bash", bash)],
+                      usage(20, 2))
+        tool_event("start", "call-t", "bash", args=bash)
+        tool_event("end", "call-t", "bash", isError=False,
+                   result={"content": [{"type": "text", "text": "/tmp\n"}], "details": {}})
+        tool_result("call-t", "bash", "/tmp\n", False)
+        think_message(["Wrap up."], "Done.", (), usage(30, 3))
+    elif text == "thinkcut":  # Thinking, then a call still running when OpenGhost exits.
+        bash = {"command": "sleep 60"}
+        think_message(["Run it."], "", [("call-c", "bash", bash)], usage(10, 1))
+        tool_event("start", "call-c", "bash", args=bash)
+        return
     elif text == "toolslow":  # A call still running: Stop, or OpenGhost exits.
         bash = {"command": "sleep 60"}
         tool_message("", [("call-s", "bash", bash)], usage(10, 1))

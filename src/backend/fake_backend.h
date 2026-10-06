@@ -29,6 +29,7 @@ class FakeBackend final : public Backend
         QVector<QString> queue;
         RequestId approval = 0;
         bool approvalDone = false;
+        int thought = 0; // "/fake thinking": ticks spent thinking so far.
     };
     struct Session {
         QString version, active;

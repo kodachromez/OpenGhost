@@ -96,13 +96,13 @@ QML resource namespaces are `OpenGhost.Ui` and `OpenGhost.Cpp`.
 - Custom mascot splash/images/font, alternate/ripple/happy-motion assets,
   splash selector, extra Model/Notifications settings tabs, execution-backend
   settings, voice controls, slash helper and an added Stop button. Stop is Escape.
-- Subagent/thinking transcript panels, startup service/workspace picker and
+- Subagent transcript panels, startup service/workspace picker and
   Recover/Abandon & Delete banner. The reference's `chat.js::applyEvent` tracks
   tool status/working ghost, not tool-result cards. Approval cards and model
-  thinking-level selection remain; reasoning events are not drawn.
+  thinking-level selection remain.
 - **Approved exception: tool-call cards, as the Tool Calls frontend plugin**
-  (`plugins/tool_calls/`, `OPENGHOST_TOOL_CALLS`, default ON; Settings → Plugins,
-  on by default). Ghosty's ordinary `ToolCard.qml`/`toolcard.*` and its tool
+  (`plugins/tool_calls/`, `OPENGHOST_TOOL_CALLS`, default ON; Settings →
+  Appearance → Chat Settings → Show Tool Calls, on by default). Ghosty's ordinary `ToolCard.qml`/`toolcard.*` and its tool
   entrance motion draw the transcript's `tool` rows through the frontend plugin
   SDK's row renderer hook ([frontend plugins](frontend-plugins.md)). Its
   subagent activity panel is not imported. With the plugin off (or not built)
@@ -111,6 +111,12 @@ QML resource namespaces are `OpenGhost.Ui` and `OpenGhost.Cpp`.
   `tool_execution_*` and saved `toolResult` messages) are kept by
   `ChatService` and the display cache either way. QML namespace:
   `OpenGhost.ToolCalls` (`ToolText`); the cards are in `OpenGhost.Ui`.
+- **Approved exception: model thinking, as the Thinking frontend plugin**
+  (`plugins/thinking/`, always built; Settings → Appearance → Chat Settings →
+  Show Thinking and Start Collapsed, both on by default). Ghosty's thinking
+  row (`native-ghosty/qml/ChatEntry.qml`) draws the transcript's `thinking`
+  rows, kept by `ChatService` from Pi's thinking events either way. Off, they
+  are not drawn and replies read as before.
 - No mini-chat dialog, password lock screen, add-folder picker, broader
   plus-menu operations or visual diagram form editor. Mini/lock/folder
   **state** exists; that does not imply those views are ported.

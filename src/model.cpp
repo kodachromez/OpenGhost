@@ -6,7 +6,7 @@ constexpr int SessionBlocks = 32;
 
 QString kindName(Entry::Kind kind)
 {
-    static const char *const kinds[] = {"user", "assistant", "note", "tool"};
+    static const char *const kinds[] = {"user", "assistant", "note", "tool", "thinking"};
     return QString::fromLatin1(kinds[kind]);
 }
 
@@ -179,6 +179,13 @@ void TranscriptModel::toggle(int row)
 
 void TranscriptModel::setRenderers(QHash<QString, Renderer> renderers)
 {
+    // A kind that now starts the other way: its rows all follow the new way.
+    for (const auto &entry : std::as_const(m_rows)) {
+        const auto kind = kindName(entry.kind);
+        if (m_renderers.contains(kind) && renderers.contains(kind) &&
+            m_renderers.value(kind).startExpanded != renderers.value(kind).startExpanded)
+            m_toggled.remove(entry.key);
+    }
     m_renderers = std::move(renderers);
     if (!m_rows.isEmpty())
         emit dataChanged(index(0), index(int(m_rows.size()) - 1),

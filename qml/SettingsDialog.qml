@@ -15,6 +15,8 @@ Popup {
     readonly property var login: settings.login
     property string page: "general"
     readonly property bool pluginsShown: frontend.runtimePlugins || frontend.frontendPlugins.count > 0
+    // Frontend plugins whose on/off the Plugins page offers (placement "").
+    readonly property var listedPlugins: frontend.frontendPlugins.entries.filter(e => !e.placement)
     // Every tab, created once: the Plugins tab is hidden rather than destroyed.
     // Qt's software Shape node reads its item while the render thread draws, so
     // a tab icon must not be deleted while Settings is open.
@@ -443,14 +445,24 @@ Popup {
                                     }
                                 }
                             }
+                            // None to list here: those Appearance offers are said to be there.
+                            SettingsRow {
+                                objectName: "pluginsElsewhere"
+                                first: true
+                                visible: !dialog.frontend.runtimePlugins && dialog.listedPlugins.length === 0
+                                label: "Plugins"
+                                hint: "No other plugins are installed. Tool calls and thinking are set in Appearance → Chat Settings."
+                            }
                             // Frontend plugins: on/off applies at once and is saved locally.
                             // Delegates follow the count, so a status update keeps focus.
+                            // Those whose on/off Appearance → Chat Settings offers are not
+                            // offered again here.
                             Repeater {
-                                model: dialog.frontend.frontendPlugins.count
+                                model: dialog.listedPlugins.length
                                 delegate: SettingsRow {
                                     id: frontendPlugin
                                     required property int index
-                                    readonly property var entry: dialog.frontend.frontendPlugins.entries[index] ?? {}
+                                    readonly property var entry: dialog.listedPlugins[index] ?? {}
                                     objectName: "frontendPlugin-" + (entry.pluginId ?? "")
                                     width: pluginsPage.width
                                     first: index === 0 && !dialog.frontend.runtimePlugins
@@ -477,6 +489,7 @@ Popup {
                         AppearancePage {
                             id: appearancePage
                             width: parent.width
+                            plugins: dialog.frontend.frontendPlugins
                             visible: dialog.page === "appearance"
                         }
                     }
