@@ -362,8 +362,24 @@ export class PermissionManager implements ScopedPermissionManager {
     intent: ResolvedAccessIntent,
     sessionRules?: Ruleset,
   ): PermissionCheckResult {
+    // An explicit deny always wins (OpenGhost fork). Session approvals compose
+    // after config, so last-match-wins would let a session grant whose pattern
+    // covers a denied call allow it. The policy without them is asked first:
+    // a deny it reaches from a config or built-in rule holds, and session
+    // approvals only take the place of asks and the mode's defaults.
+    if (sessionRules?.length) {
+      const policy = this.checkRules(intent, []);
+      if (policy.state === "deny" && policy.origin !== "mode") return policy;
+    }
+    return this.checkRules(intent, sessionRules ?? []);
+  }
+
+  private checkRules(
+    intent: ResolvedAccessIntent,
+    sessionRules: Ruleset,
+  ): PermissionCheckResult {
     const { composedRules } = this.resolvePermissions(intent.agentName);
-    const composedWithSession: Ruleset = sessionRules?.length
+    const composedWithSession: Ruleset = sessionRules.length
       ? [...composedRules, ...sessionRules]
       : composedRules;
     // Apply the full access rewrite post-cache so the resolved-permissions cache and

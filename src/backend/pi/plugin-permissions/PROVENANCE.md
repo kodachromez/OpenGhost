@@ -52,6 +52,13 @@ Of 168 donor source files, 123 are byte-for-byte unchanged, 40 were adapted and
   card inside the fail-closed boundary.
 - `src/policy/permission-manager.ts`: an optional `getModeLayer` composed after the
   synthesized defaults and before config, keyed into the resolved-rules cache.
+  An explicit deny always wins: `check` asks the policy without session rules
+  first, and a deny it reaches from a config or built-in rule holds, so a
+  session approval never overrides it (upstream composed session rules last,
+  letting a grant whose pattern covered a denied call allow it). The upstream
+  tests asserting that override (`test/policy/permission-manager-unified.test.ts`)
+  now assert the deny; Ask, Auto and Full are covered in
+  `test/openghost/modes.test.ts`.
 - `src/policy/rule.ts`: origin `mode`; the yolo origin and rewrite renamed
   `full_access` / `rewriteAsksForFullAccess`.
 - `src/authority/local-user-authorizer.ts`, `src/authority/authorizer.ts`: the
@@ -78,9 +85,5 @@ human authority), `presentation.ts` (the card's wording, OpenGhost 1.3's),
 
 ## Retained upstream behavior worth knowing
 
-- A session approval composes after config, so a grant the user made covers a
-  command an operator `deny` would refuse when its pattern covers it (upstream
-  tests "session rule ... overrides config deny"). Pinned in
-  `test/openghost/modes.test.ts`.
 - Durable "always allow" is not offered: upstream parks durable approvals on
   issue #799. Persistent policy is the config files.

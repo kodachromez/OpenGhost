@@ -404,24 +404,65 @@ describe("approvals", () => {
     expect((await fresh.bash("touch c.txt")).verdict).toBe("ask");
   });
 
-  // Retained upstream semantics (permission-manager-unified.test.ts: "session
-  // rule ... overrides config deny"): session rules compose after config, so a
-  // grant the user made on the card, whose pattern the card named, covers a
-  // command an operator rule denies. Pinned so a change here is deliberate.
-  it("a session approval the user made outranks a config deny it covers", async () => {
-    writeConfig({ permission: { bash: { "*": "ask", "touch secret*": "deny" } } });
-    const s = await session("ask");
-    expect((await s.bash("touch secret.txt")).verdict).toBe("block");
-    s.answerWith(async (card) => {
-      const handle = (globalThis as Record<symbol, unknown>)[
-        Symbol.for("openghost:plugin-permissions")
-      ] as { choose(id: string, choice: unknown): boolean };
-      handle.choose(card.approvalId, { action: "approveSession" });
-      return true;
-    });
-    expect((await s.bash("touch a.txt")).verdict).toBe("ask");
-    expect((await s.bash("touch secret.txt")).verdict).toBe("allow");
-  });
+  // An explicit deny always wins: a session approval suppresses later asks
+  // but never overrides a deny rule, whatever the mode (upstream let a
+  // session grant whose pattern covered a denied command allow it).
+  describe.each(["ask", "auto", "full"] as const)(
+    "a session approval never overrides a config deny in %s",
+    (mode) => {
+      const approveSession = (s: Awaited<ReturnType<typeof session>>): void =>
+        s.answerWith(async (card) => {
+          const handle = (globalThis as Record<symbol, unknown>)[
+            Symbol.for("openghost:plugin-permissions")
+          ] as { choose(id: string, choice: unknown): boolean };
+          expect(handle.choose(card.approvalId, { action: "approveSession" })).toBe(true);
+          return true;
+        });
+
+      it("a command", async () => {
+        writeConfig({ permission: { bash: { "touch secret*": "deny" } } });
+        const s = await session("ask");
+        approveSession(s);
+        // The card's grant ("touch *") covers the denied command.
+        expect((await s.bash("touch a.txt")).verdict).toBe("ask");
+        s.answerWith(async () => true);
+        s.events.emit("openghost:mode", { mode, seq: 2 });
+        const before = s.cards.length;
+        expect((await s.bash("touch b.txt")).verdict).toBe("allow");
+        const denied = await s.bash("touch secret.txt");
+        expect(denied.verdict).toBe("block");
+        expect(s.cards.length).toBe(before);
+        // Chained behind an approved unit, it is still refused.
+        expect((await s.bash("touch c.txt && touch secret.txt")).verdict).toBe("block");
+      });
+
+      it("a file", async () => {
+        writeConfig({ permission: { write: { "*secret*": "deny" } } });
+        const s = await session("ask");
+        approveSession(s);
+        expect((await s.call("write", { path: "a.txt", content: "x" })).verdict).toBe("ask");
+        s.answerWith(async () => true);
+        s.events.emit("openghost:mode", { mode, seq: 2 });
+        const before = s.cards.length;
+        expect((await s.call("write", { path: "b.txt", content: "x" })).verdict).toBe("allow");
+        expect(
+          (await s.call("write", { path: "secret.txt", content: "x" })).verdict,
+        ).toBe("block");
+        expect(s.cards.length).toBe(before);
+      });
+
+      it("a grant made in the mode itself", async () => {
+        writeConfig({ permission: { bash: { "*": "ask", "touch secret*": "deny" } } });
+        const s = await session(mode);
+        approveSession(s);
+        const first = await s.bash("touch a.txt");
+        // Full never asks, so there is nothing to grant; the deny holds alike.
+        expect(first.verdict).toBe(mode === "full" ? "allow" : "ask");
+        s.answerWith(async () => true);
+        expect((await s.bash("touch secret.txt")).verdict).toBe("block");
+      });
+    },
+  );
 
   it("a persistent operator rule refines the mode", async () => {
     writeConfig({ permission: { bash: { "npm test": "allow" } } });

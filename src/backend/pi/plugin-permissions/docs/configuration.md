@@ -41,9 +41,13 @@ For each check the plugin composes, lowest precedence first:
 3. the global, project and per-agent rules, in that order;
 4. the session's approvals.
 
-Within a surface the last matching rule wins. So an operator rule refines the
+Within a surface the last matching rule wins, with one exception: **an explicit
+deny always wins.** A call the files (or the universal fallback) deny is denied
+even when a session approval's pattern covers it; session approvals only take
+the place of asks and the mode's defaults. So an operator rule refines the
 mode (`"bash": {"npm test": "allow"}` stops Ask asking about `npm test`), and a
-`deny` in the files holds in every mode, Full included. Under **Full** every
+`deny` in the files holds in every mode, Full included, and after any session
+approval. Under **Full** every
 resulting `ask` becomes `allow` (the donor's composition-stage rewrite); a
 `deny` and the fail-closed clamp are untouched.
 

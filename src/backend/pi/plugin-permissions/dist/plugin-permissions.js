@@ -30105,8 +30105,15 @@ var PermissionManager = class {
    * `no-restricted-imports` lint rule on this file.
    */
   check(intent, sessionRules) {
+    if (sessionRules?.length) {
+      const policy = this.checkRules(intent, []);
+      if (policy.state === "deny" && policy.origin !== "mode") return policy;
+    }
+    return this.checkRules(intent, sessionRules ?? []);
+  }
+  checkRules(intent, sessionRules) {
     const { composedRules } = this.resolvePermissions(intent.agentName);
-    const composedWithSession = sessionRules?.length ? [...composedRules, ...sessionRules] : composedRules;
+    const composedWithSession = sessionRules.length ? [...composedRules, ...sessionRules] : composedRules;
     const fullRules = this.isFullAccess() ? rewriteAsksForFullAccess(composedWithSession) : composedWithSession;
     if (intent.kind === "path-values") {
       const lookupValues = intent.values.length > 0 ? [...intent.values] : ["*"];

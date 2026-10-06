@@ -1014,14 +1014,14 @@ describe("PermissionManager with in-memory PolicyLoader", () => {
   });
 
   describe("session rule composition", () => {
-    it("session rule wins over config", () => {
+    it("a session rule never overrides a config deny (OpenGhost fork)", () => {
       const manager = createInMemoryManager({
         global: { permission: { "*": "deny" } },
       });
       const sessionRules: Ruleset = [sessionRule("read", "*")];
       const result = checkTool(manager, "read", {}, undefined, sessionRules);
-      expect(result.state).toBe("allow");
-      expect(result.source).toBe("session");
+      expect(result.state).toBe("deny");
+      expect(result.source).not.toBe("session");
     });
 
     it("session rule does not bleed across surfaces", () => {
@@ -1247,7 +1247,7 @@ describe("checkPermission — per-tool path patterns", () => {
     }
   });
 
-  it("session rule for specific path overrides config deny", () => {
+  it("session rule for specific path never overrides config deny (OpenGhost fork)", () => {
     const { manager, cleanup } = createManagerWithConfig({
       read: { "*": "allow", "*.env": "deny" },
     });
@@ -1261,8 +1261,8 @@ describe("checkPermission — per-tool path patterns", () => {
         undefined,
         sessionRules,
       );
-      expect(result.state).toBe("allow");
-      expect(result.source).toBe("session");
+      expect(result.state).toBe("deny");
+      expect(result.matchedPattern).toBe("*.env");
     } finally {
       cleanup();
     }
@@ -1354,7 +1354,7 @@ describe("cross-cutting path surface", () => {
     }
   });
 
-  it("session approval on path surface overrides config deny", () => {
+  it("session approval on path surface never overrides config deny (OpenGhost fork)", () => {
     const { manager, cleanup } = createManagerWithConfig({
       path: { "*": "allow", "*.env": "deny" },
     });
@@ -1368,8 +1368,8 @@ describe("cross-cutting path surface", () => {
         undefined,
         sessionRules,
       );
-      expect(result.state).toBe("allow");
-      expect(result.source).toBe("session");
+      expect(result.state).toBe("deny");
+      expect(result.matchedPattern).toBe("*.env");
     } finally {
       cleanup();
     }
@@ -3052,7 +3052,7 @@ test("session rules for one surface do not affect checks on other surfaces", () 
   }
 });
 
-test("session rules override config deny for external_directory", () => {
+test("session rules never override config deny for external_directory (OpenGhost fork)", () => {
   const { manager, cleanup } = createManager({
     permission: { "*": "allow", external_directory: "deny" },
   });
@@ -3070,8 +3070,8 @@ test("session rules override config deny for external_directory", () => {
       undefined,
       sessionRules,
     );
-    expect(result.state).toBe("allow");
-    expect(result.source).toBe("session");
+    expect(result.state).toBe("deny");
+    expect(result.source).not.toBe("session");
   } finally {
     cleanup();
   }
@@ -3380,7 +3380,7 @@ describe("checkPathPolicy", () => {
     }
   });
 
-  it("applies session rules over config", () => {
+  it("never applies session rules over a config deny (OpenGhost fork)", () => {
     const { manager, cleanup } = createManagerWithConfig({
       path: { "*": "ask", "src/*": "deny" },
     });
@@ -3392,8 +3392,8 @@ describe("checkPathPolicy", () => {
         undefined,
         sessionRules,
       );
-      expect(result.state).toBe("allow");
-      expect(result.source).toBe("session");
+      expect(result.state).toBe("deny");
+      expect(result.source).not.toBe("session");
     } finally {
       cleanup();
     }
@@ -3491,7 +3491,7 @@ describe("check — tool intent", () => {
     }
   });
 
-  it("applies session rules via the tool intent", () => {
+  it("never applies session rules over a config deny via the tool intent (OpenGhost fork)", () => {
     const { manager, cleanup } = createManagerWithConfig({
       bash: { "*": "deny" },
     });
@@ -3503,8 +3503,8 @@ describe("check — tool intent", () => {
         input: { command: "echo hello" },
       };
       const result = manager.check(intent, sessionRules);
-      expect(result.state).toBe("allow");
-      expect(result.source).toBe("session");
+      expect(result.state).toBe("deny");
+      expect(result.source).not.toBe("session");
     } finally {
       cleanup();
     }
@@ -3593,7 +3593,7 @@ describe("check — path-values intent", () => {
     }
   });
 
-  it("applies session rules via the path-values intent", () => {
+  it("never applies session rules over a config deny via the path-values intent (OpenGhost fork)", () => {
     const { manager, cleanup } = createManagerWithConfig({
       path: { "*": "ask", "src/*": "deny" },
     });
@@ -3605,8 +3605,8 @@ describe("check — path-values intent", () => {
         values: ["src/App.jsx"],
       };
       const result = manager.check(intent, sessionRules);
-      expect(result.state).toBe("allow");
-      expect(result.source).toBe("session");
+      expect(result.state).toBe("deny");
+      expect(result.source).not.toBe("session");
     } finally {
       cleanup();
     }
@@ -3758,7 +3758,7 @@ describe("mcp surface — last-match-wins across candidates", () => {
   });
 
   describe("session grants", () => {
-    it("honors a session grant matching a later candidate than the config rule", () => {
+    it("never lets a session grant on a later candidate override a config deny (OpenGhost fork)", () => {
       const { manager, cleanup } = createManagerWithConfig(
         { mcp: { exa_search: "deny" } },
         ["exa"],
@@ -3771,8 +3771,8 @@ describe("mcp surface — last-match-wins across candidates", () => {
           undefined,
           [sessionRule("mcp", "mcp_call")],
         );
-        expect(result.state).toBe("allow");
-        expect(result.source).toBe("session");
+        expect(result.state).toBe("deny");
+        expect(result.source).not.toBe("session");
       } finally {
         cleanup();
       }

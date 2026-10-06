@@ -125,7 +125,9 @@ the decision, exactly as the same keys did in the donor's terminal dialog.
 | Per agent | `permission:` frontmatter in Pi agent definitions |
 
 Operator rules refine the mode. For example, `"bash": {"npm test": "allow"}`
-stops Ask asking, and a `deny` holds in every mode. Session approvals live in
+stops Ask asking, and a `deny` holds in every mode. An explicit deny always
+wins: a session approval suppresses later asks but never overrides a deny rule,
+in Ask, Auto or Full. Session approvals live in
 the chat's Pi process and end with it. The donor's own config locations and
 legacy files are not read and not migrated. Reference:
 [configuration.md](../src/backend/pi/plugin-permissions/docs/configuration.md).
@@ -215,7 +217,8 @@ The suites:
       unparseable commands, unknown tools and hard denies under Full;
     - mode ordering and malformed modes;
     - no config or command mode;
-    - session-approval scope, and config precedence;
+    - session-approval scope, and config precedence: a session approval never
+      overrides a config deny, in Ask, Auto or Full;
     - the card's decisions (the donor's fallback-dialog tests, ported), and the
       card's withdrawal on Stop, on Full and at session end.
 - **`native_pi_real_test`.** The shipped bundle in real Pi (faux model, no
