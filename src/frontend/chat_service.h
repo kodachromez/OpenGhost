@@ -154,6 +154,7 @@ class ChatService final : public QObject
     void remove(const QString &id);
     void refresh();
     void authenticate(const Command &command);
+    void answerLogin(const AnswerLogin &answer); // Not an auth mutation: no authFinished.
     void approve(RequestId id, bool allow);
     static QString metrics(const ChatRecord::Turn &turn);
     static QJsonArray entries(const QVector<DisplayRow> &rows);
@@ -175,6 +176,7 @@ class ChatService final : public QObject
     void miniCleared(bool ok);
     void usageRecorded(openghost::Usage usage);
     void authFinished();
+    void loginStep(const openghost::LoginStep &step);
 
   private:
     struct Focus; // Directs the public turn operations at the mini chat.

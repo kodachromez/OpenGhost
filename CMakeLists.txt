@@ -51,6 +51,9 @@ target_sources(native_contract PRIVATE src/frontend/browser.h src/frontend/brows
     src/frontend/browser_automation.h src/frontend/browser_tools.h src/frontend/browser_tools.cpp)
 qt_add_resources(native_contract browser_contract PREFIX /browser BASE src/browser
     FILES src/browser/schemas.json)
+# The Pi backend's bridge extension, handed to `pi -e` (runs inside Pi, not here).
+qt_add_resources(native_contract pi_bridge PREFIX /pi BASE src/backend/pi
+    FILES src/backend/pi/openghost-bridge.js)
 if(OPENGHOST_BROWSER)
     add_library(native_browser_automation STATIC src/browser/qt_browser_automation.cpp
         src/browser/qt_browser_automation.h)

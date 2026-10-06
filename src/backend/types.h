@@ -248,6 +248,9 @@ struct CancelLogin {
 struct Logout {
     QString provider;
 };
+struct AnswerLogin { // A LoginStep's prompt, answered (never retained)
+    QString provider, promptId, value;
+};
 struct GetAccountLimits {
     QString provider;
 };
@@ -305,7 +308,7 @@ struct DeleteSession {
 };
 struct Shutdown {};
 using Command = std::variant<Initialize, ModelsList, ProvidersList, SetKey, Login, CancelLogin,
-                             Logout, GetAccountLimits, StartTurn, RetryTurn, SteerTurn, CancelTurn,
+                             Logout, AnswerLogin, GetAccountLimits, StartTurn, RetryTurn, SteerTurn, CancelTurn,
                              GetSession, ConfigureSession, CompactSession, DeleteSession, Shutdown,
                              PluginsList, EnablePlugin, DisablePlugin>;
 
@@ -402,10 +405,21 @@ struct AuthChanged {
 struct ModelsChanged {
     std::optional<QString> provider;
 };
+// The backend's current sign-in step while Login or SetKey is pending: "waiting",
+// "prompt" (text input), "select" or "device_code". A promptId wants AnswerLogin.
+struct LoginStep {
+    struct Choice {
+        QString id, label;
+    };
+    QString provider, type, message;
+    std::optional<QString> promptId, url, userCode, placeholder;
+    bool secret = false;
+    QVector<Choice> options, links; // links: id = URL
+};
 struct Log {
     QString level, message;
 };
-using GlobalEvent = std::variant<AuthChanged, ModelsChanged, Log, PluginChanged>;
+using GlobalEvent = std::variant<AuthChanged, ModelsChanged, Log, PluginChanged, LoginStep>;
 struct Null {};
 using Reply = std::variant<Null, Initialized, QVector<Model>, QVector<Provider>, ProviderStatus,
                            std::optional<AccountLimits>, StartAccepted, RetryAccepted,

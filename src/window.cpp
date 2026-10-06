@@ -98,6 +98,38 @@ WindowController::WindowController(openghost::Backend *backend, QString preferen
         m_login.clear();
         catalog();
     });
+    // The backend's sign-in step for the provider being signed in (the reference's
+    // login step: prompt, select, device code or links); never another provider's.
+    connect(&m_chat, &openghost::ChatService::loginStep, this,
+            [this](const openghost::LoginStep &step) {
+                if (m_login.value("providerId").toString() != step.provider)
+                    return;
+                QVariantMap login{{"id", m_login.value("id")},
+                                  {"providerId", step.provider},
+                                  {"type", step.type},
+                                  {"message", step.message}};
+                if (m_login.contains("begun"))
+                    login.insert("begun", m_login.value("begun"));
+                if (step.promptId) {
+                    login.insert("promptId", *step.promptId);
+                    login.insert("input", step.type == "prompt");
+                    login.insert("secret", step.secret);
+                    login.insert("placeholder", step.placeholder.value_or(QString()));
+                }
+                if (step.url)
+                    login.insert("url", *step.url);
+                if (step.userCode)
+                    login.insert("userCode", *step.userCode);
+                QVariantList options, links;
+                for (const auto &option : step.options)
+                    options.append(QVariantMap{{"id", option.id}, {"label", option.label}});
+                for (const auto &link : step.links)
+                    links.append(QVariantMap{{"url", link.id}, {"label", link.label}});
+                login.insert("options", options);
+                login.insert("links", links);
+                m_login = login;
+                catalog();
+            });
     connect(&m_chat, &openghost::ChatService::answered, this, &WindowController::answered);
     connect(&m_chat, &openghost::ChatService::worked, this, &WindowController::worked);
     connect(&m_chat, &openghost::ChatService::replaced, this, [this](const QString &left) {
@@ -179,7 +211,10 @@ void WindowController::catalog()
                                              {"name", provider.name},
                                              {"hint", hints.join(' ')},
                                              {"connected", provider.status.connected},
-                                             {"logout", provider.status.connected},
+                                             // Log out removes a stored credential; one
+                                             // from the environment is not the backend's.
+                                             {"logout", provider.status.connected &&
+                                                            provider.status.keySaved.value_or(true)},
                                              {"oauth", oauth},
                                              {"apiKey", key},
                                              {"note", note},
@@ -422,9 +457,16 @@ void WindowController::login(const QString &provider, const QString &method)
 void WindowController::answerLogin(const QString &id, const QString &prompt, const QString &answer)
 {
     if (m_login.value("id").toString() != id || m_login.value("promptId").toString() != prompt ||
-        prompt != "key")
+        prompt.isEmpty())
         return;
     const auto provider = m_login.value("providerId").toString();
+    if (prompt != "key") { // The backend's own step; the answer is not retained here either.
+        m_login = {{"id", id}, {"providerId", provider}, {"type", "waiting"},
+                   {"message", QString()}};
+        catalog();
+        m_chat.answerLogin(openghost::AnswerLogin{provider, prompt, answer});
+        return;
+    }
     m_login.remove("promptId");
     m_login.remove("input");
     catalog();

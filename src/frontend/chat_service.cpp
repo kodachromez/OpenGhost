@@ -302,6 +302,8 @@ ChatService::ChatService(Backend *backend, PreferencesStore *preferences, Librar
         connect(m_backend, &Backend::globalEvent, this, [this](const GlobalEvent &event) {
             if (const auto *plugin = std::get_if<PluginChanged>(&event))
                 m_plugins.observe(*plugin);
+            else if (const auto *step = std::get_if<LoginStep>(&event))
+                emit loginStep(*step);
             else if (std::holds_alternative<AuthChanged>(event) ||
                      std::holds_alternative<ModelsChanged>(event))
                 refresh();
@@ -1811,6 +1813,18 @@ void ChatService::authenticate(const Command &command)
         }
         refresh();
         emit authFinished();
+    });
+}
+void ChatService::answerLogin(const AnswerLogin &answer)
+{
+    if (!m_ready || answer.provider.isEmpty())
+        return;
+    call(answer, [this, provider = answer.provider](const Result &result) {
+        if (const auto *error = std::get_if<Error>(&result)) {
+            m_authErrors.insert(provider, *error);
+            problem(*error);
+            refresh();
+        }
     });
 }
 void ChatService::reverse(RequestId id, const ReverseRequest &request)
