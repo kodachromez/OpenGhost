@@ -458,6 +458,11 @@ Remaining limits inside these items:
 
 ### 2026-10-06 — M09, M10, M11
 
+Follow-up: [attachment input audit](attachment-input-audit.md) reproduces and fixes
+UTF-8 EOF loss, binary-control acceptance, missing GIF/BMP Preview controls and
+EXIF preview orientation; verifies General's chooser/drop and failure paths; and
+records the separate `07e9819` correction for pinned context on Retry.
+
 Scope was limited to these three items. Pi's own facilities carry them:
 - prompt `images` for pictures;
 - the `<file name>` form of Pi's `pi @file` for text;

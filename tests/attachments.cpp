@@ -87,6 +87,41 @@ class AttachmentsTest final : public QObject
                     .error.isEmpty());
     }
 
+    void malformedTextIsNeverSilentlyTruncated()
+    {
+        for (const auto &tail : {QByteArray("\xc3", 1), QByteArray("\xe2\x82", 2),
+                                 QByteArray("\xf0\x9f\x91", 3)}) {
+            const auto path = write(QStringLiteral("incomplete.txt"), "valid prefix " + tail);
+            const auto read = readLocalFile(url(path), true);
+            QVERIFY2(!read.error.isEmpty(), "An unfinished UTF-8 sequence must not be dropped");
+            PreferencesStore prefs{QString()};
+            GeneralPreview general(&prefs);
+            QVERIFY(!general.add({url(path)}).isEmpty());
+            QVERIFY(general.files().isEmpty());
+        }
+    }
+
+    void controlHeavyBinaryIsNotText()
+    {
+        const auto binary = write(QStringLiteral("controls.bin"), QByteArray(100, '\x01'));
+        QVERIFY(!readLocalFile(url(binary), true).error.isEmpty());
+        QVERIFY(readLocalFile(url(write(QStringLiteral("whitespace.txt"), "a\t\r\nb\f\n")), true)
+                    .error.isEmpty());
+    }
+
+    void thinPicturesKeepAtLeastOnePixel()
+    {
+        for (const auto &size : {QSize(3000, 1), QSize(1, 3000)}) {
+            const auto path = picture(QStringLiteral("thin.png"), size, "PNG");
+            const auto read = readLocalFile(url(path), true);
+            QVERIFY2(read.error.isEmpty(), qPrintable(read.error));
+            const auto data = read.attachment.dataUrl.value();
+            const auto image = QImage::fromData(QByteArray::fromBase64(
+                data.mid(data.indexOf(QLatin1Char(',')) + 1).toLatin1()));
+            QCOMPARE(image.size(), size.width() > size.height() ? QSize(2560, 1) : QSize(1, 2560));
+        }
+    }
+
     void picturesArePreparedForPi()
     {
         // A picture Pi takes as it is stays byte for byte.
@@ -107,6 +142,17 @@ class AttachmentsTest final : public QObject
         QCOMPARE(readLocalFile(url(picture(QStringLiteral("p.jpg"), {8, 8}, "JPEG")), true)
                      .attachment.mime,
                  QStringLiteral("image/jpeg"));
+        // GIF and BMP stay in their original formats and are previewable too.
+        const auto gif = QByteArray::fromBase64(
+            "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7");
+        read = readLocalFile(url(write(QStringLiteral("dot.gif"), gif)), true);
+        QVERIFY2(read.error.isEmpty(), qPrintable(read.error));
+        QCOMPARE(read.attachment.mime, QStringLiteral("image/gif"));
+        QCOMPARE(read.attachment.dataUrl.value(), QStringLiteral("data:image/gif;base64,") +
+                                                     QString::fromLatin1(gif.toBase64()));
+        read = readLocalFile(url(picture(QStringLiteral("small.bmp"), {8, 8}, "BMP")), true);
+        QVERIFY(read.error.isEmpty());
+        QCOMPARE(read.attachment.mime, QStringLiteral("image/bmp"));
         // Larger than 2560 px: fitted and re-encoded; the original size is reported.
         read = readLocalFile(url(picture(QStringLiteral("wide.png"), {3000, 600}, "PNG")), true);
         QVERIFY(read.error.isEmpty());
@@ -211,6 +257,44 @@ class AttachmentsTest final : public QObject
         QCOMPARE(PreferencesStore(path).value().userContext.files.size(), 0);
     }
 
+    void generalFailuresKeepThePreviousContents()
+    {
+        QTemporaryDir dir;
+        const auto prefsPath = dir.filePath(QStringLiteral("prefs.json"));
+        PreferencesStore prefs(prefsPath);
+        GeneralPreview general(&prefs);
+        QList<QUrl> urls;
+        for (int i = 0; i < 21; ++i)
+            urls.append(url(write(QStringLiteral("pinned-%1.txt").arg(i), "original")));
+        QVERIFY(general.add(urls.first(20)).isEmpty());
+        QCOMPARE(general.files().size(), 20);
+        QVERIFY(general.add({urls.last()}).contains(QStringLiteral("20 files")));
+        QCOMPARE(general.files().size(), 20);
+        // A count-full store can still replace the same path, even spelled with /./.
+        write(QStringLiteral("pinned-0.txt"), "replacement");
+        const auto same = url(m_dir.path() + QStringLiteral("/./pinned-0.txt"));
+        QVERIFY(general.add({same}).isEmpty());
+        QCOMPARE(general.files().size(), 20);
+        QCOMPARE(prefs.value().userContext.files.first().text.value(), QStringLiteral("replacement"));
+        // A failed selection cannot partly replace an existing copy.
+        write(QStringLiteral("pinned-0.txt"), "must not be kept");
+        const auto bad = url(write(QStringLiteral("invalid.pdf"), "%PDF-1.7"));
+        QVERIFY(!general.add({urls.first(), bad}).isEmpty());
+        QCOMPARE(prefs.value().userContext.files.first().text.value(), QStringLiteral("replacement"));
+        // Deterministic save failure: a directory occupies the preferences filename.
+        QVERIFY(QFile::remove(prefsPath));
+        QVERIFY(QDir().mkdir(prefsPath));
+        QSignalSpy failed(&general, &GeneralPreview::saveFailed);
+        QSignalSpy changed(&general, &GeneralPreview::filesChanged);
+        general.add({urls.first()});
+        QCOMPARE(failed.count(), 1);
+        QCOMPARE(changed.count(), 0);
+        QCOMPARE(prefs.value().userContext.files.first().text.value(), QStringLiteral("replacement"));
+        general.remove(general.files().first().toMap().value("id").toString());
+        QCOMPARE(failed.count(), 2);
+        QCOMPARE(general.files().size(), 20);
+    }
+
     // The composer's real path: pick → send through the facade → Pi's prompt.
     void composerFilesReachPi()
     {
@@ -277,6 +361,25 @@ class AttachmentsTest final : public QObject
         QCOMPARE(window.previewState(photoKey, 0), QStringLiteral("ready"));
         QCOMPARE(window.previewImage(photoKey, 0).size(), QSize(40, 30));
         window.release({photo});
+
+        // Original JPEG bytes retain EXIF orientation; preview must honor it too.
+        const auto jpeg = picture(QStringLiteral("rotated.jpg"), {40, 30}, "JPEG");
+        QFile original(jpeg);
+        QVERIFY(original.open(QIODevice::ReadOnly));
+        auto bytes = original.readAll();
+        original.close();
+        // APP1 Exif, little-endian TIFF, one SHORT Orientation entry = 6 (90° CW).
+        bytes.insert(2, QByteArray::fromHex(
+            "ffe1002245786966000049492a0008000000010012010300010000000600000000000000"));
+        QVERIFY(!write(QStringLiteral("rotated.jpg"), bytes).isEmpty());
+        QVERIFY(window.pick({url(jpeg)}, 20).isEmpty());
+        QVERIFY(window.send(QStringLiteral("Rotated"), {token(0)}));
+        QTRY_COMPARE(accepted.count(), 3);
+        QTRY_VERIFY(!window.busy());
+        const auto rotatedRow = transcript->index(transcript->rowCount() - 2);
+        const auto rotatedKey = transcript->data(rotatedRow, TranscriptModel::KeyRole).toString();
+        window.preview(rotatedKey, 0);
+        QCOMPARE(window.previewImage(rotatedKey, 0).size(), QSize(30, 40));
     }
 };
 

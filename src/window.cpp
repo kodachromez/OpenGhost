@@ -3,8 +3,10 @@
 #include "platform/platform.h"
 #include "rich.h"
 
+#include <QBuffer>
 #include <QClipboard>
 #include <QGuiApplication>
+#include <QImageReader>
 #include <QJsonDocument>
 #include <QMimeData>
 #include <QNetworkAccessManager>
@@ -461,7 +463,12 @@ QImage WindowController::previewImage(const QString &key, int card) const
     if (previewState(key, card) != QStringLiteral("ready"))
         return {};
     const auto picture = m_pictures.value(key).value(card);
-    return QImage::fromData(picture.bytes);
+    QBuffer source;
+    source.setData(picture.bytes);
+    source.open(QIODevice::ReadOnly);
+    QImageReader reader(&source);
+    reader.setAutoTransform(true); // Preserved JPEGs still carry their EXIF orientation.
+    return reader.read();
 }
 QString WindowController::pick(const QList<QUrl> &urls, int remaining, int pictures)
 {

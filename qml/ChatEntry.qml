@@ -320,9 +320,10 @@ Item {
                             id: attachment
                             required property var modelData
                             required property int index
-                            // OpenGhost-validated PNG, JPEG and WebP images: a saved
-                            // one previews on request, when OpenGhost is idle.
-                            readonly property bool picture: ["image/png", "image/jpeg", "image/webp"]
+                            // Every image format the local attachment reader keeps.
+                            // Converted pictures carry their prepared PNG/JPEG MIME.
+                            readonly property bool picture: ["image/png", "image/jpeg", "image/webp",
+                                                             "image/gif", "image/bmp"]
                                                             .indexOf(modelData.mime) >= 0
                             // The facade's preview state and image for this card.
                             // Only a ready entry has an image: in any other

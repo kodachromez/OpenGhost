@@ -160,9 +160,17 @@ FileRead readLocalFile(const QUrl &url, bool pictures)
         read.error = QStringLiteral("Cannot read the selected file. Nothing was added.");
         return read;
     }
-    QStringDecoder decoder(QStringDecoder::Utf8);
+    // This is the entire file, not a streaming chunk: an incomplete final UTF-8
+    // sequence must fail rather than sit in the decoder's buffer and disappear.
+    QStringDecoder decoder(QStringDecoder::Utf8, QStringConverter::Flag::Stateless);
     const QString text = decoder(bytes.left(TextBytes));
-    if (decoder.hasError() || bytes.contains('\0')) {
+    // Reference AttachmentReader.looksBinary: UTF-8 validity alone does not make
+    // control-heavy binary data a text file. Keep normal text whitespace/ESC.
+    const auto sniff = bytes.first(std::min<qsizetype>(bytes.size(), 8192));
+    const auto controls = std::count_if(sniff.cbegin(), sniff.cend(), [](unsigned char b) {
+        return b < 9 || (b > 13 && b < 32 && b != 27);
+    });
+    if (decoder.hasError() || bytes.contains('\0') || controls * 100 > sniff.size()) {
         read.error = unreadable(name);
         return read;
     }

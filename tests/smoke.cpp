@@ -8,9 +8,12 @@
 #include "window.h"
 
 #include <QBuffer>
+#include <QDragEnterEvent>
+#include <QDropEvent>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QLineF>
+#include <QMimeData>
 #include <QPointer>
 #include <QQmlApplicationEngine>
 #include <QQmlComponent>
@@ -825,6 +828,24 @@ int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
     }
     controller.transcript()->reset({});
 
+    // Sent cards must expose Preview for every format the reader retains, not
+    // just PNG/JPEG/WebP. Text cards must never show a preview error.
+    Entry sentFiles;
+    sentFiles.kind = Entry::User;
+    sentFiles.key = QStringLiteral("attachment-format-audit");
+    sentFiles.state = QStringLiteral("done");
+    for (const auto *format : {"png", "jpeg", "webp", "gif", "bmp"})
+        sentFiles.attachments.append({QStringLiteral("photo.") + QLatin1String(format),
+                                      QStringLiteral("image/") + QLatin1String(format), 100});
+    sentFiles.attachments.append({QStringLiteral("notes.txt"), QStringLiteral("text/plain"), 10});
+    controller.transcript()->reset({sentFiles});
+    check(QTest::qWaitFor([&] {
+              return findAll(window->contentItem(), QStringLiteral("previewAttachment")).size() == 5;
+          }, 1000), "every prepared image format has a sent Preview control");
+    check(findAll(window->contentItem(), QStringLiteral("previewError")).isEmpty(),
+          "sent cards have no fabricated preview errors");
+    controller.transcript()->reset({});
+
     auto *dialog = window->findChild<QObject *>(QStringLiteral("settingsDialog"));
     check(dialog, "copied settings dialog");
     if (dialog) {
@@ -838,6 +859,47 @@ int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
                                             Q_ARG(QVariant, true)),
                   "settings page switches through navigation");
             QTest::qWait(60);
+            if (QString::fromLatin1(page) == "general") {
+                QTemporaryDir dir;
+                const auto note = dir.filePath(QStringLiteral("pinned.txt"));
+                QFile file(note);
+                check(file.open(QIODevice::WriteOnly) && file.write("Pinned contents") == 15,
+                      "General file fixture created");
+                file.close();
+                auto *general = findVisual(window->contentItem(), QStringLiteral("generalPage"));
+                auto *drop = findVisual(window->contentItem(), QStringLiteral("generalDrop"));
+                check(general && drop, "General Files chooser and drop target exist");
+                if (general && drop) {
+                    QMimeData mime;
+                    mime.setUrls({QUrl::fromLocalFile(note)});
+                    const auto point = drop->mapToScene(QPointF(drop->width() / 2, drop->height() / 2));
+                    QDragEnterEvent enter(point.toPoint(), Qt::CopyAction, &mime, Qt::LeftButton,
+                                          Qt::NoModifier);
+                    QCoreApplication::sendEvent(window, &enter);
+                    QDropEvent dropped(point, Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+                    QCoreApplication::sendEvent(window, &dropped);
+                    check(enter.isAccepted() && dropped.isAccepted() &&
+                              controller.general()->files().size() == 1,
+                          "General drop reaches the pinned-file store, not composer refusal");
+                    // The chooser's accepted handler calls this same production method.
+                    check(QMetaObject::invokeMethod(general, "addFiles", Q_ARG(QVariant,
+                              QVariant::fromValue(QList<QUrl>{QUrl::fromLocalFile(note)}))) &&
+                              controller.general()->files().size() == 1,
+                          "General chooser path replaces an existing pinned copy");
+                    check(file.open(QIODevice::WriteOnly) && file.write("%PDF-1.7") == 8,
+                          "General unsupported-file fixture created");
+                    file.close();
+                    QMetaObject::invokeMethod(general, "addFiles", Q_ARG(QVariant,
+                        QVariant::fromValue(QList<QUrl>{QUrl::fromLocalFile(note)})));
+                    check(general->property("statusError").toBool() &&
+                              general->property("status").toString().contains("PDF") &&
+                              controller.general()->files().size() == 1,
+                          "General says why a selection failed and keeps the old pinned copy");
+                    const auto files = controller.general()->files();
+                    for (const auto &kept : files)
+                        controller.general()->remove(kept.toMap().value("id").toString());
+                }
+            }
             if (fake && QString::fromLatin1(page) == "providers") {
                 auto *logout = findVisual(window->contentItem(), QStringLiteral("logout"));
                 check(logout && QMetaObject::invokeMethod(logout, "clicked"),
