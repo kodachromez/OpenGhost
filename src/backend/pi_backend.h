@@ -83,6 +83,7 @@ class PiBackend final : public Backend
     // One OpenGhost session and the Pi child running its session file.
     struct Chat {
         PiProcess *pi = nullptr;
+        PiProcess *retiring = nullptr; // still owns the file until process exit
         bool loaded = false, loading = false, deleting = false, stopping = false;
         QVector<Then> waiting; // until loaded
         QString version;       // its incarnation; empty: Pi has no such session

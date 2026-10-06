@@ -44,6 +44,22 @@ export default function (pi) {
     if (files) sections[FILES] = files;
     else delete sections[FILES];
   });
+  // Continuations (including Retry and its tool loop) do not run
+  // before_agent_start, and Pi rebuilds their prompt from its base options.
+  // Enforce the same named sections at the request boundary as well. This is a
+  // system delta, never a synthetic user message; compaction's checkpoint and
+  // the rest of Pi's prompt/tool declarations remain intact.
+  pi.on("context_with_system", (event) => {
+    let current = {};
+    for (const message of event.messages) {
+      if (message.role !== "system") continue;
+      if (message.replace) current = {};
+      Object.assign(current, message.sections);
+    }
+    const sections = { [INSTRUCTIONS]: instructions || null, [FILES]: files || null };
+    if (Object.entries(sections).every(([key, value]) => (current[key] || null) === value)) return;
+    return { messages: [...event.messages, { role: "system", content: "", sections, timestamp: Date.now() }] };
+  });
   // A retry trigger never reaches the model, nor do the failed replies it retried:
   // the retry sees exactly the context the failed reply saw.
   pi.on("context", (event) => {
@@ -145,8 +161,8 @@ export default function (pi) {
           if (branch.slice(at + 1).some((entry) =>
             ["compaction", "branch_summary", "context_edit"].includes(entry.type)))
             throw new Error("Pi's context changed after that reply failed; an exact Retry is unavailable.");
-          // A continuation has no before_agent_start: Pi keeps the prompt sections,
-          // instructions included, that the failed turn had.
+          // The context_with_system hook also covers this continuation. The
+          // frontend supplied this retry's standing instructions before admission.
           status("", { ok: true });
           pi.sendMessage({ customType: RETRY, content: [], display: false }, { triggerTurn: true });
         } else if (request.op === "context") {

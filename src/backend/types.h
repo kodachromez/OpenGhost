@@ -264,6 +264,7 @@ struct StartTurn {
 };
 struct StartAccepted {
     QString turnId, sessionVersion;
+    std::optional<ModelSelection> selection = std::nullopt; // canonical choice, when reported
 };
 struct RetryTurn {
     QString sessionId, sessionVersion, clientTurnId, failedTurnId;
@@ -271,6 +272,7 @@ struct RetryTurn {
 };
 struct RetryAccepted {
     QString turnId;
+    std::optional<ModelSelection> selection = std::nullopt;
 };
 struct SteerTurn {
     QString sessionId, turnId, clientInputId;

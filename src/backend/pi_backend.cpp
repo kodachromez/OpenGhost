@@ -264,8 +264,10 @@ rebuilt(const QJsonArray &entries, const QString &client, TurnStatus *status)
     bool open = true, prompted = false;
     for (qsizetype i = at + 1; i < entries.size(); ++i) {
         const auto entry = entries[i].toObject();
-        if (isMark(entry, QStringLiteral("end")) && markOf(entry).value("turn").toString() == turn)
+        if (isMark(entry, QStringLiteral("end")) && markOf(entry).value("turn").toString() == turn) {
             ended = markOf(entry);
+            break; // Later extension messages do not belong to this settled turn.
+        }
         if (isMark(entry, QStringLiteral("start")))
             open = false;
         if (!open || entry.value("type").toString() != QStringLiteral("message"))
@@ -300,9 +302,6 @@ rebuilt(const QJsonArray &entries, const QString &client, TurnStatus *status)
             done.error = Error{ended->value("code").toString(QStringLiteral("model_error")),
                                ended->value("error").toString(QStringLiteral("Pi reported an error.")),
                                {}, {}, {}, {}};
-    } else if (stopReason == QStringLiteral("stop") || stopReason == QStringLiteral("length")) {
-        if (stopReason == QStringLiteral("length"))
-            done.finishReason = stopReason;
     } else if (stopReason == QStringLiteral("aborted")) {
         done.status = TurnStatus::Cancelled;
     } else if (stopReason == QStringLiteral("error")) {
@@ -337,8 +336,10 @@ PiBackend::PiBackend(QString sessionDir, QObject *parent)
 }
 PiBackend::~PiBackend()
 {
-    for (auto &[session, chat] : m_chats)
+    for (auto &[session, chat] : m_chats) {
         delete std::exchange(chat.pi, nullptr);
+        delete std::exchange(chat.retiring, nullptr);
+    }
     delete std::exchange(m_control, nullptr);
 }
 QString PiBackend::sessionFile(const QString &session) const
@@ -400,6 +401,11 @@ void PiBackend::dispatch(RequestId id, const Command &command)
             }
             auto models = modelsOf(reply.value("data").toObject().value("models").toArray());
             m_control->rpc({{"type", "get_state"}}, [this, id, models](const QJsonObject &state) mutable {
+                if (!state.value("success").toBool()) {
+                    emit replied(id, failure(QStringLiteral("backend_error"),
+                                             errorOf(state, QStringLiteral("Pi could not report its default model."))));
+                    return;
+                }
                 const auto chosen = state.value("data").toObject().value("model").toObject();
                 const auto it = std::find_if(models.begin(), models.end(), [&](const Model &m) {
                     return m.provider == chosen.value("provider").toString() &&
@@ -623,6 +629,10 @@ PiProcess *PiBackend::spawn(const QStringList &args, const QString &cwd, QString
 PiProcess *PiBackend::child(const QString &session, const QString &cwd, QString *error)
 {
     auto &chat = m_chats[session];
+    if (chat.deleting || chat.retiring) {
+        *error = QStringLiteral("Pi is still closing this chat. Try again once it has stopped.");
+        return nullptr;
+    }
     if (chat.pi)
         return chat.pi;
     const auto folder = cwd.isEmpty() ? QDir::currentPath() : cwd;
@@ -650,6 +660,12 @@ PiProcess *PiBackend::child(const QString &session, const QString &cwd, QString 
 // it read and exits; `gone` runs once it has.
 void PiBackend::retire(Chat &chat, std::function<void()> gone)
 {
+    // A child that is closing still owns its session file. A second retirement
+    // (notably DeleteSession after idle reaping) must wait for the same exit.
+    if (chat.retiring) {
+        chat.retiring->close(std::move(gone));
+        return;
+    }
     auto *pi = std::exchange(chat.pi, nullptr);
     chat.context.reset();
     if (!pi) {
@@ -657,9 +673,11 @@ void PiBackend::retire(Chat &chat, std::function<void()> gone)
             gone();
         return;
     }
+    chat.retiring = pi;
     pi->onRecord = {};
     pi->onExit = {};
-    pi->close([pi, gone = std::move(gone)] {
+    pi->close([&chat, pi, gone = std::move(gone)] {
+        chat.retiring = nullptr;
         pi->deleteLater();
         if (gone)
             gone();
@@ -695,6 +713,8 @@ void PiBackend::reap()
 void PiBackend::load(const QString &session, Then then)
 {
     auto &chat = m_chats[session];
+    if (chat.deleting || chat.retiring)
+        return then(failure(QStringLiteral("busy"), QStringLiteral("Pi is still closing this chat.")));
     if (chat.loaded)
         return then(std::nullopt);
     chat.waiting.append(std::move(then));
@@ -1030,8 +1050,6 @@ void PiBackend::advance(const QString &session, const QString &turn)
     }
     case 1: { // The chat's model, checked against what Pi has selected, never cached.
         const auto chosen = run->chosen;
-        if (chosen.model.isEmpty())
-            return advance(session, turn);
         chat.pi->rpc(
             {{"type", "get_state"}},
             [this, session, turn, chosen](const QJsonObject &state) {
@@ -1041,18 +1059,28 @@ void PiBackend::advance(const QString &session, const QString &turn)
                 if (!state.value("success").toBool()) {
                     refuse(session, failure(QStringLiteral("backend_error"),
                                             errorOf(state, QStringLiteral("Pi did not answer."))));
-                } else if (model.value("provider").toString() == chosen.provider &&
-                           model.value("id").toString() == chosen.model) {
+                } else if (chosen.model.isEmpty() &&
+                           (model.value("provider").toString().isEmpty() ||
+                            model.value("id").toString().isEmpty())) {
+                    refuse(session, failure(QStringLiteral("model_unavailable"),
+                                            QStringLiteral("Pi did not report a selected model.")));
+                } else if (chosen.model.isEmpty() ||
+                           (model.value("provider").toString() == chosen.provider &&
+                            model.value("id").toString() == chosen.model)) {
+                    running(session, turn)->chosen = {model.value("provider").toString(),
+                                                      model.value("id").toString(), {}};
                     advance(session, turn);
                 } else if (auto *pi = m_chats[session].pi) {
                     setModel(pi, chosen.provider, chosen.model,
-                             [this, session, turn](std::optional<Error> error, const ModelSelection &) {
+                             [this, session, turn](std::optional<Error> error, const ModelSelection &actual) {
                                  if (!running(session, turn))
                                      return;
                                  if (error)
                                      refuse(session, *error);
-                                 else
+                                 else {
+                                     running(session, turn)->chosen = actual;
                                      advance(session, turn);
+                                 }
                              });
                 }
             },
@@ -1187,9 +1215,9 @@ void PiBackend::accept(const QString &session, const QString &disposition)
     remember({session, run.client, run.turn, run.input, {}, false, TurnStatus::Done}, true);
     if (!run.abandoned) {
         if (run.retry)
-            emit replied(run.request, Reply{RetryAccepted{run.turn}});
+            emit replied(run.request, Reply{RetryAccepted{run.turn, run.chosen}});
         else
-            emit replied(run.request, Reply{StartAccepted{run.turn, chat.version}});
+            emit replied(run.request, Reply{StartAccepted{run.turn, chat.version, run.chosen}});
     }
     publish(session, TurnStarted{});
     if (disposition == QStringLiteral("handled")) {
@@ -1438,7 +1466,7 @@ void PiBackend::setModel(PiProcess *pi, const QString &provider, const QString &
 {
     pi->rpc(
         {{"type", "set_model"}, {"provider", provider}, {"modelId", model}},
-        [provider, model, done = std::move(done)](const QJsonObject &reply) {
+        [done = std::move(done)](const QJsonObject &reply) {
             if (!reply.value("success").toBool()) {
                 done(failure(QStringLiteral("model_unavailable"),
                              errorOf(reply, QStringLiteral("Pi could not switch models."))),
@@ -1446,8 +1474,14 @@ void PiBackend::setModel(PiProcess *pi, const QString &provider, const QString &
                 return;
             }
             const auto chosen = reply.value("data").toObject();
-            done(std::nullopt, {chosen.value("provider").toString(provider),
-                                chosen.value("id").toString(model), {}});
+            const auto provider = chosen.value("provider").toString();
+            const auto model = chosen.value("id").toString();
+            if (provider.isEmpty() || model.isEmpty()) {
+                done(failure(QStringLiteral("protocol_error"),
+                             QStringLiteral("Pi did not confirm the selected model.")), {});
+                return;
+            }
+            done(std::nullopt, {provider, model, {}});
         },
         StepDeadline);
 }

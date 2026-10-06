@@ -22,7 +22,7 @@ flushed = False
 model = None  # (provider, id) Pi has selected
 instructions = ""
 files = []  # the bridge's pinned files: [{name, text}]
-INPUTS = {"m": ["text"], "m2": ["text"], "v": ["text", "image"]}
+INPUTS = {"m": ["text"], "m2": ["text"], "v": ["text", "image"], "alias": ["text"]}
 if session and os.path.exists(session):
     with open(session) as saved:
         entries = [json.loads(line) for line in saved if line.strip()][1:]
@@ -40,7 +40,8 @@ def selected():
 
 def append(entry):
     global flushed
-    entry = dict(entry, id="e%d" % (len(entries) + 1))
+    entry = dict(entry, id="e%d" % (len(entries) + 1),
+                 parentId=entries[-1]["id"] if entries else None)
     entries.append(entry)
     if not session:
         return
@@ -128,6 +129,9 @@ def run(text, images=None):
         assistant("partial", "error", usage(10, 2), "boom 500")
     elif text == "length":
         assistant("cut", "length", usage(5, 7))
+    elif text == "unsettled":
+        assistant("An intermediate answer.", "stop", usage(8, 2))
+        return  # A boundary handler still owes a continuation; no settlement.
     elif text == "tools":
         assistant("Let me check.", "toolUse", usage(40, 4))
         assistant("Done.", "stop", usage(60, 6, 40))
@@ -198,10 +202,15 @@ def handle(command):
     elif kind == "set_model":
         if command.get("modelId") == "gone":
             return respond(cid, kind, False, error="Model not found: %s/gone" % command.get("provider"))
-        globals()["model"] = (command["provider"], command["modelId"])
-        append({"type": "model_change", "provider": command["provider"], "modelId": command["modelId"]})
-        respond(cid, kind, data={"id": command["modelId"], "provider": command["provider"], "name": "M"})
+        if command.get("modelId") == "malformed":
+            return respond(cid, kind, data={})
+        canonical = "m" if command["modelId"] == "alias" else command["modelId"]
+        globals()["model"] = (command["provider"], canonical)
+        append({"type": "model_change", "provider": command["provider"], "modelId": canonical})
+        respond(cid, kind, data={"id": canonical, "provider": command["provider"], "name": "M"})
     elif kind == "get_state":
+        if not session and os.environ.get("FAKE_PI_BAD_DEFAULT"):
+            return respond(cid, kind, False, error="Default model unavailable")
         data = {"isStreaming": streaming, "sessionFile": session}
         if model:
             data["model"] = {"provider": model[0], "id": model[1], "name": model[1].upper(),
@@ -273,6 +282,10 @@ while True:
         continue
     chunk = os.read(sys.stdin.fileno(), 65536)
     if not chunk:
+        if session and os.environ.get("FAKE_PI_SLOW_EXIT"):
+            # A shutdown hook still owns the file until this process exits.
+            time.sleep(0.4)
+            append({"type": "custom", "customType": "shutdown", "data": {}})
         break
     buffer += chunk
     while b"\n" in buffer:

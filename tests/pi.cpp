@@ -195,6 +195,8 @@ class PiTest final : public QObject
     {
         m_log = m_dir.filePath(QStringLiteral("log-%1").arg(++m_run));
         qputenv("FAKE_PI_LOG", m_log.toUtf8());
+        qunsetenv("FAKE_PI_SLOW_EXIT");
+        qunsetenv("FAKE_PI_BAD_DEFAULT");
     }
 
     void answersOnlyAfterPiAccepts()
@@ -567,6 +569,86 @@ class PiTest final : public QObject
                      (QStringList{QStringLiteral("hello"), QStringLiteral("more")}));
     }
 
+    void recoveryRequiresSettlement()
+    {
+        QTemporaryDir profile;
+        QString session, client;
+        {
+            Harness h(profile.path());
+            QTRY_VERIFY(h.chat.ready());
+            QVERIFY(h.chat.send(QStringLiteral("unsettled")));
+            QTRY_COMPARE(h.text(DisplayRow::Role::Assistant), QStringLiteral("An intermediate answer."));
+            QVERIFY(h.chat.busy());
+            session = h.chat.current().id;
+            client = h.chat.current().turn.clientId;
+        }
+        PiBackend backend(profile.path() + QStringLiteral("/pi"));
+        QVERIFY(code(ask(backend, Initialize{})).isEmpty());
+        const auto recovered = std::get<ExistingSession>(std::get<SessionRecovery>(std::get<Reply>(
+            ask(backend, GetSession{session, client}))));
+        QVERIFY(recovered.turn);
+        const auto done = std::get<TurnCompleted>(recovered.turn->events.last().payload);
+        QCOMPARE(done.status, TurnStatus::Error);
+        QVERIFY(done.error && done.error->code == QStringLiteral("interrupted"));
+    }
+
+    void recoveredTurnExcludesMessagesAfterItsEnd()
+    {
+        QTemporaryDir profile;
+        QString session, client, path;
+        {
+            Harness h(profile.path());
+            QTRY_VERIFY(h.chat.ready());
+            QVERIFY(h.chat.send(QStringLiteral("hello")));
+            QTRY_VERIFY(h.settled());
+            session = h.chat.current().id;
+            client = h.chat.current().turn.clientId;
+            path = h.backend.sessionFile(session);
+        }
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::Append));
+        const QJsonObject later{{"type", "message"}, {"id", "extension-message"},
+                               {"message", QJsonObject{{"role", "assistant"}, {"content", "unrelated extension output"},
+                                                       {"stopReason", "stop"}}}};
+        QVERIFY(file.write(QJsonDocument(later).toJson(QJsonDocument::Compact) + '\n') > 0);
+        file.close();
+        PiBackend backend(profile.path() + QStringLiteral("/pi"));
+        QVERIFY(code(ask(backend, Initialize{})).isEmpty());
+        const auto recovered = std::get<ExistingSession>(std::get<SessionRecovery>(std::get<Reply>(
+            ask(backend, GetSession{session, client}))));
+        QVERIFY(recovered.turn);
+        int messages = 0;
+        for (const auto &event : recovered.turn->events)
+            if (const auto *message = std::get_if<MessageCompleted>(&event.payload)) {
+                ++messages;
+                QCOMPARE(message->text.value_or(QString()), QStringLiteral("Echo: hello"));
+            }
+        QCOMPARE(messages, 1);
+    }
+
+    void deletionWaitsForAnAlreadyRetiringChild()
+    {
+        qputenv("FAKE_PI_SLOW_EXIT", "1");
+        // All children inherit it before the parent environment is restored.
+        Harness h;
+        QTRY_VERIFY(h.chat.ready());
+        QString first;
+        for (int i = 0; i < 6; ++i) {
+            h.chat.newChat();
+            QVERIFY(h.chat.send(QString::number(i)));
+            QTRY_VERIFY(h.settled());
+            if (i == 0)
+                first = h.chat.current().id;
+        } // The idle-child bound has begun closing the first child.
+        qunsetenv("FAKE_PI_SLOW_EXIT");
+        const auto file = h.backend.sessionFile(first);
+        QVERIFY(QFile::exists(file));
+        QVERIFY(code(ask(h.backend, DeleteSession{first})).isEmpty());
+        QVERIFY(!QFile::exists(file));
+        QTest::qWait(600);
+        QVERIFY2(!QFile::exists(file), "A retiring Pi child recreated the deleted session");
+    }
+
     void deleteStopsPiAndRemovesItsSession()
     {
         Harness h;
@@ -622,6 +704,60 @@ class PiTest final : public QObject
         QVERIFY(!QFile::exists(file));
     }
 
+    void folderDeletionFailureKeepsTheRemainder()
+    {
+        Harness h;
+        QTRY_VERIFY(h.chat.ready());
+        QTemporaryDir folder;
+        QVERIFY(h.chat.addFolder(folder.path()).isEmpty());
+        for (int i = 0; i < 3; ++i) {
+            h.chat.newChat(folder.path());
+            QVERIFY(h.chat.send(QString::number(i)));
+            QTRY_VERIFY(h.settled());
+        }
+        const auto ids = h.library.inFolder(folder.path());
+        QCOMPARE(ids.size(), 3);
+        const auto blocked = h.backend.sessionFile(ids[1]);
+        QVERIFY(QFile::rename(blocked, blocked + QStringLiteral(".saved")));
+        QVERIFY(QDir().mkpath(blocked)); // deterministic remove failure, even as root
+        QSignalSpy removed(&h.chat, &ChatService::folderRemoved);
+        h.chat.removeFolder(folder.path());
+        QTRY_COMPARE(removed.size(), 1);
+        QVERIFY(!removed[0][1].toBool());
+        QVERIFY(!QFile::exists(h.backend.sessionFile(ids[0])));
+        QVERIFY(QFile::exists(h.backend.sessionFile(ids[2])));
+        QCOMPARE(h.library.inFolder(folder.path()), (QStringList{ids[1], ids[2]}));
+        QVERIFY(h.library.folder(folder.path()));
+        QVERIFY(QDir().rmdir(blocked));
+        QVERIFY(QFile::rename(blocked + QStringLiteral(".saved"), blocked));
+        h.chat.removeFolder(folder.path());
+        QTRY_COMPARE(removed.size(), 2);
+        QVERIFY(removed[1][1].toBool());
+        QVERIFY(!h.library.folder(folder.path()));
+    }
+
+    void miniHistoryIsSeparateAndDeletedWithItsParent()
+    {
+        Harness h;
+        QTRY_VERIFY(h.chat.ready());
+        QVERIFY(h.chat.send(QStringLiteral("main history")));
+        QTRY_VERIFY(h.settled());
+        const auto id = h.chat.current().id;
+        QVERIFY(h.chat.openMini().isEmpty());
+        QTRY_VERIFY(h.chat.mini() && h.chat.mini()->reconciled);
+        QVERIFY(h.chat.sendMini(QStringLiteral("mini history")));
+        QTRY_VERIFY(h.chat.mini()->turn.terminal);
+        const auto miniFile = h.backend.sessionFile(id + QStringLiteral(":mini"));
+        QCOMPARE(userTexts(piEntries(miniFile)), QStringList{"mini history"});
+        QCOMPARE(userTexts(piEntries(h.backend.sessionFile(id))), QStringList{"main history"});
+        QSignalSpy removed(&h.chat, &ChatService::removed);
+        h.chat.remove(id);
+        QTRY_COMPARE(removed.size(), 1);
+        QVERIFY(removed[0][1].toBool());
+        QVERIFY(!QFile::exists(miniFile));
+        QVERIFY(!QFile::exists(h.backend.sessionFile(id)));
+    }
+
     void modelsArePerChatAndCheckedAgainstPi()
     {
         Harness h;
@@ -671,6 +807,46 @@ class PiTest final : public QObject
         QCOMPARE(h.usage.last().model, QStringLiteral("m"));
         m_records = records();
         QCOMPARE(setModels(piName(h, a), QStringLiteral("m")), 2);
+    }
+
+    void failedDefaultReadIsNotAnArbitrarySelection()
+    {
+        qputenv("FAKE_PI_BAD_DEFAULT", "1");
+        PiBackend backend;
+        QVERIFY(code(ask(backend, Initialize{})).isEmpty());
+        qunsetenv("FAKE_PI_BAD_DEFAULT");
+        QCOMPARE(code(ask(backend, ModelsList{})), QStringLiteral("backend_error"));
+    }
+
+    void modelRepliesMustBeCanonical()
+    {
+        Harness h;
+        QTRY_VERIFY(h.chat.ready());
+        QVERIFY(h.chat.send(QStringLiteral("hello")));
+        QTRY_VERIFY(h.settled());
+        h.chat.choose({QStringLiteral("p"), QStringLiteral("alias"), {}}, false);
+        QTRY_VERIFY(!h.chat.pending());
+        QCOMPARE(h.chat.current().selection.model, QStringLiteral("m"));
+        h.chat.choose({QStringLiteral("p"), QStringLiteral("malformed"), {}}, false);
+        QTRY_VERIFY(!h.chat.pending());
+        QCOMPARE(h.chat.current().selection.model, QStringLiteral("m"));
+        QVERIFY(h.chat.status().contains(QStringLiteral("model"), Qt::CaseInsensitive));
+        // A draft's choice is canonicalized on its first start, not only ConfigureSession.
+        h.chat.newChat();
+        h.chat.choose({QStringLiteral("p"), QStringLiteral("alias"), {}}, false);
+        QVERIFY(h.chat.send(QStringLiteral("hello")));
+        QTRY_VERIFY(h.settled());
+        QCOMPARE(h.chat.current().selection.model, QStringLiteral("m"));
+        const auto *saved = h.library.chat(h.chat.current().id);
+        QVERIFY(saved);
+        QCOMPARE(saved->model.value("model").toString(), QStringLiteral("m"));
+        // A later failed reply's Retry also adopts the actual selection.
+        QVERIFY(h.chat.send(QStringLiteral("fail")));
+        QTRY_VERIFY(h.settled());
+        h.chat.retry();
+        QTRY_COMPARE(h.text(DisplayRow::Role::Assistant), QStringLiteral("Recovered."));
+        QTRY_VERIFY(h.settled());
+        QCOMPARE(h.chat.current().selection.model, QStringLiteral("m"));
     }
 
     void instructionsReachEveryRunAsSystemPrompt()

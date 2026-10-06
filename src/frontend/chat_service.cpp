@@ -930,6 +930,13 @@ bool ChatService::dispatchStart(const StartTurn &start, quint64 submission, cons
             return;
         }
         chat.version = ack->sessionVersion;
+        if (ack->selection) {
+            chat.selection = *ack->selection;
+            if (chat.parent.isEmpty())
+                m_library->update(chat.id, [&](Library::Chat &c) {
+                    c.model = modelObject(chat.selection);
+                });
+        }
         chat.turn.remoteId = ack->turnId;
         chat.turn.acknowledged = true;
         if (chat.turn.started < 0)
@@ -1680,6 +1687,13 @@ void ChatService::retry()
                      chat.reconciled = false;
                      problem(errorOf(result));
                      return;
+                 }
+                 if (ack->selection) {
+                     chat.selection = *ack->selection;
+                     if (chat.parent.isEmpty())
+                         m_library->update(chat.id, [&](Library::Chat &c) {
+                             c.model = modelObject(chat.selection);
+                         });
                  }
                  chat.turn.remoteId = ack->turnId;
                  chat.turn.acknowledged = true;
