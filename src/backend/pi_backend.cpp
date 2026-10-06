@@ -25,9 +25,6 @@ QString errorOf(const QJsonObject &reply, const QString &fallback)
 {
     return reply.value("error").toString(fallback);
 }
-// Settings → Providers: these first, the rest of Pi's catalog by display name.
-const QStringList Pinned{QStringLiteral("anthropic"), QStringLiteral("deepseek"),
-                         QStringLiteral("openai"), QStringLiteral("openrouter")};
 QVector<Provider> providersOf(const QJsonArray &catalog)
 {
     QVector<Provider> list;
@@ -47,13 +44,8 @@ QVector<Provider> providersOf(const QJsonArray &catalog)
         if (!provider.id.isEmpty())
             list.append(provider);
     }
-    const auto rank = [](const Provider &p) {
-        const auto at = Pinned.indexOf(p.id);
-        return at < 0 ? Pinned.size() : at;
-    };
-    std::stable_sort(list.begin(), list.end(), [&](const Provider &a, const Provider &b) {
-        if (rank(a) != rank(b))
-            return rank(a) < rank(b);
+    // Settings → Providers: Pi's whole catalog by display name.
+    std::stable_sort(list.begin(), list.end(), [](const Provider &a, const Provider &b) {
         return QString::localeAwareCompare(a.name.toCaseFolded(), b.name.toCaseFolded()) < 0;
     });
     return list;
