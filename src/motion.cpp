@@ -9,8 +9,17 @@ FrameClock::FrameClock(std::function<void(qreal)> tick, QObject *parent)
 {
 }
 
+namespace
+{
+double testTime = -1;
+}
+
+void FrameClock::setTestTime(double seconds) { testTime = seconds; }
+
 double FrameClock::now()
 {
+    if (testTime >= 0)
+        return testTime;
     static const QElapsedTimer clock = [] {
         QElapsedTimer started;
         started.start();

@@ -64,7 +64,7 @@ cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release \
   -DOPENGHOST_BUILD_SMOKE_TEST=ON
 cmake --build build-release --parallel 4
 ctest --test-dir build-release \
-  -R '^(native_contract_test|native_plugins_test|native_media_test|native_ui_smoke|native_fake_ui_smoke)$' \
+  -R '^(native_contract_test|native_plugins_test|native_media_test|native_ui_smoke|native_fake_ui_smoke|native_splash_test|native_splash_test_60hz)$' \
   --output-on-failure
 ```
 
@@ -91,6 +91,15 @@ to **OFF** and enables all four checks:
   attachment/approval cards, deletion and fixture auth.
   Both UI smokes also drive the production Plugins page over a scripted backend:
   button dispatch, pending controls, failures, external changes and capability loss.
+- `native_splash_test` (240 Hz) and `native_splash_test_60hz`: the 1.3 splash
+  stepped on a fixed clock and checked frame by frame against `splash.js` (scene
+  start, lean, rounded flight transform, word on the landing's frame, blink,
+  opening, handoff); every splash alpha source stays in [0, 1] and no colour
+  goes out of range over the whole timeline, nor as the browser button's globe
+  spring settles closed (it dips just below 0 at 240 Hz). Run on a GPU
+  scene graph (e.g. `MAXIMIZE=1 tests/parity/private-kwin.sh 3840 2160 1.45 out
+  --splash-check`, a private headless KWin) it also checks the rendered frames:
+  mist at .6 of the window's pixels, no Ghost afterimage, identical redraws.
 
 CTest uses offscreen/software rendering. Smokes isolate appearance, preferences
 and the library in temporary directories (even the fake smoke uses a temporary

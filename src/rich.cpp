@@ -2659,8 +2659,10 @@ void Theme::fieldLines(QQuickTextDocument *document, qreal height) const
 
 QColor Theme::alpha(const QColor &color, qreal opacity) const
 {
+    // rgba()'s alpha is clamped to [0, 1], as CSS clamps it: springs that
+    // settle on 0 or 1 pass just beyond it (by ~1e-5) on their last frames.
     QColor out = color;
-    out.setAlphaF(float(color.alphaF() * opacity));
+    out.setAlphaF(float(std::clamp(color.alphaF() * opacity, 0.0, 1.0)));
     return out;
 }
 

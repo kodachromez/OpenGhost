@@ -117,9 +117,10 @@ qt_add_resources(openghost-cpp icon PREFIX / BASE resources FILES resources/open
 option(OPENGHOST_BUILD_SMOKE_TEST "Build the standalone UI smoke check" OFF)
 if(OPENGHOST_BUILD_SMOKE_TEST)
     enable_testing()
-    find_package(Qt6 6.11 REQUIRED COMPONENTS Test)
-    target_sources(openghost-cpp PRIVATE tests/smoke.cpp tests/plugin_smoke.cpp tests/parity/native.cpp)
-    target_link_libraries(openghost-cpp PRIVATE Qt6::Test)
+    find_package(Qt6 6.11 REQUIRED COMPONENTS Test GuiPrivate)
+    target_sources(openghost-cpp PRIVATE tests/smoke.cpp tests/plugin_smoke.cpp tests/parity/native.cpp
+        tests/splash_frames.cpp)
+    target_link_libraries(openghost-cpp PRIVATE Qt6::Test Qt6::GuiPrivate)
     target_compile_definitions(openghost-cpp PRIVATE OPENGHOST_SMOKE_TEST)
     add_executable(native_contract_test tests/contract.cpp src/settings.cpp)
     target_link_libraries(native_contract_test PRIVATE native_contract Qt6::Test)
@@ -144,6 +145,13 @@ if(OPENGHOST_BUILD_SMOKE_TEST)
     add_test(NAME native_fake_ui_smoke COMMAND openghost-cpp --smoke-test --fake-backend)
     set_tests_properties(native_ui_smoke native_fake_ui_smoke PROPERTIES TIMEOUT 30
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_QPA_PLATFORMTHEME=generic;QT_FORCE_STDERR_LOGGING=1;OPENGHOST_REDUCED_MOTION=0")
+    # The splash against splash.js's timeline, frame by frame on a stepped
+    # 240 Hz clock (its rendered frames too, where a GPU scene graph runs).
+    add_test(NAME native_splash_test COMMAND openghost-cpp --splash-check)
+    add_test(NAME native_splash_test_60hz COMMAND openghost-cpp --splash-check)
+    set_tests_properties(native_splash_test native_splash_test_60hz PROPERTIES TIMEOUT 60
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_QPA_PLATFORMTHEME=generic;QT_FORCE_STDERR_LOGGING=1;OPENGHOST_REDUCED_MOTION=0")
+    set_property(TEST native_splash_test_60hz APPEND PROPERTY ENVIRONMENT "OPENGHOST_SPLASH_HZ=60")
     # The browser panel's state machine, and its real guests in the UI smoke.
     add_executable(native_browser_test tests/browser.cpp)
     target_link_libraries(native_browser_test PRIVATE native_contract Qt6::Test)

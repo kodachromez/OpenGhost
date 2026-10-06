@@ -425,8 +425,11 @@ void GlobeIcon::paint(QPainter *painter)
     const QPen pen(m_color, 5.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
     QPainterPath globe;
     globe.addEllipse(QPointF(30, 30), 22, 22);
+    // browser-toggle.js: the fill's opacity is (open * .3).toFixed(3), which
+    // SVG clamps to [0, 1]; the spring dips just below 0 as it settles closed
+    // at high refresh rates.
     QColor fill = m_color;
-    fill.setAlphaF(m_color.alphaF() * m_open * 0.3);
+    fill.setAlphaF(m_color.alphaF() * std::clamp(std::round(m_open * 0.3 * 1000) / 1000, 0.0, 1.0));
     painter->fillPath(globe, fill);
     painter->strokePath(globe, pen);
     // The meridian narrows (rx 10 → 3.5) and moves 2.5 units as it spins,

@@ -14,6 +14,9 @@ class FrameClock final : public QAbstractAnimation
     int duration() const override { return -1; }
     // Monotonic seconds, the clock's time base.
     static double now();
+    // Tests only: hold the clock at `seconds` (a stepped, deterministic
+    // timeline); a negative value returns it to real time.
+    static void setTestTime(double seconds);
     // The latest interval any clock ticked with: a frame's length (0 before any).
     static double interval();
 

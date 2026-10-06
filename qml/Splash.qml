@@ -52,8 +52,9 @@ Item {
     property real lastFrame: -1
     property int evenFrames: 0
     property real landedAt: -1  // Scene time of the landing.
-    // Scene time the word and the step aside began: the frame after the
-    // landing, as animations played in splash.js start on the next frame.
+    // Scene time the word and the step aside began: the landing's frame, as
+    // splash.js plays them in the same frame callback, where an animation
+    // takes that frame's time as its start.
     property real wordAt: -1
     property real openAt: -1    // Scene time the opening began.
     property bool settled: false // The word and the step aside at their end.
@@ -90,6 +91,7 @@ Item {
 
     function clamp(v) { return Math.min(1, Math.max(0, v)) }
     function smooth(t) { return t * t * (3 - 2 * t) }
+    function fixed(v, places) { return Number(v.toFixed(places)) }
     function easeOut(t) { return Theme.bezier(0, 0, 0.58, 1, clamp(t)) }
 
     // splash.js spot() and pose(): where the Ghost is at `u` of its way in,
@@ -119,11 +121,10 @@ Item {
                 return
             t0 = ms
         }
-        const previous = now
         now = ms - t0
         if (landedAt < 0)
-            travel(now, previous < 0 ? 0 : now - previous)
-        else if (wordAt < 0)
+            travel(now)
+        if (landedAt >= 0 && wordAt < 0)
             wordAt = now
         mist()
         if (landedAt >= 0 && !blinked && now - landedAt >= 200) {
@@ -135,7 +136,7 @@ Item {
         if (openAt >= 0 && openMs >= (lands ? leaveFly + openDuration : openDuration))
             end()
     }
-    function travel(t, dt) {
+    function travel(t) {
         const p = pose(t)
         if (p.q >= 1) {
             arrive(t)
@@ -144,14 +145,14 @@ Item {
         if (p.q <= 0)
             return
         const speed = Math.hypot(p.vx, p.vy) || 1
-        // splash.js eases the lean a fifth of the way each frame; here per
-        // 60 Hz frame's worth of time, whatever the display's rate.
-        const k = 1 - Math.pow(0.8, dt / (1000 / 60))
-        tilt += (Math.max(-1, Math.min(1, p.vx / 1.4)) * 16 - tilt) * k
-        flyX = p.x
-        flyY = p.y
-        flyScale = p.scale
-        presence = p.presence
+        // splash.js eases the lean a fifth of the way each frame, at the
+        // display's rate, and writes the transform and opacity rounded
+        // (toFixed: 2 places, the scale 4, the opacity 3).
+        tilt += (Math.max(-1, Math.min(1, p.vx / 1.4)) * 16 - tilt) * 0.2
+        flyX = fixed(p.x, 2)
+        flyY = fixed(p.y, 2)
+        flyScale = fixed(p.scale, 4)
+        presence = fixed(p.presence, 3)
         ghost.look(p.vx / speed * 4, p.vy / speed * 2.4, 200)
         glowAt = Qt.vector4d(width / 2 + p.x, height / 2 + p.y, p.scale, p.presence)
     }
@@ -208,6 +209,7 @@ Item {
             anchors.fill: parent
             active: splash.shaded
             sourceComponent: ShaderEffect {
+                objectName: "splashMist"
                 readonly property var tokens: Theme.splash
                 function rgb(c) { return Qt.vector4d(c.r, c.g, c.b, 1) }
                 property size view: Qt.size(width, height)
@@ -232,11 +234,15 @@ Item {
                 property real shade: tokens.shade
                 property real motes: tokens.motes
                 fragmentShader: "qrc:/shaders/mist.frag.qsb"
-                // The mist at .6 of the window's pixels (MIST.scale), stretched.
+                // The mist at .6 of the window's pixels (MIST.scale), stretched:
+                // the window's own ratio, as splash.js's devicePixelRatio is.
+                // Under fractional scaling the screen's (the output's
+                // integer scale on Wayland) is not the window's.
+                readonly property real ratio: Window.window ? Window.window.devicePixelRatio : Screen.devicePixelRatio
                 layer.enabled: true
                 layer.smooth: true
-                layer.textureSize: Qt.size(Math.max(1, Math.round(width * Screen.devicePixelRatio * 0.6)),
-                                           Math.max(1, Math.round(height * Screen.devicePixelRatio * 0.6)))
+                layer.textureSize: Qt.size(Math.max(1, Math.round(width * ratio * 0.6)),
+                                           Math.max(1, Math.round(height * ratio * 0.6)))
             }
         }
         // Without shaders: .splash-aura, a soft light in the middle that
@@ -284,7 +290,7 @@ Item {
            + (splash.landing.x - baseX + splash.wordShift) * splash.flown
         y: baseY + splash.flyY + (splash.landing.y - baseY) * splash.flown
         transformOrigin: Item.Center
-        rotation: splash.tilt
+        rotation: splash.fixed(splash.tilt, 2)
         scale: splash.flyScale * (1 + (splash.landingScale - 1) * splash.flown) * (1 - 0.2 * splash.faded)
         opacity: splash.presence * (1 - splash.faded)
         running: splash.visible
@@ -303,6 +309,18 @@ Item {
     readonly property real leaving: openMs < 0 ? 0 : easeOut(openMs / leaveWord)
     function letterAt(k) {
         return settled ? 1 : since < 0 ? 0 : easeOut((since - wordDelay - k * wordStagger) / wordDuration)
+    }
+    // A sharp letter's opacity: 0, 0 at .18, then 1. A soft one's: 0, 1 at
+    // .3, then 0; leaving, .35 at .3 of 260 ms. Kept in [0, 1], as CSS keeps
+    // an interpolated opacity ((1 - .18) / .82 is 1 + 2e-16).
+    function sharpAt(k) {
+        const p = letterAt(k)
+        return p < 0.18 ? 0 : clamp((p - 0.18) / 0.82)
+    }
+    function hazeAt(k) {
+        const p = letterAt(k), l = openMs < 0 ? -1 : easeOut(openMs / (leaveWord + 60))
+        return clamp(l >= 0 ? (l < 0.3 ? 0.35 * l / 0.3 : 0.35 * (1 - l) / 0.7)
+                            : p < 0.3 ? p / 0.3 : (1 - p) / 0.7)
     }
     function trackAt(k) {
         return settled ? 0 : since < 0 ? k * 0.265 * wordSize
@@ -339,9 +357,7 @@ Item {
             Repeater {
                 model: splash.word.length
                 delegate: Letter {
-                    // Opacity 0, 0 at .18, then 1.
-                    readonly property real p: splash.letterAt(index)
-                    opacity: p < 0.18 ? 0 : (p - 0.18) / 0.82
+                    opacity: splash.sharpAt(index)
                 }
             }
         }
@@ -359,11 +375,7 @@ Item {
             Repeater {
                 model: splash.word.length
                 delegate: Letter {
-                    // Opacity 0, 1 at .3, then 0; leaving, .35 at .3 of 260 ms.
-                    readonly property real p: splash.letterAt(index)
-                    readonly property real l: splash.openMs < 0 ? -1 : splash.easeOut(splash.openMs / (splash.leaveWord + 60))
-                    opacity: l >= 0 ? (l < 0.3 ? 0.35 * l / 0.3 : 0.35 * (1 - l) / 0.7)
-                                    : p < 0.3 ? p / 0.3 : (1 - p) / 0.7
+                    opacity: splash.hazeAt(index)
                 }
             }
         }
