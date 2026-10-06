@@ -134,6 +134,17 @@ export default function (pi) {
           const failed = latest(ctx.sessionManager);
           if (failed?.type !== "message" || failed.message.role !== "assistant" || failed.message.stopReason !== "error")
             throw new Error("Pi's latest reply did not fail, so there is nothing to retry.");
+          // Validate on Pi's active branch too: an extension can navigate or
+          // append context without going through the frontend's turn journal.
+          const branch = ctx.sessionManager.getBranch();
+          const at = branch.findIndex((entry) => entry.id === failed.id);
+          const owner = branch.slice(0, at).findLast((entry) =>
+            entry.type === "custom" && entry.customType === MARK && entry.data?.event === "start");
+          if (!request.failedTurnId || owner?.data?.turn !== request.failedTurnId)
+            throw new Error("Pi's failed reply no longer belongs to the requested turn.");
+          if (branch.slice(at + 1).some((entry) =>
+            ["compaction", "branch_summary", "context_edit"].includes(entry.type)))
+            throw new Error("Pi's context changed after that reply failed; an exact Retry is unavailable.");
           // A continuation has no before_agent_start: Pi keeps the prompt sections,
           // instructions included, that the failed turn had.
           status("", { ok: true });

@@ -1,0 +1,148 @@
+#!/usr/bin/env python3
+"""Adversarial RPC fixture: admission, queue/abort races, and post-Stop usage.
+No providers, credentials, network, or tools. Not a Pi runtime qualification.
+"""
+import json
+import os
+import select
+import sys
+import time
+
+bridge = sys.argv[sys.argv.index('-e') + 1]
+mode = os.environ.get('PI_AUDIT_CASE', '')
+queue = []
+timers = []
+active = False
+entries = []
+
+
+def out(record):
+    print(json.dumps(record), flush=True)
+
+
+def response(command, data=None, error=None):
+    out(dict(type='response', id=command['id'], command=command['type'],
+             success=error is None, data=data, error=error))
+
+
+def later(delay, callback):
+    timers.append((time.monotonic() + delay, callback))
+
+
+def assistant(text, reason='stop', provider='actual', model='physical'):
+    message = dict(role='assistant', content=[dict(type='text', text=text)],
+                   provider=provider, model=model, stopReason=reason,
+                   usage=dict(input=11, output=7, cacheRead=3, cacheWrite=2, reasoning=4))
+    out(dict(type='message_start', message=dict(message, content=[])))
+    out(dict(type='message_update', usage=message['usage'],
+             assistantMessageEvent=dict(type='text_delta', delta='provisional')))
+    out(dict(type='message_end', message=message))
+
+
+def settled():
+    global active
+    active = False
+    out(dict(type='agent_settled'))
+
+
+def user(text):
+    out(dict(type='message_start', message=dict(role='user', content=text)))
+
+
+def handle(command):
+    global active, queue
+    with open(os.environ['PI_AUDIT_LOG'], 'a') as log:
+        log.write(json.dumps(command) + '\n')
+    kind = command['type']
+    if kind == 'get_commands':
+        def ready():
+            response(command, dict(commands=[dict(name='openghost', sourceInfo=dict(path=bridge))]))
+        if mode == 'bridge-delay':
+            later(0.2, ready)
+        else:
+            ready()
+    elif kind == 'get_available_models':
+        response(command, dict(models=[dict(id='selected', provider='virtual', name='Selected')]))
+    elif kind == 'get_state':
+        response(command, dict(model=dict(id='selected', provider='virtual'), isStreaming=active))
+    elif kind == 'get_entries':
+        response(command, dict(entries=entries))
+    elif kind == 'prompt':
+        text = command['message']
+        if text.startswith('/openghost '):
+            request = json.loads(text[len('/openghost '):])
+            if request['op'] == 'mark':
+                entries.append(dict(type='custom', customType='openghost-turn', data=request['entry']))
+            out(dict(type='extension_ui_request', method='setStatus',
+                     statusKey='openghost:' + request['token'],
+                     statusText=json.dumps(dict(ok=True, providers=[]))))
+            response(command, dict(disposition='handled'))
+            return
+        if mode == 'lost-process':
+            sys.exit(0)  # lost admission reply, not a definite rejection
+        if mode == 'unknown':
+            response(command, dict(disposition='mystery'))
+            return
+        if mode == 'pending':
+            return  # a lost acknowledgement, not proof that Pi rejected it
+        response(command, dict(disposition='started'))
+        active = True
+        out(dict(type='agent_start'))
+        user(text)
+        if text == 'hold':
+            if mode == 'late-usage':
+                assistant('before Stop', 'toolUse')
+            return
+        if mode != 'empty-end':
+            assistant('authoritative', 'error' if text == 'fail' else 'stop')
+        settled()
+    elif kind == 'steer':
+        def admit():
+            text = '' if mode == 'empty-steer' else command['message']
+            queue.append(text)
+            out(dict(type='queue_update', steering=queue, followUp=[]))
+            response(command, dict(disposition='queued'))
+            if mode == 'empty-steer':
+                user(queue.pop(0))
+                assistant('steered')
+                settled()
+        if mode in ('late-steer', 'late-settle'):
+            if mode == 'late-settle':
+                assistant('ended during input handler')
+                settled()
+            later(0.2, admit)
+        else:
+            admit()
+    elif kind == 'clear_queue':
+        if mode == 'clear-fails':
+            response(command, error='cannot clear queue')
+            return
+        queue = []
+        out(dict(type='queue_update', steering=[], followUp=[]))
+        response(command, dict(steering=[], followUp=[]))
+    elif kind == 'abort':
+        if mode == 'late-usage':
+            assistant('must stay invisible', 'aborted', 'late-provider', 'late-model')
+        settled()
+        # agent_settled is earlier than abort's response; starts must stay fenced.
+        later(0.2, lambda: response(command))
+    else:
+        response(command, error='unsupported fixture command')
+
+
+buffer = b''
+while True:
+    wait = max(0, min(t[0] for t in timers) - time.monotonic()) if timers else None
+    ready, _, _ = select.select([sys.stdin.buffer], [], [], wait)
+    for due, callback in list(timers):
+        if due <= time.monotonic():
+            timers.remove((due, callback))
+            callback()
+    if ready:
+        chunk = os.read(sys.stdin.fileno(), 65536)
+        if not chunk:
+            break
+        buffer += chunk
+        while b'\n' in buffer:
+            line, buffer = buffer.split(b'\n', 1)
+            handle(json.loads(line))
