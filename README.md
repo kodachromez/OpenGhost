@@ -399,7 +399,8 @@ with OpenGhost and runs inside every chat's Pi. OpenGhost owns the Ask/Auto/Full
 selection, relays it (the bridge says it to Pi's extensions on `pi.events`
 channel `openghost:mode`), and renders the plugin's requests (a Pi extension UI
 `confirm` titled `openghost:approval`) as approval cards with the plugin's
-decisions; it never decides whether a tool call runs. Without the plugin, Pi's
+decisions; it never decides whether a tool call runs. Settings → Plugins →
+*Permissions* turns the plugin and that UI off and on. Without the plugin, Pi's
 tools run unasked in every mode, and OpenGhost says permissions are not
 enforced.
 

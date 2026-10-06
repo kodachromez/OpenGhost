@@ -512,6 +512,19 @@ void FakeBackend::advance()
         }
     }
 }
+// Permissions off: a waiting fixture request is withdrawn and declined, as Pi's
+// would be. The fixture still asks afterwards, so a card without the plugin's
+// decisions can be seen.
+void FakeBackend::setPermissionsEnabled(bool enabled)
+{
+    if (enabled)
+        return;
+    const auto waiting = m_approvals.keys();
+    for (const auto id : waiting) {
+        emit reverseCancelled(id);
+        answer(id, ApprovalAnswer{Decision::Deny, {}});
+    }
+}
 void FakeBackend::answer(RequestId id, const ReverseResult &result)
 {
     const auto pending = m_approvals.find(id);

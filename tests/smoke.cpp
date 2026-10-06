@@ -1,4 +1,5 @@
 #include "diagram.h"
+#include "frontend/permissions_plugin.h"
 #include "markdown.h"
 #include "medialoader.h"
 #include "rich.h"
@@ -580,6 +581,79 @@ int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
                       "the reasoned Deny completes");
                 check(lastAssistantText(controller).contains(QStringLiteral("denied: use the fixture")),
                       "the reason reaches the backend with the Deny");
+            }
+
+            // Permissions off: the waiting request is declined and its card goes,
+            // and the mode picker, the card's decisions and their shortcuts are
+            // gone. On again, they are all back.
+            {
+                auto *plugins = controller.frontendPlugins();
+                const auto &id = openghost::PermissionsPlugin::Id;
+                auto *picker = findVisual(window->contentItem(), QStringLiteral("modePicker"));
+                check(plugins->enabled(id) && controller.permissions() && picker &&
+                          picker->isVisible(),
+                      "Permissions is on by default, with the mode picker");
+                const auto mode = controller.modes().value(QStringLiteral("permission"));
+                check(mode.toString() != QStringLiteral("full"), "a mode other than Full");
+                decisionsCard("a card waits as Permissions turns off");
+                check(plugins->setEnabled(id, false) && !controller.permissions(),
+                      "Permissions turns off");
+                check(controller.approvals().isEmpty(), "the waiting request is withdrawn at once");
+                check(QTest::qWaitFor([&] { return !controller.busy(); }, 3000) &&
+                          lastAssistantText(controller).contains(QStringLiteral("denied")),
+                      "the withdrawn request is declined, so its turn ends");
+                check(QTest::qWaitFor([&] { return !picker->isVisible(); }, 1000) &&
+                          !controller.modes().value(QStringLiteral("known")).toBool(),
+                      "the mode picker hides");
+                controller.setPermissionMode(QStringLiteral("full")); // Ignored while off.
+                check(QTest::qWaitFor(
+                          [&] {
+                              return !findVisual(window->contentItem(), QStringLiteral("approvalCard"));
+                          },
+                          2000),
+                      "the withdrawn card folds away");
+                composer->setProperty("text", QStringLiteral("/fake decisions"));
+                QMetaObject::invokeMethod(window, "submit");
+                QQuickItem *plain = nullptr;
+                check(QTest::qWaitFor(
+                          [&] {
+                              plain = findVisual(window->contentItem(), QStringLiteral("approvalCard"));
+                              return plain != nullptr;
+                          },
+                          2000),
+                      "a request while off is a card");
+                if (plain) {
+                    auto *session = findVisual(plain, QStringLiteral("approvalAllowSession"));
+                    auto *reason = findVisual(plain, QStringLiteral("approvalDenyReason"));
+                    check(!plain->property("rich").toBool() && !(session && session->isVisible()) &&
+                              !(reason && reason->isVisible()),
+                          "a card while off has only Allow and Deny");
+                    plain->forceActiveFocus();
+                    for (const auto key : {Qt::Key_S, Qt::Key_S, Qt::Key_Y, Qt::Key_Y, Qt::Key_N,
+                                           Qt::Key_N, Qt::Key_B, Qt::Key_B, Qt::Key_R, Qt::Key_R})
+                        QTest::keyClick(window, key);
+                    QTest::qWait(300);
+                    check(!controller.approvals().isEmpty() && !plain->property("settled").toBool() &&
+                              plain->property("armed").toString().isEmpty(),
+                          "y, s, b, n and r do nothing while off");
+                    auto *deny = findVisual(plain, QStringLiteral("approvalDeny"));
+                    check(deny && QMetaObject::invokeMethod(deny, "clicked") &&
+                              QTest::qWaitFor([&] { return !controller.busy(); }, 3000),
+                          "its Deny answers");
+                }
+                check(plugins->setEnabled(id, true) && controller.permissions() &&
+                          QTest::qWaitFor([&] { return picker->isVisible(); }, 1000),
+                      "Permissions on again shows the mode picker");
+                check(controller.modes().value(QStringLiteral("permission")) == mode,
+                      "no mode was picked while off");
+                if (auto *card = decisionsCard("the decisions return to the card")) {
+                    card->forceActiveFocus();
+                    QTest::keyClick(window, Qt::Key_N);
+                    QTest::keyClick(window, Qt::Key_N);
+                    check(QTest::qWaitFor([&] { return !controller.busy(); }, 3000) &&
+                              lastAssistantText(controller).contains(QStringLiteral("denied")),
+                          "and their shortcuts answer again");
+                }
             }
 
             composer->setProperty("text", QStringLiteral("/fake error"));

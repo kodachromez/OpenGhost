@@ -42,6 +42,9 @@ class WindowController final : public QObject
     Q_PROPERTY(bool picking READ off CONSTANT)
     Q_PROPERTY(bool switching READ off CONSTANT)
     Q_PROPERTY(QVariantMap uploads READ emptyMap CONSTANT)
+    // The Permissions plugin is on (or not registered): the mode picker, the
+    // approval card's decisions and their shortcuts show only then.
+    Q_PROPERTY(bool permissions READ permissions NOTIFY permissionsChanged)
     Q_PROPERTY(QVariantMap modes READ modes NOTIFY changed)
     Q_PROPERTY(QVariantList approvals READ approvals NOTIFY approvalsChanged)
     // Its own NOTIFY: the Settings pages (and tab delegates) change only with support.
@@ -92,6 +95,7 @@ class WindowController final : public QObject
     QString emptyText() const { return {}; }
     QVariantMap emptyMap() const { return {}; }
     QVariantMap modes() const;
+    bool permissions() const { return m_permissions; }
     QVariantList approvals() const;
     bool runtimePlugins() const { return m_chat.plugins()->supported(); }
     bool pluginsLoading() const { return m_chat.plugins()->loading(); }
@@ -154,7 +158,8 @@ class WindowController final : public QObject
     Q_INVOKABLE void decide(const QString &id, const QString &action, const QString &note = {},
                             const QString &scope = {})
     {
-        m_chat.decide(id.toULongLong(), action, note, scope);
+        if (m_permissions)
+            m_chat.decide(id.toULongLong(), action, note, scope);
     }
     Q_INVOKABLE void copy(const QString &text);
     Q_INVOKABLE QString selectedText(QQuickTextDocument *document, int start, int end) const;
@@ -181,6 +186,7 @@ class WindowController final : public QObject
   signals:
     void changed();
     void approvalsChanged();
+    void permissionsChanged();
     void pluginsChanged();
     void runtimePluginsChanged();
     void accepted(quint64 submission); // Validated acceptance, never completion.
@@ -202,12 +208,14 @@ class WindowController final : public QObject
     void sync();
     void syncPlugins();
     void applyRenderers();
+    void syncPermissions();
     void keepPictures(const QVector<openghost::Attachment> &sent);
     void catalog();
     QObject *m_browser = nullptr;
     openghost::PreferencesStore m_preferences;
     openghost::FrontendPlugins m_frontendPlugins;
     QString m_openSession; // The session last published as session.opened.
+    bool m_permissions = true; // permissions(), as last told to the backend
     std::unique_ptr<openghost::KeyStore> m_store;
     std::unique_ptr<openghost::KeyStore> m_usageStore; // only with a separate usagePath
     openghost::Library m_library;

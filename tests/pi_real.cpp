@@ -31,7 +31,7 @@ struct Harness {
     QStringList logs;
     explicit Harness(const QString &folder, bool permissions = true)
     {
-        backend.setPermissionPluginLoaded(permissions);
+        backend.setPermissionsEnabled(permissions);
         QObject::connect(&backend, &Backend::globalEvent, [this](const GlobalEvent &event) {
             if (const auto *log = std::get_if<Log>(&event))
                 logs.append(log->level + ' ' + log->message);
@@ -368,6 +368,32 @@ class PiRealTest final : public QObject
         QVERIFY(h.asks());
         h.deny();
         QVERIFY(!QFile::exists(m_folder + QStringLiteral("/four.txt")));
+    }
+
+    // An explicit deny always wins: Allow for session suppresses later asks but
+    // never overrides an operator's deny its pattern covers, in Ask, Auto or Full.
+    void aSessionApprovalNeverOverridesADeny()
+    {
+        Policy policy(R"({"permission":{"bash":{"touch secret*":"deny"}}})");
+        Harness h(m_folder);
+        QVERIFY(h.call(QStringLiteral("bash"), {{"command", "touch g1.txt"}}));
+        QVERIFY(h.asks());
+        h.decide(QStringLiteral("approveSession")); // "touch *" for this session
+        QVERIFY(QFile::exists(m_folder + QStringLiteral("/g1.txt")));
+        const std::pair<PermissionMode, const char *> modes[] = {
+            {PermissionMode::Ask, "ask"}, {PermissionMode::Auto, "auto"},
+            {PermissionMode::Full, "full"}};
+        for (const auto &[mode, name] : modes) {
+            h.mode(mode, name);
+            const auto file = QStringLiteral("g-%1.txt").arg(QLatin1String(name));
+            QVERIFY(h.call(QStringLiteral("bash"), {{"command", "touch " + file}}));
+            QVERIFY(!h.asks());
+            QVERIFY(QFile::exists(m_folder + QLatin1Char('/') + file));
+            QVERIFY(h.call(QStringLiteral("bash"), {{"command", "touch secret.txt"}}));
+            QVERIFY(!h.asks());
+            QVERIFY(h.reply().contains(QStringLiteral("done: error:")));
+            QVERIFY(!QFile::exists(m_folder + QStringLiteral("/secret.txt")));
+        }
     }
 
     // Deny with a reason: the plugin tells the agent the user's reason.

@@ -182,6 +182,13 @@ class ChatService final : public QObject
     // Anything the request did not offer is ignored. OpenGhost decides nothing
     // here: the asker (Pi's plugin-permissions) applies it.
     void decide(RequestId id, const QString &action, const QString &note, const QString &scope);
+    // The Permissions switch, told to the backend: off, it declines and withdraws
+    // a waiting request (the card goes through reverseCancelled) and asks no more.
+    void setPermissionsEnabled(bool enabled)
+    {
+        if (m_backend)
+            m_backend->setPermissionsEnabled(enabled);
+    }
     static QString metrics(const ChatRecord::Turn &turn);
     static QJsonArray entries(const QVector<DisplayRow> &rows);
     static QVector<DisplayRow> rowsOf(const QJsonArray &saved);

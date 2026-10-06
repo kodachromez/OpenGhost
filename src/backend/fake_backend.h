@@ -17,6 +17,7 @@ class FakeBackend final : public Backend
     void cancelRequest(RequestId id) override;
     void answer(RequestId id, const ReverseResult &result) override;
     void browserChanged(const BrowserState &) override {}
+    void setPermissionsEnabled(bool enabled) override;
     void advance(); // One deterministic streaming step; intervalMs=0 disables timer.
   private:
     struct Turn {

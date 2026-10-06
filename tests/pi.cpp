@@ -1232,6 +1232,59 @@ class PiTest final : public QObject
         QCOMPARE(after, 2);
     }
 
+    // The Permissions switch off: the waiting card is declined to the Pi that asked
+    // and withdrawn, a request Pi still asks is declined at once (no card, nothing
+    // left waiting), and the chat's idle Pi restarts without plugin-permissions.
+    // On again, the next run's Pi loads it and its requests are cards again.
+    void permissionsOffDeclinesWaitingRequestsAndUnloadsThePlugin()
+    {
+        Harness h;
+        QTRY_VERIFY(h.chat.ready());
+        const auto answers = [this] {
+            QVector<bool> confirmed;
+            for (const auto &record : records())
+                if (record.value("type").toString() == QStringLiteral("ui_response"))
+                    confirmed.append(record.value("confirmed").toBool());
+            return confirmed;
+        };
+        QVERIFY(h.chat.send(QStringLiteral("loaded")));
+        QTRY_VERIFY(h.settled());
+        QCOMPARE(h.text(DisplayRow::Role::Assistant), QStringLiteral("plugin-permissions: loaded"));
+
+        QVERIFY(h.chat.send(QStringLiteral("approve")));
+        QTRY_COMPARE(h.chat.approvals().size(), 1);
+        h.chat.setPermissionsEnabled(false);
+        QVERIFY(h.chat.approvals().isEmpty());
+        QTRY_VERIFY(h.settled());
+        QVERIFY(h.text(DisplayRow::Role::Assistant).endsWith(QStringLiteral("\n\nblocked")));
+        QCOMPARE(answers(), QVector<bool>{false});
+
+        QVERIFY(h.chat.send(QStringLiteral("loaded")));
+        QTRY_VERIFY(h.settled());
+        QCOMPARE(h.text(DisplayRow::Role::Assistant), QStringLiteral("plugin-permissions: absent"));
+        // Another asker's request while off: declined at once, never a card.
+        bool carded = false;
+        const auto watch = connect(&h.chat, &ChatService::changed, this,
+                                   [&] { carded |= !h.chat.approvals().isEmpty(); });
+        QVERIFY(h.chat.send(QStringLiteral("approve")));
+        QTRY_VERIFY(h.settled());
+        disconnect(watch);
+        QVERIFY(!carded);
+        QVERIFY(h.text(DisplayRow::Role::Assistant).endsWith(QStringLiteral("\n\nblocked")));
+
+        h.chat.setPermissionsEnabled(true);
+        QVERIFY(h.chat.send(QStringLiteral("loaded")));
+        QTRY_VERIFY(h.settled());
+        QCOMPARE(h.text(DisplayRow::Role::Assistant), QStringLiteral("plugin-permissions: loaded"));
+        QVERIFY(h.chat.send(QStringLiteral("approve")));
+        QTRY_COMPARE(h.chat.approvals().size(), 1);
+        h.chat.approve(h.chat.approvals().first().request, true);
+        QTRY_VERIFY(h.settled());
+        QVERIFY(h.text(DisplayRow::Role::Assistant).endsWith(QStringLiteral("\n\nran")));
+        QCOMPARE(answers().size(), 3);
+        QCOMPARE(answers().last(), true);
+    }
+
     // OpenGhost decides nothing with the mode: Full is relayed to Pi, and a call Pi
     // still asks about is a card in Full too. A change reaches the idle and the
     // running Pi at once; what it does to a waiting request is Pi's to say.

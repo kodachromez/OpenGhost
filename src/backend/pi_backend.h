@@ -55,10 +55,12 @@ class PiBackend final : public Backend
     void answer(RequestId id, const ReverseResult &result) override;
     void browserChanged(const BrowserState &) override {}
     QString sessionFile(const QString &session) const;
-    // Tests only: start chat children without plugin-permissions, to show that
-    // OpenGhost then enforces nothing itself (and says permissions are not
-    // enforced). Production always loads it.
-    void setPermissionPluginLoaded(bool loaded) { m_loadPermissions = loaded; }
+    // Whether chat children load plugin-permissions (the frontend's Permissions
+    // switch; on by default). Off: a waiting approval is declined and withdrawn,
+    // a request a child still asks is declined at once, and OpenGhost enforces
+    // nothing itself (it says permissions are not enforced). A chat's idle child
+    // started the other way is restarted before its next run.
+    void setPermissionsEnabled(bool enabled) override;
 
   private:
     using Done = PiProcess::Done;
@@ -115,6 +117,7 @@ class PiBackend final : public Backend
         std::optional<PermissionMode> mode; // the access mode this child's bridge holds
         quint64 modeSent = 0;                // the latest mode update sent to this child
         bool unenforcedSaid = false;         // told that this child enforces no permissions
+        bool permissions = false;            // this child loaded plugin-permissions
         int auth = 0;                       // the configuration generation its Pi has read
         QVector<RequestId> deletes;          // DeleteSession calls awaiting erasure
     };

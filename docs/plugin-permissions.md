@@ -160,6 +160,23 @@ session ends, and it caps each text a card request carries (64 KiB) so a huge
 call cannot make an undeliverable RPC record; the decision is made on the call
 itself. A shortcut key held down never counts as its second press.
 
+## Turning it off
+
+Settings → Plugins → *Permissions* (`openghost.plugin-permissions`, on by
+default) is the switch for the plugin and OpenGhost's permission UI.
+
+- **Off.** The Ask / Auto / Full picker, the approval card's decisions (Allow
+  for session, the links, the reason step) and the `y` / `s` / `b` / `n` / `r`
+  shortcuts are gone. A request already waiting is declined to the Pi that
+  asked and its card withdrawn, so Pi is never left waiting. Chats' Pi then
+  start without plugin-permissions: an idle chat's Pi restarts before its next
+  run, and a request a Pi still running with the plugin asks is declined at
+  once. Pi's tools run without asking, and OpenGhost says permissions are not
+  enforced.
+- **On again.** The picker, decisions and shortcuts return, and each chat's Pi
+  restarts with the plugin before its next run. A turn already running without
+  the plugin finishes unenforced.
+
 ## The boundary
 
 | OpenGhost (C++/QML, `openghost-bridge.js`) | plugin-permissions |
@@ -173,7 +190,7 @@ itself. A shortcut key held down never counts as its second press.
 
 **OpenGhost decides no tool call.** It has no shell, path, read/write,
 symlink, containment or mode policy. When plugin-permissions is not loaded
-(another Pi setup, or `PiBackend::setPermissionPluginLoaded(false)` in tests),
+(Permissions turned off, or another Pi setup),
 Pi's tools run unasked. OpenGhost then says *"Permissions are not enforced: Pi's
 permission plugin (plugin-permissions) is not loaded, so Pi's tools run without
 asking, whatever the access mode."* It does not enforce anything in the plugin's
@@ -235,11 +252,16 @@ The suites:
   - Stop, a stale answer and a duplicate answer run nothing.
   - Chat deletion and Pi exit close the card.
   - Without the plugin, OpenGhost enforces nothing and says so.
+  - A session approval never overrides an operator's deny, in Ask, Auto or Full.
 - **`native_pi_test`.** A card choice reaches the asker before its confirm; only
-  offered decisions are taken. Plus the existing lifecycle tests: Stop,
+  offered decisions are taken. Turning Permissions off declines and withdraws
+  the waiting card, declines later requests at once and restarts the chat's Pi
+  without the plugin; on again, with it. Plus the existing lifecycle tests: Stop,
   deletion, staleness, answer-once and mode relay.
 - **`native_fake_ui_smoke`.** The card's shortcuts (arming, Escape, double
-  press), Allow for session, and the reason step's Cancel and Send.
+  press), Allow for session, and the reason step's Cancel and Send. Permissions
+  off withdraws a waiting card and hides the mode picker, and a card then has
+  only Allow and Deny with no shortcuts; on again, all of it returns.
 
 Pi validates and coerces a call's arguments against the tool's schema before
 the `tool_call` hook runs, and hands the plugin those same arguments: the

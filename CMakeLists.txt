@@ -43,6 +43,7 @@ add_library(native_contract STATIC src/backend/types.h src/backend/backend.h
     src/frontend/preferences.cpp src/frontend/chat_service.cpp src/frontend/plugins.cpp
     src/frontend/frontend_plugin.h src/frontend/frontend_plugins.h src/frontend/frontend_plugins.cpp
     src/frontend/example_plugin.h src/frontend/example_plugin.cpp
+    src/frontend/permissions_plugin.h src/frontend/permissions_plugin.cpp
     src/frontend/usage.cpp src/frontend/store.cpp
     src/frontend/library.cpp src/frontend/host.h)
 target_include_directories(native_contract PUBLIC src)

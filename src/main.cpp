@@ -2,6 +2,7 @@
 #include "backend/fake_backend.h"
 #include "backend/pi_backend.h"
 #include "frontend/browser.h"
+#include "frontend/permissions_plugin.h"
 #include "medialoader.h"
 #include "platform/platform.h"
 #include "videoinfo.h"
@@ -232,6 +233,8 @@ int main(int argc, char *argv[])
     WindowController controller(backend.get(), preferencesPath, dataPath, browser.get(),
                                 usagePath);
     openghost::registerBuiltinPlugins(*controller.frontendPlugins());
+    // Permissions (Pi's plugin-permissions and its UI): always built in, on by default.
+    controller.frontendPlugins()->add(std::make_unique<openghost::PermissionsPlugin>());
 #ifdef OPENGHOST_TOOL_CALLS
     registerToolCallsTypes();
     controller.frontendPlugins()->add(std::make_unique<openghost::ToolCallsPlugin>());

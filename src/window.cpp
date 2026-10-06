@@ -1,5 +1,6 @@
 #include "window.h"
 #include "frontend/browser.h"
+#include "frontend/permissions_plugin.h"
 #include "platform/platform.h"
 #include "rich.h"
 
@@ -106,6 +107,8 @@ WindowController::WindowController(openghost::Backend *backend, QString preferen
     connect(&m_chat, &openghost::ChatService::answered, this, [this] {
         m_frontendPlugins.publish({openghost::events::ReplyDelta, m_chat.current().id, {}});
     });
+    connect(&m_frontendPlugins, &openghost::FrontendPlugins::entriesChanged, this,
+            &WindowController::syncPermissions);
     connect(&m_frontendPlugins, &openghost::FrontendPlugins::rowsChanged, this,
             &WindowController::sync);
     // A row kind's renderer came or went (a plugin turned on or off): the open
@@ -444,8 +447,24 @@ QVariantMap WindowController::collapsedFolders() const
             result.insert(folder.path, true);
     return result;
 }
+// The Permissions plugin turned on or off: the backend is told first (off, it
+// declines and withdraws a waiting request), then the permission UI follows.
+void WindowController::syncPermissions()
+{
+    const auto &id = openghost::PermissionsPlugin::Id;
+    const bool on = !m_frontendPlugins.registered(id) || m_frontendPlugins.enabled(id);
+    if (on == m_permissions)
+        return;
+    m_permissions = on;
+    m_chat.setPermissionsEnabled(on);
+    emit permissionsChanged();
+    emit approvalsChanged();
+    emit changed();
+}
 QVariantMap WindowController::modes() const
 {
+    if (!m_permissions)
+        return {{"known", false}};
     return {{"known", true},
             {"permissions",
              QStringList{QStringLiteral("ask"), QStringLiteral("auto"), QStringLiteral("full")}},
@@ -453,6 +472,8 @@ QVariantMap WindowController::modes() const
 }
 void WindowController::setPermissionMode(const QString &name)
 {
+    if (!m_permissions)
+        return;
     if (const auto mode = openghost::parseMode(name))
         m_chat.setMode(*mode);
 }
@@ -621,19 +642,21 @@ QVariantList WindowController::approvals() const
                     {"title", p.tool},
                     {"code", QString::fromUtf8(QJsonDocument(p.args).toJson())},
                     {"reveal", "command"}};
+        // The asker's decisions and their shortcuts only while Permissions is
+        // on; off, a card is OpenGhost 1.3's Allow and Deny.
         QVariantList actions;
-        for (const auto &action : p.actions)
+        for (const auto &action : m_permissions ? p.actions : decltype(p.actions){})
             actions.append(QVariantMap{{"id", action.id},
                                        {"label", action.label},
                                        {"detail", action.detail},
                                        {"key", action.key}});
         QVariantMap scopes;
-        if (p.scopes)
+        if (p.scopes && m_permissions)
             scopes = {{"subagent", p.scopes->first}, {"session", p.scopes->second}};
         result.append(QVariantMap{{"requestId", QString::number(pending.request)},
                                   {"card", card},
                                   {"actions", actions},
-                                  {"doublePress", p.doublePressToConfirm},
+                                  {"doublePress", m_permissions && p.doublePressToConfirm},
                                   {"scopes", scopes},
                                   {"answered", false},
                                   {"toolCallId", p.toolCallId}});

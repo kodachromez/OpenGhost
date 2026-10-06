@@ -5,7 +5,8 @@
 # (tool calls with output and results), toolslow (a call left running), slow,
 # delay, switch (an extension changes the model); anything else is echoed. While "slow" runs, steers queue; a steer
 # approve: a tool call a stand-in Pi permission plugin asks the user about, in
-# every mode (it allows the waiting one itself once the mode turns full); foreign: another extension's select dialog; ext-error: an extension fails.
+# every mode (it allows the waiting one itself once the mode turns full); loaded: says whether
+# plugin-permissions was loaded; foreign: another extension's select dialog; ext-error: an extension fails.
 # Sign-in (bridge login) asks one prompt; provider "w" takes it back at once,
 # "n"/"sel"/"sec" send progress and info while it is open, and cancelling reports a
 # stale step of the cancelled flow before its end.
@@ -251,6 +252,9 @@ def run(text, images=None):
                      lambda r: tool_done(bool(r.get("confirmed")) and not r.get("cancelled")))
         globals()["approval"] = ("og-approval-1", rid)
         return
+    elif text == "loaded":  # Whether this Pi was started with plugin-permissions.
+        loaded = any(arg.endswith("plugin-permissions.js") for arg in sys.argv)
+        assistant("plugin-permissions: " + ("loaded" if loaded else "absent"), "stop", usage(3, 1))
     elif text == "foreign":
         def answered(r):
             assistant("foreign: " + ("cancelled" if r.get("cancelled") else str(r.get("value"))), "stop", usage(3, 1))

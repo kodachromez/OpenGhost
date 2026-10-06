@@ -37,6 +37,7 @@ class FrontendPlugins final : public QObject
     // False when unknown or the choice could not be saved (nothing changes).
     Q_INVOKABLE bool setEnabled(const QString &id, bool enabled);
     bool enabled(const QString &id) const;
+    bool registered(const QString &id) const { return find(id) != nullptr; }
 
     QVariantList entries() const;
     int count() const { return int(m_slots.size()); }

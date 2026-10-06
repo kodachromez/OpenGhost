@@ -864,6 +864,7 @@ PiProcess *PiBackend::child(const QString &session, const QString &cwd, QString 
     chat.context.reset();
     chat.mode.reset();
     chat.auth = m_auth; // A new Pi reads the credentials as they are now.
+    chat.permissions = m_loadPermissions;
     reap();
     return pi;
 }
@@ -1270,6 +1271,15 @@ void PiBackend::start(RequestId id, Run run, const SessionParams &params)
     run.context = contextOf(params.userContext);
     run.mode = params.permissionMode;
     run.chosen = params.selection;
+    // Permissions were turned on or off since this idle child started: it closes,
+    // and a new one loads plugin-permissions as the switch is now.
+    if (chat.pi && chat.permissions != m_loadPermissions && !chat.run && !chat.loading &&
+        !chat.deleting) {
+        retire(chat, [this, id, run = std::move(run), params]() mutable {
+            start(id, std::move(run), params);
+        });
+        return;
+    }
     QString error;
     if (!child(session, params.cwd, &error)) {
         emit replied(id, failure(QStringLiteral("backend_unavailable"), error));
@@ -1906,6 +1916,12 @@ bool PiBackend::dialog(const QString &session, PiProcess *pi, const QJsonObject 
 {
     const auto method = request.value("method").toString();
     const auto title = request.value("title").toString();
+    if (method == QStringLiteral("confirm") && title == ApprovalTitle && !m_loadPermissions) {
+        // Permissions are off, so no card shows it: declined at once, never left waiting.
+        report(QStringLiteral("warning"),
+               QStringLiteral("Permissions are off, so Pi's permission request was declined."));
+        return false;
+    }
     if (method == QStringLiteral("confirm") && title == ApprovalTitle) {
         const auto ask =
             QJsonDocument::fromJson(request.value("message").toString().toUtf8()).object();
@@ -2020,6 +2036,17 @@ void PiBackend::approvalEnded(const QString &session, const QString &approvalId,
 }
 // A chat's approval cards end with its turn (or its Pi): declined in Pi if it still
 // waits on them, and withdrawn from the frontend.
+void PiBackend::setPermissionsEnabled(bool enabled)
+{
+    if (std::exchange(m_loadPermissions, enabled) == enabled || enabled)
+        return;
+    // Off: every waiting card is declined to the Pi that asked, then withdrawn.
+    QSet<QString> sessions;
+    for (const auto &approval : std::as_const(m_approvals))
+        sessions.insert(approval.session);
+    for (const auto &session : std::as_const(sessions))
+        withdrawApprovals(session, true);
+}
 void PiBackend::withdrawApprovals(const QString &session, bool answer)
 {
     QVector<RequestId> ids;

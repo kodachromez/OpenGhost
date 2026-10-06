@@ -1797,6 +1797,14 @@ ApplicationWindow {
         button: modePicker
         backdrop: window.contentItem
         onPicked: id => window.frontend.setPermissionMode(id)
+        // Permissions turned off: the dock goes with the picker.
+        Connections {
+            target: window.frontend
+            function onPermissionsChanged() {
+                if (!window.frontend.permissions)
+                    modeDock.close(false)
+            }
+        }
     }
 
     ModelStage {
