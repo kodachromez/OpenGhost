@@ -241,7 +241,7 @@ The reference equivalents are `library.js`, `chat-store.js`, `chat.js`,
 | `Library` / `KeyStore` | Version-1 index; home/folder chats, collision-free home `space` names, rename/pin/timestamps/model/lock metadata; `chats/<id>` and `mini/<id>` display caches. Unknown per-chat index fields are retained, not arbitrary unknown top-level fields. |
 | `ChatService` | Current/draft/mini records, live output buffers, local turn state, approvals, host-call ownership, recovery checkpoints. Backend versions/sequence/remote IDs are runtime state reacquired on reopen; client IDs/pending markers are saved in display entries. |
 | QML / `AttachmentStore` | In-memory composer drafts (32 inactive maximum) and opaque attachment tokens/full prepared input; never recovered from saved previews. |
-| `PreferencesStore` | Instructions (8,000-character bound), explicit model/effort and global permission preference. Per-chat mode is not an independently persisted canonical backend configuration. Pinned payloads unsupported. |
+| `PreferencesStore` | Instructions (8,000-character bound), explicit model/effort and global permission preference. Per-chat mode is not an independently persisted canonical backend configuration. Pinned text files (20 files, 200,000 characters). |
 | `UsageStore` | Version-2 local ledger, JSON-pair provider/model keys, v1 `provider\|model` upgrade; per-reply metrics also in display caches. Save/failure behavior below. |
 | Appearance store | Theme choice only, with a separate read/write policy. |
 
@@ -360,12 +360,14 @@ successful save. Appearance instead ignores invalid input, can replace it after
 a theme choice and requests owner-only permissions. Library/preferences storage
 has no comparable explicit permissions/ACL policy.
 
-Text attachments are a real frontend-local, synchronous file operation: 20 per
-message, 256 KiB each, 64 retained draft tokens/8 MiB; an unsuccessful selection
-publishes no tokens. UTF-8/NUL/PDF/nonlocal/symlink refusals are tested. Byte bounds
-are not I/O deadlines or descriptor-contained file authority. The fake itself
-performs no file access. Images/PDF/media/office extraction, pinned payloads and
-a production asynchronous file host are absent.
+Text and picture attachments are a real frontend-local, synchronous file
+operation (`readLocalFile`, in `native_window` because pictures need QtGui): 20 per
+message, 256 KiB per text file, pictures fitted to 2560 px/6 MB, 64 retained draft
+tokens/48 MiB; an unsuccessful selection publishes no tokens. PDF/office/media/
+binary/nonlocal/symlink refusals are tested. Byte bounds are not I/O deadlines or
+descriptor-contained file authority. The fake itself performs no file access and
+refuses pictures and pinned files. PDF/media/office extraction and a production
+asynchronous file host are absent.
 
 Approvals are correlated once, including bounded early requests and stale/
 duplicate refusal, and removed on resolution, Stop, reverse cancellation or

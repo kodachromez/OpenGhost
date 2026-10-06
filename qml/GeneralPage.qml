@@ -6,8 +6,8 @@ import QtQuick.Shapes
 import OpenGhost.Cpp
 
 // Settings → General (OpenGhost's settings-general.js): standing instructions
-// and files kept at hand for chats. Instructions use the local preference store;
-// pinned file preparation remains unavailable.
+// and files kept at hand for chats. Both use the local preference store; pinned
+// files are text files only.
 Column {
     id: page
     required property var store

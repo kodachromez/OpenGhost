@@ -7,16 +7,20 @@
 //   openghost:<token>:prompt  {promptId, type, message, placeholder?, options?}
 // A prompt is answered by {op: "answer", promptId, value} (or cancelled).
 // {op: "retry"} retries Pi's failed latest reply in place (OpenGhost's Retry).
-// {op: "instructions", text} sets the standing instructions every run's system
-// prompt carries, as its own named section: system prompt, never history, so
-// compaction keeps them. {op: "mark", entry} records an OpenGhost turn's start or
+// {op: "context", instructions, files} sets what every run's system prompt
+// carries from Settings → General: the standing instructions and the pinned text
+// files ({name, text}, in Pi's own `<file name>` form), each its own named
+// section: system prompt, never history, so compaction keeps them. {op: "mark", entry} records an OpenGhost turn's start or
 // end in Pi's session (a custom entry: kept in the session file, never context).
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
 
 const RETRY = "openghost-retry"; // The custom message that starts a retry run.
 const MARK = "openghost-turn"; // OpenGhost's turn records in Pi's session.
-const INSTRUCTIONS = "openghost-instructions"; // The system prompt section.
+const INSTRUCTIONS = "openghost-instructions"; // The system prompt sections.
+const FILES = "openghost-files";
 let instructions = "";
+let files = "";
+const escape = (name) => name.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 const logins = new Map(); // provider -> AbortController
 const prompts = new Map(); // promptId -> {resolve, reject}
 let nextPrompt = 0;
@@ -37,6 +41,8 @@ export default function (pi) {
     const sections = event.systemPromptOptions.sections;
     if (instructions) sections[INSTRUCTIONS] = instructions;
     else delete sections[INSTRUCTIONS];
+    if (files) sections[FILES] = files;
+    else delete sections[FILES];
   });
   // A retry trigger never reaches the model, nor do the failed replies it retried:
   // the retry sees exactly the context the failed reply saw.
@@ -49,7 +55,7 @@ export default function (pi) {
     return { messages };
   });
   pi.registerCommand("openghost", {
-    description: "OpenGhost frontend bridge (providers, login, logout, retry, instructions, turn records)",
+    description: "OpenGhost frontend bridge (providers, login, logout, retry, context, turn records)",
     handler: async (args, ctx) => {
       let request;
       try {
@@ -132,8 +138,13 @@ export default function (pi) {
           // instructions included, that the failed turn had.
           status("", { ok: true });
           pi.sendMessage({ customType: RETRY, content: [], display: false }, { triggerTurn: true });
-        } else if (request.op === "instructions") {
-          instructions = String(request.text ?? "");
+        } else if (request.op === "context") {
+          instructions = String(request.instructions ?? "");
+          const pinned = Array.isArray(request.files) ? request.files : [];
+          files = pinned.length === 0 ? "" : [
+            "Files the user keeps at hand in every chat:",
+            ...pinned.map((f) => `<file name="${escape(String(f.name))}">\n${String(f.text ?? "")}\n</file>`),
+          ].join("\n\n");
           status("", { ok: true });
         } else if (request.op === "mark") {
           pi.appendEntry(MARK, request.entry);

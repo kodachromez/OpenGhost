@@ -21,9 +21,11 @@ namespace openghost
 // and steering receipts, and ends with Pi's agent_settled (or a confirmed abort).
 // Its start and end are recorded in Pi's session (the bridge's `mark`), so after a
 // restart session.get rebuilds exactly that turn from Pi's own entries. Standing
-// instructions travel as a named section of Pi's system prompt (the bridge's
-// `instructions`), never as history. Delete stops the chat's child and removes its
-// Pi session file. Providers, sign-in, logout and failed-turn Retry go through Pi's
+// instructions and General's pinned text files travel as named sections of Pi's
+// system prompt (the bridge's `context`), never as history. A message's text files
+// precede its text as Pi's own `pi @file` puts them; its pictures are Pi's prompt
+// images, sent only to a model Pi says sees images. Delete stops the chat's child
+// and removes its Pi session file. Providers, sign-in, logout and failed-turn Retry go through Pi's
 // own runtime via the bridge (src/backend/pi/openghost-bridge.js); Pi stores every
 // credential.
 class PiBackend final : public Backend
@@ -66,7 +68,9 @@ class PiBackend final : public Backend
         bool abandoned = false;                    // its request already failed
         bool prompted = false;                     // the prompt's own user message seen
         int stage = 0;                             // preparation before the prompt
-        QString text, instructions;
+        QString text;          // Pi's prompt message: the files' text, then the input's
+        QJsonArray images;     // Pi's prompt images, in the input's order
+        QJsonObject context;   // instructions and pinned files, for the bridge
         ModelSelection chosen;
         QString message, stopReason, errorMessage;
         QVector<Steer> steers;
@@ -83,7 +87,7 @@ class PiBackend final : public Backend
         std::optional<Run> run;
         QString last;                        // journal key of Pi's latest accepted turn
         QHash<QString, QPair<QString, bool>> recorded; // client -> turn, retry: taken before
-        std::optional<QString> instructions; // what this child's bridge holds
+        std::optional<QJsonObject> context; // what this child's bridge holds
         QVector<RequestId> deletes;          // DeleteSession calls awaiting erasure
     };
     void dispatch(RequestId id, const Command &command);

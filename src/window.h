@@ -162,9 +162,12 @@ class WindowController final : public QObject
     {
         m_chat.authenticate(openghost::Logout{provider});
     }
-    Q_INVOKABLE void preview(const QString &key, int card) { emit previewChanged(key, card); }
-    Q_INVOKABLE QString previewState(const QString &, int) const { return backendUnavailable(); }
-    Q_INVOKABLE QImage previewImage(const QString &, int) const { return {}; }
+    // A sent picture's preview, from the copy kept when it was sent (in memory,
+    // bounded; none after a restart): "" offered, "ready" shown. Never an error
+    // under a card that has no picture to show.
+    Q_INVOKABLE void preview(const QString &key, int card);
+    Q_INVOKABLE QString previewState(const QString &key, int card) const;
+    Q_INVOKABLE QImage previewImage(const QString &key, int card) const;
   signals:
     void changed();
     void approvalsChanged();
@@ -188,6 +191,7 @@ class WindowController final : public QObject
     }
     void sync();
     void syncPlugins();
+    void keepPictures(const QVector<openghost::Attachment> &sent);
     void catalog();
     QObject *m_browser = nullptr;
     openghost::PreferencesStore m_preferences;
@@ -198,6 +202,14 @@ class WindowController final : public QObject
     QString m_notice;
     QVariantMap m_login;
     openghost::AttachmentStore m_attachments;
+    struct Picture {
+        QByteArray bytes;
+        QString mime;
+    };
+    QHash<QString, QHash<int, Picture>> m_pictures; // user row key -> card -> sent picture
+    QStringList m_pictureOrder;                      // oldest first
+    qint64 m_pictureBytes = 0;
+    QSet<QString> m_previewed; // "key/card" shown
     QHash<QString, Entry> m_rendered;
     TranscriptModel m_transcript;
     SessionModel m_sessions;

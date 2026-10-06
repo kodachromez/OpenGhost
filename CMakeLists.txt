@@ -41,7 +41,7 @@ add_library(native_contract STATIC src/backend/types.h src/backend/backend.h
     src/backend/backend.cpp src/backend/transport.h src/backend/fake_backend.cpp
     src/backend/pi_backend.cpp src/backend/pi_process.h src/backend/pi_process.cpp
     src/frontend/preferences.cpp src/frontend/chat_service.cpp src/frontend/plugins.cpp
-    src/frontend/attachments.cpp src/frontend/usage.cpp src/frontend/store.cpp
+    src/frontend/usage.cpp src/frontend/store.cpp
     src/frontend/library.cpp src/frontend/host.h)
 target_include_directories(native_contract PUBLIC src)
 target_link_libraries(native_contract PUBLIC Qt6::Core)
@@ -63,8 +63,10 @@ if(OPENGHOST_BROWSER)
     native_warnings(native_browser_automation)
 endif()
 
+# Attachment and pinned-file reading decodes pictures, so it needs QtGui.
 add_library(native_window STATIC src/model.cpp src/settings.cpp src/window.cpp src/motion.cpp
-    src/appearance.cpp src/presentation.cpp src/offline_services.h src/platform/desktop.cpp)
+    src/appearance.cpp src/presentation.cpp src/offline_services.h src/platform/desktop.cpp
+    src/frontend/attachments.cpp)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_sources(native_window PRIVATE src/platform/linux.cpp)
 else()
@@ -143,6 +145,14 @@ if(OPENGHOST_BUILD_SMOKE_TEST)
 
     # Reply pictures and videos: parsing, address rules and the loader's
     # policy, metadata/cache and bounded transport (loopback only).
+    add_executable(native_attachments_test tests/attachments.cpp)
+    target_link_libraries(native_attachments_test PRIVATE native_window Qt6::Test)
+    target_compile_definitions(native_attachments_test PRIVATE
+        OPENGHOST_FAKE_PI_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/pi")
+    native_warnings(native_attachments_test)
+    add_test(NAME native_attachments_test COMMAND native_attachments_test)
+    set_tests_properties(native_attachments_test PROPERTIES TIMEOUT 30
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     add_executable(native_media_test tests/media.cpp)
     target_link_libraries(native_media_test PRIVATE native_window Qt6::Test)
     native_warnings(native_media_test)

@@ -15,7 +15,7 @@ namespace
 {
 constexpr int StartDeadline = 60000; // Pi's prompt reply, as the reference's turn.start
 constexpr int AbortDeadline = 60000; // abort replies once Pi is idle
-constexpr int StepDeadline = 30000;  // instructions, model and turn records
+constexpr int StepDeadline = 30000;  // context, model and turn records
 constexpr qsizetype MaxJournals = 64;
 constexpr qint64 IdleChild = 10 * 60 * 1000; // an idle chat's Pi child is then closed
 constexpr int MaxIdleChildren = 4;           // beyond these, the oldest idle ones close
@@ -113,6 +113,51 @@ DisplayInput displayFrom(const QJsonObject &saved)
         input.attachments.append(shown);
     }
     return input;
+}
+// An input as Pi's prompt takes it, the way Pi's own `pi @file` builds one: each
+// text file's contents in a <file> element, a picture's name in an empty one with
+// the picture among the prompt's images, then the message itself. Nothing is
+// dropped: an attachment that is neither is refused by the caller.
+struct Prompt {
+    QString message;
+    QJsonArray images;
+};
+bool deliverable(const Attachment &a)
+{
+    return a.kind == Attachment::Kind::Image
+               ? a.dataUrl && a.dataUrl->startsWith(QStringLiteral("data:")) &&
+                     a.dataUrl->contains(QStringLiteral(";base64,")) && !a.mime.isEmpty()
+               : a.kind == Attachment::Kind::Text && a.text.has_value();
+}
+QString fileTag(const QString &name)
+{
+    return QStringLiteral("<file name=\"%1\">").arg(name.toHtmlEscaped());
+}
+Prompt promptOf(const Input &input)
+{
+    Prompt prompt;
+    for (const auto &a : input.attachments) {
+        if (a.kind == Attachment::Kind::Image) {
+            const auto data = a.dataUrl->mid(a.dataUrl->indexOf(QLatin1Char(',')) + 1);
+            prompt.images.append(
+                QJsonObject{{"type", "image"}, {"data", data}, {"mimeType", a.mime}});
+            prompt.message += fileTag(a.name) + QStringLiteral("</file>\n");
+        } else {
+            prompt.message += fileTag(a.name) + QLatin1Char('\n') + *a.text +
+                              QStringLiteral("\n</file>\n");
+        }
+    }
+    prompt.message += input.text;
+    return prompt;
+}
+// Settings → General as the bridge's `context`: instructions and pinned text files.
+QJsonObject contextOf(const UserContext &context)
+{
+    QJsonArray files;
+    for (const auto &file : context.files)
+        if (file.text)
+            files.append(QJsonObject{{"name", file.name}, {"text", *file.text}});
+    return {{"instructions", context.instructions}, {"files", files}};
 }
 QString statusName(TurnStatus status)
 {
@@ -403,11 +448,20 @@ void PiBackend::dispatch(RequestId id, const Command &command)
                 emit replied(id, *error);
                 return;
             }
+            if (!std::all_of(start.input.attachments.cbegin(), start.input.attachments.cend(),
+                             deliverable)) {
+                emit replied(id, failure(QStringLiteral("unsupported_input"),
+                                         QStringLiteral("Pi takes text files and pictures only. "
+                                                        "Nothing was sent.")));
+                return;
+            }
             Run run;
             run.session = start.sessionId;
             run.client = start.clientTurnId;
             run.input = displayOf(start.input);
-            run.text = start.input.text;
+            const auto prompt = promptOf(start.input);
+            run.text = prompt.message;
+            run.images = prompt.images;
             this->start(id, std::move(run), start.params);
         });
     } else if (const auto *retry = std::get_if<RetryTurn>(&command)) {
@@ -557,7 +611,7 @@ PiProcess *PiBackend::child(const QString &session, const QString &cwd, QString 
     };
     pi->onExit = [this, session] { exited(session); };
     chat.pi = pi;
-    chat.instructions.reset();
+    chat.context.reset();
     reap();
     return pi;
 }
@@ -566,7 +620,7 @@ PiProcess *PiBackend::child(const QString &session, const QString &cwd, QString 
 void PiBackend::retire(Chat &chat, std::function<void()> gone)
 {
     auto *pi = std::exchange(chat.pi, nullptr);
-    chat.instructions.reset();
+    chat.context.reset();
     if (!pi) {
         if (gone)
             gone();
@@ -586,7 +640,7 @@ void PiBackend::exited(const QString &session)
     auto &chat = m_chats[session];
     if (auto *pi = std::exchange(chat.pi, nullptr))
         pi->deleteLater();
-    chat.instructions.reset();
+    chat.context.reset();
     const auto gone = failure(QStringLiteral("backend_unavailable"), QStringLiteral("Pi exited."));
     if (chat.run && chat.run->accepted)
         finish(session, {TurnStatus::Error, {}, gone});
@@ -854,7 +908,7 @@ void PiBackend::start(RequestId id, Run run, const SessionParams &params)
     run.request = id;
     run.turn = uuid();
     run.version = chat.version.isEmpty() ? uuid() : chat.version; // a new one is created
-    run.instructions = params.userContext.instructions;
+    run.context = contextOf(params.userContext);
     run.chosen = params.selection;
     QString error;
     if (!child(session, params.cwd, &error)) {
@@ -885,8 +939,8 @@ void PiBackend::refuse(const QString &session, const Error &error)
         emit replied(request, error);
 }
 // What the chat's Pi needs before the prompt, each awaited because Pi runs RPC lines
-// concurrently: the standing instructions, the chat's model, then the turn's start
-// record in Pi's session.
+// concurrently: the instructions and pinned files, the chat's model, that model's
+// sight when the input has pictures, then the turn's start record in Pi's session.
 void PiBackend::advance(const QString &session, const QString &turn)
 {
     auto *run = running(session, turn);
@@ -913,16 +967,19 @@ void PiBackend::advance(const QString &session, const QString &turn)
         };
     };
     switch (run->stage++) {
-    case 0: { // Standing instructions: part of every run's system prompt, not history.
-        const auto text = run->instructions;
-        if (chat.instructions.value_or(QString()) == text)
+    case 0: { // Instructions and pinned files: every run's system prompt, not history.
+        const auto context = run->context;
+        if (chat.context.value_or(contextOf({})) == context)
             return advance(session, turn);
+        QJsonObject request = context;
+        request.insert("op", "context");
         chat.pi->bridge(
-            {{"op", "instructions"}, {"text", text}},
-            [this, session, text, next = proceed(QStringLiteral("Pi did not take the instructions."))](
+            request,
+            [this, session, context,
+             next = proceed(QStringLiteral("Pi did not take the instructions and files."))](
                 const QJsonObject &reply) {
                 if (succeeded(reply))
-                    m_chats[session].instructions = text;
+                    m_chats[session].context = context;
                 next(reply);
             },
             StepDeadline);
@@ -959,7 +1016,33 @@ void PiBackend::advance(const QString &session, const QString &turn)
             StepDeadline);
         return;
     }
-    case 2: { // Its start, in Pi's session before Pi can take it.
+    case 2: { // Pictures go only to a model Pi says sees images; Pi would replace
+              // them with a placeholder for any other.
+        if (run->images.isEmpty())
+            return advance(session, turn);
+        chat.pi->rpc(
+            {{"type", "get_state"}},
+            [this, session, turn](const QJsonObject &state) {
+                if (!running(session, turn))
+                    return;
+                const auto model = state.value("data").toObject().value("model").toObject();
+                if (!state.value("success").toBool())
+                    refuse(session, failure(QStringLiteral("backend_error"),
+                                            errorOf(state, QStringLiteral("Pi did not answer."))));
+                else if (!model.value("input").toArray().contains(QStringLiteral("image")))
+                    refuse(session,
+                           failure(QStringLiteral("unsupported_input"),
+                                   QStringLiteral("%1 can't see pictures. Choose a model that "
+                                                  "sees photos, or remove the pictures.")
+                                       .arg(model.value("name").toString(
+                                           model.value("id").toString(QStringLiteral("This model"))))));
+                else
+                    advance(session, turn);
+            },
+            StepDeadline);
+        return;
+    }
+    case 3: { // Its start, in Pi's session before Pi can take it.
         QJsonObject entry{{"event", "start"}, {"version", run->version}, {"client", run->client},
                           {"turn", run->turn}, {"retry", run->retry}};
         if (run->input)
@@ -1000,11 +1083,15 @@ void PiBackend::submit(const QString &session)
         return;
     }
     const auto text = run.text;
+    QJsonObject prompt{{"type", "prompt"}, {"message", text}};
+    if (!run.images.isEmpty())
+        prompt.insert("images", run.images);
     chat.pi->rpc(
-        {{"type", "prompt"}, {"message", text}},
+        prompt,
         [this, session, turn](const QJsonObject &reply) { admitted(session, turn, reply); },
         0); // The start deadline above answers; Pi's later reply still settles it.
-    fprintf(stderr, "[pi] prompt sent (%lld chars)\n", static_cast<long long>(text.size()));
+    fprintf(stderr, "[pi] prompt sent (%lld chars, %lld pictures)\n",
+            static_cast<long long>(text.size()), static_cast<long long>(run.images.size()));
 }
 void PiBackend::admitted(const QString &session, const QString &turn, const QJsonObject &reply)
 {
@@ -1154,17 +1241,23 @@ void PiBackend::steer(RequestId id, const SteerTurn &steer)
             emit replied(id, Reply{SteerAccepted{known.admitted}});
             return;
         }
-    // Only text enters Pi's steer queue here; files are refused, never dropped.
-    if (!steer.input.attachments.isEmpty() || steer.input.text.trimmed().isEmpty() ||
+    // Text and text files enter Pi's steer queue; pictures are refused, never
+    // dropped (the reply's model was not checked for them).
+    const bool text = std::all_of(steer.input.attachments.cbegin(),
+                                  steer.input.attachments.cend(), [](const Attachment &a) {
+                                      return a.kind == Attachment::Kind::Text && deliverable(a);
+                                  });
+    if (!text || (steer.input.text.trimmed().isEmpty() && steer.input.attachments.isEmpty()) ||
         !run->steering.isEmpty()) {
         emit replied(id, Reply{SteerAccepted{false}});
         return;
     }
-    run->steers.append({steer.clientInputId, {}, DisplayInput{steer.input.text, {}}, false, false});
+    const auto message = promptOf(steer.input).message;
+    run->steers.append({steer.clientInputId, {}, displayOf(steer.input), false, false});
     run->steering = steer.clientInputId;
     const auto session = steer.sessionId, turn = steer.turnId, client = steer.clientInputId;
     found->second.pi->rpc(
-        {{"type", "steer"}, {"message", steer.input.text}},
+        {{"type", "steer"}, {"message", message}},
         [this, id, session, turn, client](const QJsonObject &reply) {
             const bool queued = reply.value("success").toBool() &&
                                 reply.value("data").toObject().value("disposition").toString() ==
