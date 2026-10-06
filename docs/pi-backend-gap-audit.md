@@ -1,5 +1,11 @@
 # OpenGhost C++ → Pi backend gap audit
 
+> Follow-up review of `d7f1677`: **M01 and M12 are reopened**. Reproduced
+> approval-path bypasses, auth prompt/error lifetime failures and stale chat
+> configuration supersede the closure claims below. **M15 passes its narrow
+> dialog-cancellation scope.** See [the focused review](pi-permissions-auth-dialogs-audit.md)
+> for evidence, required corrections and test limits.
+
 ## Scope, evidence, and interpretation
 
 Audit only: no production changes, backend calls, credential operations, model requests, or fixes were performed by this audit. The only deliverable is this document. This is a **source audit**, not a new end-to-end qualification. The existing successful text-chat POC is consistent with the code; it is not evidence that the rest of OpenGhost works.
@@ -220,7 +226,7 @@ OAuth and Cancel also have real wiring, but stale-flow/prompt lifetimes remain i
 
 | ID | Required outcome before a proper test | Matrix rows | Status |
 | --- | --- | --- | --- |
-| **M01** | **Make Ask/Auto/Full truthful and enforce real approval decisions.** Never run unrestricted Pi tools under a displayed Ask guarantee. Include actual tool cwd/authority and host-tool policy. | 20–23, 33 | **FIXED** (2026-10-06): bridge policy + approval cards |
+| **M01** | **Make Ask/Auto/Full truthful and enforce real approval decisions.** Never run unrestricted Pi tools under a displayed Ask guarantee. Include actual tool cwd/authority and host-tool policy. | 20–23, 33 | **REOPENED:** [review F1/F2](pi-permissions-auth-dialogs-audit.md#findings), real Pi path-policy bypasses |
 | **M02** | **Use real prompt acceptance and authoritative lifecycle/errors.** Rejections must preserve draft/files; handled commands must settle; final failed/aborted/length responses must not become success. Bound transport/request failures and show them. | 02, 03, 07, 08, 77 | **FIXED** (2026-10-05) |
 | **M03** | **Make Escape actually stop Pi.** Clear/disposition queued inputs, await abort, handle late acceptance and do not acknowledge a no-op. | 04, 06 | **FIXED** (2026-10-05) |
 | **M04** | **Separate New Chat histories and switch back to the correct Pi session.** Bind all ongoing events/tools/configuration to their owning chat, including attempts to use another chat while one runs. | 24, 25, 33 | **FIXED** (2026-10-05) |
@@ -231,7 +237,7 @@ OAuth and Cancel also have real wiring, but stale-flow/prompt lifetimes remain i
 | **M09** | **Send actual prepared text attachment payloads and repair the dead sent-preview state.** Handle attachment-only sends; never show a sent card as evidence of transmission when the payload was dropped. | 36, 37, 41 | **FIXED** (2026-10-06) |
 | **M10** | **Resolve advertised photo/PDF/general-file support before claiming a complete input test.** Actual photos/PDFs/binary documents currently refuse, despite unrestricted picker and “Add photos and files”/vision wording. Image wiring and PDF preparation are separate work; do not claim Pi already ingests PDFs. | 38–40 | **FIXED** (2026-10-06): photos wired; PDF/office/media refused by name |
 | **M11** | **Resolve the always-failing General Files chooser/drop action.** Its promise that every new chat gets pinned files is currently unimplemented on both preparation and delivery paths. | 42 | **FIXED** (2026-10-06): text files |
-| **M12** | **Finish race-safe provider authentication and fresh status.** Keep the newly wired provider/key/OAuth/cancel/logout bridge; fix flow-generation/prompt lifetime and external refresh gaps, then qualify real provider success, persistence and errors. | 12–17 | **FIXED** (2026-10-06): real-provider sign-in not qualified |
+| **M12** | **Finish race-safe provider authentication and fresh status.** Keep the newly wired provider/key/OAuth/cancel/logout bridge; fix flow-generation/prompt lifetime and external refresh gaps, then qualify real provider success, persistence and errors. | 12–17 | **REOPENED:** [review F3–F5](pi-permissions-auth-dialogs-audit.md#findings), prompt/error lifetime and stale chat config; real-provider sign-in still unqualified |
 | **M13** | **Wire Send-while-busy steering with truthful queued/applied/unconfirmed receipts.** Do not lose transformed/image-only/duplicate-text input identity or report queue admission as application. | 06 | **FIXED** (2026-10-05) |
 | **M14** | **Provide the exact failed-turn Retry/reconcile behavior the existing button expects.** Auto-retry and duplicate prompt submission are not substitutes. | 05, 27, 77 | **FIXED** (2026-10-05) |
 | **M15** | **Do not ignore blocking Pi extension UI requests.** Handle or explicitly decline/cancel them and surface errors so a loaded extension cannot hang invisibly. | 08, 82, 83 | **FIXED** (2026-10-06): declined and said |
