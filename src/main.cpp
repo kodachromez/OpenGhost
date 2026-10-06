@@ -1,5 +1,6 @@
 #include "appearance.h"
 #include "backend/fake_backend.h"
+#include "backend/pi_backend.h"
 #include "frontend/browser.h"
 #include "medialoader.h"
 #include "platform/platform.h"
@@ -62,6 +63,8 @@ int main(int argc, char *argv[])
     parser.addOption(
         {QStringLiteral("fake-backend"),
          QStringLiteral("Use the in-memory fake backend (no model, tools or credentials).")});
+    parser.addOption({QStringLiteral("pi"),
+                      QStringLiteral("Proof of concept: chat through `pi --mode rpc --no-session`.")});
     parser.addHelpOption();
     parser.addVersionOption();
 #ifdef OPENGHOST_SMOKE_TEST
@@ -112,7 +115,7 @@ int main(int argc, char *argv[])
         // Display caches, recovery markers, chat index and usage ledger: local
         // frontend state, never backend history or credentials. The fake's
         // sessions die with the process, so its chats never enter the profile.
-        if (!parser.isSet(QStringLiteral("fake-backend")))
+        if (!parser.isSet(QStringLiteral("fake-backend")) && !parser.isSet(QStringLiteral("pi")))
             dataPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) +
                        QStringLiteral("/library");
     }
@@ -137,6 +140,8 @@ int main(int argc, char *argv[])
     std::unique_ptr<openghost::Backend> backend;
     if (parser.isSet(QStringLiteral("fake-backend")))
         backend = std::make_unique<openghost::FakeBackend>();
+    else if (parser.isSet(QStringLiteral("pi")))
+        backend = std::make_unique<openghost::PiBackend>();
     std::unique_ptr<openghost::Browser> browser;
 #ifdef OPENGHOST_BROWSER
     // The desktop panel exists with or without an agent backend.
