@@ -926,7 +926,9 @@ int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
                       "effort returns when the selected model's capabilities return");
             }
         }
-        check(!findVisual(window->contentItem(), QStringLiteral("settingsTab-plugins")),
+        const auto *pluginsTab =
+            findVisual(window->contentItem(), QStringLiteral("settingsTab-plugins"));
+        check(!pluginsTab || !pluginsTab->isVisible(),
               "Plugins hidden when backend does not advertise runtime plugins");
         check(!findVisual(window->contentItem(), QStringLiteral("settingsTab-model")),
               "no extra Model tab");

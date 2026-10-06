@@ -14,14 +14,18 @@ Popup {
     readonly property var settings: frontend.settings
     readonly property var login: settings.login
     property string page: "general"
-    readonly property var pages: [
+    readonly property bool pluginsShown: frontend.runtimePlugins || frontend.frontendPlugins.count > 0
+    // Every tab, created once: the Plugins tab is hidden rather than destroyed.
+    // Qt's software Shape node reads its item while the render thread draws, so
+    // a tab icon must not be deleted while Settings is open.
+    readonly property var allPages: [
         { id: "general", title: "General" },
         { id: "providers", title: "Providers" },
-        ...(frontend.runtimePlugins || frontend.frontendPlugins.count > 0
-            ? [{ id: "plugins", title: "Plugins" }] : []),
+        { id: "plugins", title: "Plugins" },
         { id: "usage", title: "Usage" },
         { id: "appearance", title: "Appearance" }
     ]
+    readonly property var pages: allPages.filter(p => p.id !== "plugins" || pluginsShown)
     readonly property string title: pages.find(p => p.id === page)?.title ?? "General"
     // Capability loss/reconnect can remove the currently open page.
     onPagesChanged: Qt.callLater(function() {
@@ -204,15 +208,20 @@ Popup {
                     width: parent.width
                     spacing: 4
                     Repeater {
-                        model: dialog.pages
-                        delegate: SettingsTab {}
+                        id: tabRepeater
+                        model: dialog.allPages
+                        delegate: SettingsTab {
+                            visible: dialog.pages.some(p => p.id === modelData.id)
+                        }
                     }
                 }
                 function step(by) {
                     const at = dialog.pages.findIndex(p => p.id === dialog.page)
                     const next = (at + by + dialog.pages.length) % dialog.pages.length
+                    const id = dialog.pages[next].id
                     // Focus first: the tab left behind stops taking Tab focus.
-                    tabColumn.children[next].forceActiveFocus(Qt.TabFocusReason)
+                    tabRepeater.itemAt(dialog.allPages.findIndex(p => p.id === id))
+                        .forceActiveFocus(Qt.TabFocusReason)
                     dialog.show(dialog.pages[next].id)
                 }
             }
@@ -363,8 +372,7 @@ Popup {
                             id: pluginsPage
                             objectName: "pluginsPage"
                             width: parent.width
-                            visible: (dialog.frontend.runtimePlugins || dialog.frontend.frontendPlugins.count > 0)
-                                     && dialog.page === "plugins"
+                            visible: dialog.pluginsShown && dialog.page === "plugins"
                             SettingsRow {
                                 first: true
                                 visible: dialog.frontend.runtimePlugins && (dialog.frontend.pluginsLoading || !dialog.frontend.pluginsLoaded

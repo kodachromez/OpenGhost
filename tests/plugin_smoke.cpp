@@ -177,7 +177,8 @@ int pluginSmoke(QQmlApplicationEngine &engine, QQuickWindow *window)
     backend.disconnectBackend();
     check(QTest::qWaitFor([&] { return dialog->property("page") == "general"; }, 1000),
           "disconnect safely leaves removed page");
-    check(!find(root, "settingsTab-plugins"), "no capability means no Plugins tab");
+    tab = find(root, "settingsTab-plugins");
+    check(!tab || !tab->isVisible(), "no capability means no Plugins tab");
     check(!controller.runtimePlugins() && controller.pluginCount() == 0,
           "stale plugin controls discarded");
     QMetaObject::invokeMethod(dialog.get(), "close");

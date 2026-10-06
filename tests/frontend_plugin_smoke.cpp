@@ -11,6 +11,21 @@
 
 namespace
 {
+// A second plugin, to add and remove rows while another keeps the Plugins tab.
+class ChurnPlugin final : public openghost::FrontendPlugin
+{
+  public:
+    openghost::FrontendPluginInfo info() const override
+    {
+        return {QStringLiteral("openghost.test.churn"), QStringLiteral("Churn plugin"),
+                QStringLiteral("Registered and unregistered while Settings is open."), true};
+    }
+    void enable(openghost::FrontendPluginContext &context) override
+    {
+        context.decorateRows([](const openghost::ChatRowView &) { return QVariantMap{}; });
+    }
+};
+
 QQuickItem *find(QQuickItem *item, const QString &name)
 {
     if (item->objectName() == name)
@@ -134,6 +149,11 @@ int frontendPluginSmoke(QQmlApplicationEngine &engine, QQuickWindow *window)
         const auto *item = find(root, row);
         return item ? item->property("hint").toString() : QString();
     };
+    // The Plugins tab is created with the others and only shown while it applies.
+    const auto pluginsTab = [&] {
+        const auto *tab = find(root, QStringLiteral("settingsTab-plugins"));
+        return tab && tab->isVisible();
+    };
     click("settingsTab-plugins");
     QTest::qWait(500); // Existing page entrance.
     check(dialog->property("page") == "plugins", "Plugins page opens");
@@ -160,8 +180,61 @@ int frontendPluginSmoke(QQmlApplicationEngine &engine, QQuickWindow *window)
     check(plugins->hooks() == 3, "turned on again");
     check(plugins->remove(id) && plugins->hooks() == 0, "unregistering cleans up");
     check(QTest::qWaitFor([&] { return dialog->property("page") == "general"; }, 1000) &&
-              !find(root, "settingsTab-plugins"),
-          "unregistering the last plugin removes the Plugins tab");
+              !pluginsTab(),
+          "unregistering the last plugin hides the Plugins tab");
+    // Registration while Settings is open must not disturb rendering: the
+    // Plugins tab (and its icon) and the plugin rows come and go between frames.
+    int frames = 0;
+    const auto counter = QObject::connect(window, &QQuickWindow::afterRendering, window,
+                                          [&] { ++frames; });
+    const auto rendered = [&] {
+        const int from = frames;
+        window->contentItem()->update();
+        window->update();
+        return QTest::qWaitFor([&] { return frames > from; }, 2000);
+    };
+    bool churned = true;
+    for (int i = 0; i < 25 && churned; ++i) {
+        churned &= plugins->add(std::make_unique<openghost::ExamplePlugin>());
+        churned &= rendered() && pluginsTab();
+        if (i % 2)
+            QTest::qWait(i % 5);
+        churned &= plugins->remove(id);
+        churned &= rendered();
+    }
+    check(churned, "the Plugins tab comes and goes while Settings is open");
+    check(plugins->add(std::make_unique<openghost::ExamplePlugin>()), "example registers again");
+    // Its tab is laid out again (above Usage) before it is clicked.
+    check(QTest::qWaitFor(
+              [&] {
+                  const auto *tab = find(root, QStringLiteral("settingsTab-plugins"));
+                  const auto *usage = find(root, QStringLiteral("settingsTab-usage"));
+                  return pluginsTab() && usage && tab->y() < usage->y();
+              },
+              1000),
+          "the Plugins tab returns in place");
+    click("settingsTab-plugins");
+    QTest::qWait(500);
+    const QString churn = QStringLiteral("openghost.test.churn");
+    churned = dialog->property("page") == "plugins";
+    for (int i = 0; i < 25 && churned; ++i) {
+        churned &= plugins->add(std::make_unique<ChurnPlugin>());
+        churned &= rendered() && find(root, QStringLiteral("frontendPlugin-") + churn) != nullptr;
+        churned &= plugins->setEnabled(id, i % 2 == 0) && rendered();
+        if (i % 3 == 0)
+            click(QStringLiteral("frontendPluginToggle-") + churn);
+        churned &= plugins->remove(churn);
+        churned &= rendered() && !find(root, QStringLiteral("frontendPlugin-") + churn);
+    }
+    check(churned, "plugin rows come and go while the Plugins page is open");
+    churned = true;
+    for (int i = 0; i < 25 && churned; ++i) {
+        churned &= plugins->remove(id) && rendered();
+        churned &= plugins->add(std::make_unique<openghost::ExamplePlugin>()) && rendered();
+    }
+    check(churned, "the last plugin leaves and returns while its page is open");
+    QObject::disconnect(counter);
+    check(plugins->remove(id), "example unregisters");
     QMetaObject::invokeMethod(dialog.get(), "close");
     QTest::qWait(400);
     dialog.reset();

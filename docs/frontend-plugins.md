@@ -39,7 +39,10 @@ manager drops the context, removing every hook the plugin registered through it.
 
 Every registered plugin gets one Settings entry (name, description, `status()`
 and an On/Off toggle) on the Plugins page. The page appears for the backend's
-runtime plugins or when a frontend plugin is registered.
+runtime plugins or when a frontend plugin is registered. Plugins may be
+registered and unregistered while Settings is open: the Plugins tab is created
+with the others and only hidden, because Qt 6.11's software Shape node reads its
+item from the render thread and a tab icon deleted mid-frame crashes it.
 
 With no plugin enabled, rows carry empty `decorations`, events reach no one and
 `visibility` is empty: the window behaves as without the SDK.
@@ -57,7 +60,3 @@ it changes nothing in the chat.
   and nothing reads `visibility` yet (Browser will).
 - One handler per event per plugin; no ordering or priority between plugins.
 - Built-in, compiled-in plugins only; no out-of-tree discovery or ABI.
-- Under Qt's software renderer, a Settings tab icon created while Settings is
-  open crashes the render thread (seen when the Plugins tab is added to an open
-  sheet); plugins register at startup, so the smoke test registers before
-  opening Settings.
