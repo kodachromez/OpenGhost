@@ -14,14 +14,22 @@
 // seen, and the session's selected model is retaken from the reread registry.
 // {op: "mode", mode, seq} relays the chat's Ask / Auto / Full selection. The
 // bridge decides nothing with it: it keeps the latest and says it to Pi's other
-// extensions on pi.events channel "openghost:mode" ({mode}); permissions are
-// Pi's and its permission plugin's. An update numbered lower than the last
-// applied is ignored.
+// extensions on pi.events channel "openghost:mode" ({mode, seq}); permissions
+// are plugin-permissions' (OpenGhost's Pi permission plugin, the only
+// enforcer). An update numbered lower than the last applied is ignored. The
+// reply names the enforcer and the mode it now holds ({name, version, mode,
+// seq}), or `enforcer: null` when no permission plugin is loaded: then nothing
+// enforces permissions, and OpenGhost says so rather than enforcing anything.
 // A permission request is Pi's own extension UI: a confirm whose title is
 // "openghost:approval" and whose message is the request as JSON
-// {approvalId, toolCallId, tool, args, presentation?}, shown as an approval card;
-// the answer is the confirm's. A request taken back unanswered is said by the
-// asker with the status openghost:<approvalId>:approval {decision: "allow"|null}.
+// {approvalId, toolCallId, tool, args, presentation?, actions?,
+//  doublePressToConfirm?, scopes?, facts?}, shown as an approval card; the
+// answer is the confirm's. A card choice beyond yes or no (allow for the
+// session, deny with a reason) is relayed first with {op: "choice", approvalId,
+// choice: {action, reason?, scope?}}; the plugin only lets it refine the
+// confirm's answer, never reverse it. A request taken back unanswered is said
+// by the asker with the status openghost:<approvalId>:approval
+// {decision: "allow"|null}.
 // {op: "retry"} retries Pi's failed latest reply in place (OpenGhost's Retry).
 // {op: "context", instructions, files} sets what every run's system prompt
 // carries from Settings → General: the standing instructions and the pinned text
@@ -40,6 +48,13 @@ const escape = (name) => name.replace(/&/g, "&amp;").replace(/"/g, "&quot;").rep
 const MODES = new Set(["ask", "auto", "full"]);
 let mode = "ask"; // The chat's selection, as OpenGhost last said it.
 let modeSeq = 0; // The latest mode update applied.
+const ENFORCER = Symbol.for("openghost:plugin-permissions"); // plugin-permissions' handle
+const enforcer = () => {
+  const handle = globalThis[ENFORCER];
+  // Only while an instance is connected with its gate in place: a handle left
+  // behind by one that failed to load, or that shut down, enforces nothing.
+  return typeof handle?.choose === "function" && handle.enforcing?.() === true ? handle : undefined;
+};
 const logins = new Map(); // provider -> {token, controller}
 const prompts = new Map(); // promptId -> {resolve, reject}
 let nextPrompt = 0;
@@ -90,7 +105,7 @@ export default function (pi) {
     return { messages };
   });
   pi.registerCommand("openghost", {
-    description: "OpenGhost frontend bridge (providers, login, logout, refresh, access mode, retry, context, turn records)",
+    description: "OpenGhost frontend bridge (providers, login, logout, refresh, access mode, approval choices, retry, context, turn records)",
     handler: async (args, ctx) => {
       let request;
       try {
@@ -191,8 +206,18 @@ export default function (pi) {
           }
           if (seq !== undefined) modeSeq = seq;
           mode = request.mode;
-          pi.events.emit("openghost:mode", { mode });
-          status("", { ok: true, mode });
+          pi.events.emit("openghost:mode", seq === undefined ? { mode } : { mode, seq });
+          const held = enforcer();
+          status("", {
+            ok: true,
+            mode,
+            enforcer: held ? { name: held.name, version: held.version, ...held.mode() } : null,
+          });
+        } else if (request.op === "choice") {
+          // The plugin keeps it only for a card it has open, and only as a
+          // refinement of the confirm's answer that follows.
+          const taken = enforcer()?.choose(String(request.approvalId ?? ""), request.choice) === true;
+          status("", { ok: taken, error: taken ? undefined : "That approval is no longer open." });
         } else if (request.op === "retry") {
           // No new or repeated input: Pi continues its own context from where the
           // failed reply left it, so earlier tool effects are not run again.

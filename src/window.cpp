@@ -621,8 +621,20 @@ QVariantList WindowController::approvals() const
                     {"title", p.tool},
                     {"code", QString::fromUtf8(QJsonDocument(p.args).toJson())},
                     {"reveal", "command"}};
+        QVariantList actions;
+        for (const auto &action : p.actions)
+            actions.append(QVariantMap{{"id", action.id},
+                                       {"label", action.label},
+                                       {"detail", action.detail},
+                                       {"key", action.key}});
+        QVariantMap scopes;
+        if (p.scopes)
+            scopes = {{"subagent", p.scopes->first}, {"session", p.scopes->second}};
         result.append(QVariantMap{{"requestId", QString::number(pending.request)},
                                   {"card", card},
+                                  {"actions", actions},
+                                  {"doublePress", p.doublePressToConfirm},
+                                  {"scopes", scopes},
                                   {"answered", false},
                                   {"toolCallId", p.toolCallId}});
     }

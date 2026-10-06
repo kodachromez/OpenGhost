@@ -29,6 +29,38 @@ Item {
     property bool chosen: false
     readonly property bool settled: chosen || approval.answered === true
     signal answer(bool allow)
+    // The asker's own decisions, when it offers more than Allow and Deny (Pi's
+    // plugin-permissions: allow for the session, deny with a reason, …), each
+    // with its shortcut. The card shows and sends them; the asker applies them.
+    readonly property var actions: approval.actions ?? []
+    readonly property bool rich: actions.length > 0
+    readonly property var scopes: approval.scopes ?? ({})
+    readonly property bool doublePress: approval.doublePress === true
+    signal decision(string action, string note, string scope)
+    // "decision"; "reason" while a deny's reason is typed; "scope" while a
+    // subagent's session grant waits for its reach.
+    property string step: "decision"
+    property string pendingAction: ""
+    // A shortcut pressed once, waiting for its second press (double-press).
+    property string armed: ""
+    function offered(id) {
+        for (let i = 0; i < actions.length; ++i)
+            if (actions[i].id === id)
+                return actions[i]
+        return null
+    }
+    readonly property var verbs: ({
+        approve: "allow", approveSession: "allow for this session",
+        approveSessionBoth: "allow both directions for this session",
+        deny: "deny", denyWithReason: "deny with a reason"
+    })
+    readonly property var extras: actions.filter(a => a.id === "approveSessionBoth" || a.id === "denyWithReason")
+    readonly property bool secondRow: rich && step === "decision" && (extras.length > 0 || doublePress)
+    readonly property string hint: {
+        if (!armed || !offered(armed))
+            return ""
+        return "Press " + offered(armed).key + " again to " + verbs[armed] + "."
+    }
     // OpenGhost resolved it: the card folds away, then `gone`.
     property bool dismissed: false
     signal gone()
@@ -147,7 +179,7 @@ Item {
         // .approval-head: the icon or the main column (5 px down), whichever is taller.
         readonly property real head: Math.max(32, 5 + main.height)
         readonly property real inset: 14 * (1 - fold.value) // padding-top
-        readonly property real natural: 14 + head + details.height + 14 + 30 + 12
+        readonly property real natural: 14 + head + details.height + 14 + foot.height + 12
         height: natural * (1 - fold.value)
         opacity: enter.value * (1 - fold.value)
         transformOrigin: Item.Center
@@ -432,13 +464,13 @@ Item {
                 x: 14
                 y: frame.inset + frame.head + details.height + 14
                 width: frame.width - 28
-                height: 30
+                height: 30 + (card.secondRow ? 28 : 0)
 
                 FootButton {
                     id: revealButton
                     objectName: "approvalReveal"
                     order: 0
-                    visible: card.revealable
+                    visible: card.revealable && card.step === "decision"
                     enabled: !card.settled
                     width: revealLabel.implicitWidth + 5 + 12 + 22
                     Accessible.name: revealLabel.text
@@ -492,22 +524,165 @@ Item {
                 Row {
                     anchors.right: parent.right
                     spacing: 8
+                    visible: card.step === "decision"
                     Choice {
                         objectName: "approvalDeny"
                         order: 1
                         text: "Deny"
+                        shortcut: card.offered("deny")?.key ?? ""
+                        armedHere: card.armed === "deny"
                         fill: hovered && !card.settled ? Theme.alpha(Theme.strong, 0.11)
                                                        : Theme.alpha(Theme.strong, 0.07)
                         ink: Theme.text
                         onClicked: card.choose(false)
                     }
                     Choice {
-                        objectName: "approvalAllow"
+                        objectName: "approvalAllowSession"
                         order: 2
+                        visible: !!card.offered("approveSession")
+                        text: "Allow for session"
+                        shortcut: card.offered("approveSession")?.key ?? ""
+                        armedHere: card.armed === "approveSession"
+                        tip: card.offered("approveSession")?.detail ?? ""
+                        fill: hovered && !card.settled ? Theme.alpha(Theme.accent, 0.22)
+                                                       : Theme.alpha(Theme.accent, 0.14)
+                        ink: Theme.text
+                        onClicked: card.pick("approveSession")
+                    }
+                    Choice {
+                        objectName: "approvalAllow"
+                        order: 3
                         text: "Allow"
+                        shortcut: card.offered("approve")?.key ?? ""
+                        armedHere: card.armed === "approve"
                         fill: Theme.accent
                         ink: Theme.onAccent
                         onClicked: card.choose(true)
+                    }
+                }
+                // The armed shortcut's hint; the rarer decisions as quieter links.
+                Label {
+                    objectName: "approvalHint"
+                    visible: card.secondRow
+                    y: 36
+                    height: 22
+                    width: parent.width - extraRow.width - 12
+                    verticalAlignment: Text.AlignVCenter
+                    elide: Text.ElideRight
+                    text: card.hint
+                    color: Theme.secondary
+                    font.pixelSize: 12
+                }
+                Row {
+                    id: extraRow
+                    visible: card.secondRow
+                    anchors.right: parent.right
+                    y: 36
+                    spacing: 4
+                    Repeater {
+                        model: card.extras
+                        Link {
+                            required property var modelData
+                            objectName: modelData.id === "denyWithReason" ? "approvalDenyReason"
+                                                                          : "approvalAllowBoth"
+                            text: modelData.id === "denyWithReason" ? "Deny with reason"
+                                                                    : "Allow both for session"
+                            shortcut: modelData.key
+                            armedHere: card.armed === modelData.id
+                            tip: modelData.detail ?? ""
+                            onClicked: card.pick(modelData.id)
+                        }
+                    }
+                }
+
+                // Deny with a reason: what the agent is told, sent with the Deny.
+                TextField {
+                    id: reasonField
+                    objectName: "approvalReason"
+                    visible: card.step === "reason"
+                    enabled: !card.settled
+                    width: parent.width - reasonButtons.width - 8
+                    height: 30
+                    leftPadding: 12
+                    rightPadding: 12
+                    placeholderText: "Why? The agent is told."
+                    color: Theme.text
+                    placeholderTextColor: Theme.tertiary
+                    font.pixelSize: 13
+                    background: Rectangle {
+                        radius: 15
+                        color: Theme.wellBg
+                        border.width: 1
+                        border.color: reasonField.activeFocus ? Theme.alpha(Theme.strong, 0.35)
+                                                              : Theme.alpha(Theme.strong, 0.08)
+                    }
+                    Keys.onReturnPressed: card.sendReason()
+                    Keys.onEnterPressed: card.sendReason()
+                    Keys.onEscapePressed: card.back()
+                }
+                Row {
+                    id: reasonButtons
+                    anchors.right: parent.right
+                    spacing: 8
+                    visible: card.step === "reason"
+                    Choice {
+                        objectName: "approvalReasonCancel"
+                        text: "Cancel"
+                        fill: hovered && !card.settled ? Theme.alpha(Theme.strong, 0.11)
+                                                       : Theme.alpha(Theme.strong, 0.07)
+                        ink: Theme.text
+                        onClicked: card.back()
+                    }
+                    Choice {
+                        objectName: "approvalReasonSend"
+                        text: "Deny"
+                        enabled: !card.settled && reasonField.text.trim().length > 0
+                        fill: Theme.alpha(Theme.danger, enabled ? 0.9 : 0.4)
+                        ink: Theme.onAccent
+                        onClicked: card.sendReason()
+                    }
+                }
+
+                // A subagent's session grant: for that subagent, or the whole session.
+                Label {
+                    visible: card.step === "scope"
+                    height: 30
+                    width: parent.width - scopeButtons.width - 8
+                    verticalAlignment: Text.AlignVCenter
+                    elide: Text.ElideRight
+                    text: "Allow for"
+                    color: Theme.secondary
+                    font.pixelSize: 13
+                }
+                Row {
+                    id: scopeButtons
+                    anchors.right: parent.right
+                    spacing: 8
+                    visible: card.step === "scope"
+                    Choice {
+                        objectName: "approvalScopeCancel"
+                        text: "Cancel"
+                        fill: hovered && !card.settled ? Theme.alpha(Theme.strong, 0.11)
+                                                       : Theme.alpha(Theme.strong, 0.07)
+                        ink: Theme.text
+                        onClicked: card.back()
+                    }
+                    Choice {
+                        objectName: "approvalScopeSubagent"
+                        text: "This subagent"
+                        tip: card.scopes.subagent ?? ""
+                        fill: hovered && !card.settled ? Theme.alpha(Theme.accent, 0.22)
+                                                       : Theme.alpha(Theme.accent, 0.14)
+                        ink: Theme.text
+                        onClicked: card.commit(card.pendingAction, "", "subagent")
+                    }
+                    Choice {
+                        objectName: "approvalScopeSession"
+                        text: "Whole session"
+                        tip: card.scopes.session ?? ""
+                        fill: Theme.accent
+                        ink: Theme.onAccent
+                        onClicked: card.commit(card.pendingAction, "", "session")
                     }
                 }
             }
@@ -518,9 +693,85 @@ Item {
     function choose(allow) {
         if (settled)
             return
+        armed = ""
         chosen = true
         answer(allow)
     }
+    // An offered decision: some open a step first (a reason, a subagent's reach).
+    function pick(id) {
+        if (settled || !offered(id))
+            return
+        armed = ""
+        if (id === "denyWithReason") {
+            step = "reason"
+            reasonField.forceActiveFocus()
+        } else if ((id === "approveSession" || id === "approveSessionBoth") && card.scopes.subagent) {
+            pendingAction = id
+            step = "scope"
+        } else {
+            commit(id, "", "")
+        }
+    }
+    function commit(id, note, scope) {
+        if (settled)
+            return
+        if (id === "approve" && !scope)
+            return choose(true)
+        if (id === "deny")
+            return choose(false)
+        chosen = true
+        decision(id, note, scope)
+    }
+    function sendReason() {
+        if (reasonField.text.trim().length > 0)
+            commit("denyWithReason", reasonField.text.trim(), "")
+    }
+    // Cancel: back to the decisions, nothing chosen.
+    function back() {
+        step = "decision"
+        pendingAction = ""
+        reasonField.text = ""
+        card.forceActiveFocus()
+    }
+    // The asker's shortcuts, while the card (or a button on it) has the focus.
+    // With double-press, the first press arms and the second commits.
+    activeFocusOnTab: rich
+    Keys.onPressed: event => {
+        if (settled || !rich)
+            return
+        if (event.key === Qt.Key_Escape) {
+            if (step !== "decision")
+                back()
+            else if (armed)
+                armed = ""
+            else
+                return
+            event.accepted = true
+            return
+        }
+        if (step !== "decision" || (event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier)))
+            return
+        const typed = event.text.toLowerCase()
+        const action = typed.length === 1 ? actions.find(a => a.key === typed) : undefined
+        if (!action)
+            return
+        event.accepted = true
+        // A held key repeats: only a fresh press arms or commits.
+        if (event.isAutoRepeat)
+            return
+        if (doublePress && armed !== action.id) {
+            armed = action.id
+            return
+        }
+        armed = ""
+        if (action.id === "approve")
+            choose(true)
+        else if (action.id === "deny")
+            choose(false)
+        else
+            pick(action.id)
+    }
+    TapHandler { onTapped: if (card.rich && !card.settled) card.forceActiveFocus() }
 
     // A foot button that rises in by its order.
     component FootButton: AbstractButton {
@@ -558,9 +809,16 @@ Item {
         id: choice
         property color fill
         property color ink
+        property string shortcut: ""
+        property bool armedHere: false
+        property string tip: ""
         enabled: !card.settled
         width: label.implicitWidth + 32
         Accessible.name: text
+        Accessible.description: tip
+        ToolTip.visible: hovered && (tip.length > 0 || shortcut.length > 0) && !card.settled
+        ToolTip.delay: 600
+        ToolTip.text: tip + (shortcut.length > 0 ? (tip.length > 0 ? "  ·  " : "") + "Key: " + shortcut : "")
         Accessible.role: Accessible.Button
         background: Rectangle {
             radius: 15
@@ -569,6 +827,18 @@ Item {
             Behavior on color { ColorAnimation { duration: 150 } }
             // box-shadow: 0 0 0 2px composer-bg, 0 0 0 4px focus-ring.
             FocusRing { target: choice; inset: 2 }
+            // An armed shortcut: the same ring, shown until the second press.
+            Rectangle {
+                x: -4
+                y: -4
+                width: choice.width + 8
+                height: choice.height + 8
+                radius: height / 2
+                visible: choice.armedHere
+                color: "transparent"
+                border.width: 2
+                border.color: Theme.alpha(Theme.strong, 0.35)
+            }
         }
         contentItem: Label {
             id: label
@@ -578,6 +848,36 @@ Item {
             color: choice.ink
             font.pointSize: Theme.points(13.5)
             font.weight: Theme.weight(600)
+        }
+    }
+    // A quieter decision: 12 px text, underlined while hovered.
+    component Link: FootButton {
+        id: link
+        property string shortcut: ""
+        property bool armedHere: false
+        property string tip: ""
+        enabled: !card.settled
+        height: 22
+        width: linkLabel.implicitWidth + 12
+        Accessible.name: text
+        Accessible.role: Accessible.Button
+        Accessible.description: tip
+        ToolTip.visible: hovered && !card.settled
+        ToolTip.delay: 600
+        ToolTip.text: tip + (shortcut.length > 0 ? (tip.length > 0 ? "  ·  " : "") + "Key: " + shortcut : "")
+        background: Rectangle {
+            radius: 11
+            color: link.armedHere ? Theme.alpha(Theme.strong, 0.08) : "transparent"
+            FocusRing { target: link; inset: 0 }
+        }
+        contentItem: Label {
+            id: linkLabel
+            x: 6
+            text: link.text
+            verticalAlignment: Text.AlignVCenter
+            color: link.hovered && !card.settled ? Theme.text : Theme.secondary
+            font.pixelSize: 12
+            font.underline: link.hovered && !card.settled
         }
     }
     // The focus ring for a keyboard focus (:focus-visible): 2 px of the

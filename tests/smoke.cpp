@@ -12,6 +12,7 @@
 #include <QDropEvent>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QJsonDocument>
 #include <QLineF>
 #include <QMimeData>
 #include <QPointer>
@@ -33,6 +34,20 @@ int browserSmoke(QQmlApplicationEngine &engine, WindowController &controller);
 
 namespace
 {
+// The last few transcript rows' text, as the transcript model gives it.
+QString lastAssistantText(WindowController &controller)
+{
+    auto *model = qobject_cast<QAbstractItemModel *>(controller.transcript());
+    if (!model)
+        return {};
+    const int body = model->roleNames().key("body");
+    QString text;
+    for (int row = model->rowCount() - 1; row >= 0 && row >= model->rowCount() - 4; --row) {
+        const auto value = model->data(model->index(row, 0), body);
+        text += value.toString() + QString::fromUtf8(QJsonDocument::fromVariant(value).toJson());
+    }
+    return text;
+}
 QQuickItem *findVisual(QQuickItem *item, const QString &name)
 {
     if (item->objectName() == name)
@@ -501,6 +516,71 @@ int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
             check(QTest::qWaitFor([&] { return !controller.busy(); }, 3000),
                   "approved simulated tool completes");
             check(controller.approvals().isEmpty(), "resolved approval dismissed");
+
+            // plugin-permissions' decisions on the same card: its shortcuts arm on
+            // the first press and commit on the second, Allow for session answers
+            // with its decision, and Deny with reason opens a reason step whose
+            // Cancel goes back.
+            const auto decisionsCard = [&](const char *what) {
+                // The card before it has folded away first, so every lookup is this one's.
+                check(QTest::qWaitFor(
+                          [&] {
+                              return !findVisual(window->contentItem(), QStringLiteral("approvalCard"));
+                          },
+                          2000),
+                      "the answered card folds away");
+                composer->setProperty("text", QStringLiteral("/fake decisions"));
+                QMetaObject::invokeMethod(window, "submit");
+                QQuickItem *card = nullptr;
+                check(QTest::qWaitFor(
+                          [&] {
+                              card = findVisual(window->contentItem(), QStringLiteral("approvalCard"));
+                              auto *session =
+                                  card ? findVisual(card, QStringLiteral("approvalAllowSession")) : nullptr;
+                              return session && session->isVisible() && card->property("rich").toBool();
+                          },
+                          2000),
+                      what);
+                return card;
+            };
+            if (auto *card = decisionsCard("plugin decisions reach the card")) {
+                auto *hint = findVisual(card, QStringLiteral("approvalHint"));
+                card->forceActiveFocus();
+                QTest::keyClick(window, Qt::Key_S);
+                check(hint && hint->property("text").toString() ==
+                                  QStringLiteral("Press s again to allow for this session."),
+                      "a first shortcut press arms and says so");
+                check(!controller.approvals().isEmpty(), "an armed shortcut has not answered");
+                QTest::keyClick(window, Qt::Key_Escape);
+                check(card->property("armed").toString().isEmpty(), "Escape disarms");
+                QTest::keyClick(window, Qt::Key_S);
+                QTest::keyClick(window, Qt::Key_S);
+                check(QTest::qWaitFor([&] { return !controller.busy(); }, 3000),
+                      "the second press answers Allow for session");
+                check(lastAssistantText(controller).contains(QStringLiteral("allowed for the session")),
+                      "Allow for session reaches the backend as that decision");
+            }
+            if (auto *card = decisionsCard("a second plugin card")) {
+                auto *reasonLink = findVisual(card, QStringLiteral("approvalDenyReason"));
+                check(reasonLink && QMetaObject::invokeMethod(reasonLink, "clicked"),
+                      "Deny with reason opens its step");
+                auto *reason = findVisual(card, QStringLiteral("approvalReason"));
+                auto *cancel = findVisual(card, QStringLiteral("approvalReasonCancel"));
+                check(reason && reason->isVisible(), "the reason field shows");
+                check(cancel && QMetaObject::invokeMethod(cancel, "clicked"), "Cancel answers");
+                auto *deny = findVisual(card, QStringLiteral("approvalDeny"));
+                check(reason && !reason->isVisible() && deny && deny->isVisible() &&
+                          !controller.approvals().isEmpty(),
+                      "Cancel goes back to the decisions without answering");
+                QMetaObject::invokeMethod(reasonLink, "clicked");
+                reason->setProperty("text", QStringLiteral("use the fixture"));
+                auto *send = findVisual(card, QStringLiteral("approvalReasonSend"));
+                check(send && QMetaObject::invokeMethod(send, "clicked"), "Send answers");
+                check(QTest::qWaitFor([&] { return !controller.busy(); }, 3000),
+                      "the reasoned Deny completes");
+                check(lastAssistantText(controller).contains(QStringLiteral("denied: use the fixture")),
+                      "the reason reaches the backend with the Deny");
+            }
 
             composer->setProperty("text", QStringLiteral("/fake error"));
             QMetaObject::invokeMethod(window, "submit");

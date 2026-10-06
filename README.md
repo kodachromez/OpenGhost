@@ -107,11 +107,18 @@ to **OFF** and enables all four checks:
   results, Stop, restart), and `native_fake_ui_smoke` draws the cards in the
   real transcript and switches the plugin Off/On twice while a call waits.
 - `native_pi_real_test`: `PiBackend` against the installed `pi` (skipped without
-  one) with Pi AI's faux model in a throwaway agent directory: Ask/Auto/Full
-  relayed to Pi, approval cards for a test-only stand-in Pi permission plugin's
-  requests, Stop, other extensions' dialogs and errors. No network or
-  credentials. `native_sign_in_test` checks the sign-in form across
-  cancel/sign-in-again races against the scripted Pi.
+  one) with Pi AI's faux model in a throwaway agent directory, running the
+  shipped [plugin-permissions](docs/plugin-permissions.md): Ask/Auto/Full
+  enforced by the plugin, its approval cards and decisions (allow once, for the
+  session, deny with a reason), Stop, stale/duplicate answers, deletion and Pi
+  exit, and no enforcement (said) without the plugin; other extensions' dialogs
+  and errors. No network or credentials. `native_sign_in_test` checks the
+  sign-in form across cancel/sign-in-again races against the scripted Pi.
+- `native_plugin_permissions_test` and `native_plugin_permissions_bundle_check`:
+  the plugin's own vitest suite (the donor's retained security tests and
+  OpenGhost's mode/card tests), and that its committed bundle is what its
+  sources build to. Both need Node and `npm ci` in
+  `src/backend/pi/plugin-permissions`, and are skipped without them.
 
 CTest uses offscreen/software rendering. Smokes isolate appearance, preferences
 and the library in temporary directories (even the fake smoke uses a temporary
@@ -201,6 +208,7 @@ runs to steer. Submit these exact whole-message fixture selectors:
 | --- | --- |
 | `/fake tools` | Simulated tool activity/working ghost; no host effect or tool transcript panel. |
 | `/fake approval` | Approval card in every mode (the fixture stands in for a backend permission plugin; OpenGhost decides nothing). Allow/Deny only affects the simulation. |
+| `/fake decisions` | The same card with plugin-permissions' decisions and shortcuts (allow for the session, deny with a reason; `y`/`s`/`n`/`r`, pressed twice). The reply names the decision that came back. |
 | `/fake error` | Terminal error with Retry; retry targets that failed turn without another user bubble. |
 | `/fake empty` | Empty final reply notice. |
 | `/fake length` | Output-limit finish notice. |
@@ -384,13 +392,16 @@ and dismissed on resolution, Stop, cancellation or superseding steering. Auth
 and model notifications trigger fresh reads. Pending auth/approvals are memory
 state, not persisted consent or credentials.
 
-OpenGhost no longer owns permission policy. Permission enforcement belongs to
-Pi/the Pi permission plugin. OpenGhost only renders permission UI and relays
-decisions. Ask/Auto/Full is the chat's mode, relayed to Pi (the bridge says it to
-Pi's extensions on `pi.events` channel `openghost:mode`); OpenGhost never decides
-from it whether a tool call runs. Without a Pi permission plugin, Pi's tools run
-unasked in every mode. A plugin asks with a Pi extension UI `confirm` titled
-`openghost:approval` (see `src/backend/pi/openghost-bridge.js`).
+OpenGhost owns no permission policy. Permission policy and enforcement belong to
+[plugin-permissions](docs/plugin-permissions.md), OpenGhost's Pi permission
+plugin (derived from `@gotgenes/pi-permission-system` 40.0.0, MIT), which ships
+with OpenGhost and runs inside every chat's Pi. OpenGhost owns the Ask/Auto/Full
+selection, relays it (the bridge says it to Pi's extensions on `pi.events`
+channel `openghost:mode`), and renders the plugin's requests (a Pi extension UI
+`confirm` titled `openghost:approval`) as approval cards with the plugin's
+decisions; it never decides whether a tool call runs. Without the plugin, Pi's
+tools run unasked in every mode, and OpenGhost says permissions are not
+enforced.
 
 `HostServices` publishes tool schemas at initialization and routes only named,
 live-turn calls, tracking duplicate in-flight calls, cancellation and turn-end

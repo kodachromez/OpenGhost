@@ -1170,6 +1170,68 @@ class PiTest final : public QObject
         QCOMPARE(modes, 1);
     }
 
+    // A card decision beyond Allow and Deny (Pi's plugin-permissions offers it):
+    // only one the request offered is taken, its choice reaches the asker before the
+    // confirm, and the confirm alone says allow or deny.
+    void cardChoicesReachTheAskerBeforeItsAnswer()
+    {
+        Harness h;
+        QTRY_VERIFY(h.chat.ready());
+        QVERIFY(h.chat.send(QStringLiteral("approve")));
+        QTRY_COMPARE(h.chat.approvals().size(), 1);
+        auto card = h.chat.approvals().first();
+        QCOMPARE(card.data.actions.size(), 4);
+        QCOMPARE(card.data.actions[1].id, QStringLiteral("approveSession"));
+        QCOMPARE(card.data.actions[1].key, QStringLiteral("s"));
+        QCOMPARE(card.data.actions[1].detail,
+                 QStringLiteral("Yes, allow bash \"touch *\" for this session"));
+        QVERIFY(card.data.doublePressToConfirm);
+        QVERIFY(!card.data.scopes);
+        h.chat.decide(card.request, QStringLiteral("approveSessionBoth"), {}, {}); // not offered
+        QCOMPARE(h.chat.approvals().size(), 1);
+        h.chat.decide(card.request, QStringLiteral("approveSession"), QStringLiteral("ignored"),
+                      QStringLiteral("session"));
+        QTRY_VERIFY(h.settled());
+        QVERIFY(h.text(DisplayRow::Role::Assistant).endsWith(QStringLiteral("\n\nran")));
+        const auto order = [this](const QString &type) {
+            const auto list = records();
+            for (qsizetype i = 0; i < list.size(); ++i)
+                if (list[i].value("type").toString() == type)
+                    return i;
+            return qsizetype(-1);
+        };
+        const auto choice = records().at(order(QStringLiteral("choice")));
+        QCOMPARE(choice.value("approvalId").toString(), QStringLiteral("og-approval-1"));
+        // No reason on an Allow, no reach without the asker's scopes.
+        QCOMPARE(choice.value("choice").toObject(), (QJsonObject{{"action", "approveSession"}}));
+        QVERIFY(order(QStringLiteral("choice")) < order(QStringLiteral("ui_response")));
+
+        QVERIFY(h.chat.send(QStringLiteral("approve")));
+        QTRY_COMPARE(h.chat.approvals().size(), 1);
+        card = h.chat.approvals().first();
+        h.chat.decide(card.request, QStringLiteral("denyWithReason"), QStringLiteral("  not now "), {});
+        QTRY_VERIFY(h.settled());
+        QVERIFY(h.text(DisplayRow::Role::Assistant).endsWith(QStringLiteral("\n\nblocked")));
+        QVector<QJsonObject> choices, answers;
+        for (const auto &record : records()) {
+            if (record.value("type").toString() == QStringLiteral("choice"))
+                choices.append(record);
+            if (record.value("type").toString() == QStringLiteral("ui_response"))
+                answers.append(record);
+        }
+        QCOMPARE(choices.size(), 2);
+        QCOMPARE(choices.last().value("choice").toObject(),
+                 (QJsonObject{{"action", "denyWithReason"}, {"reason", "not now"}}));
+        QCOMPARE(answers.size(), 2);
+        QVERIFY(answers.first().value("confirmed").toBool());
+        QVERIFY(!answers.last().value("confirmed").toBool());
+        h.chat.decide(card.request, QStringLiteral("approve"), {}, {}); // answered: nothing more
+        int after = 0;
+        for (const auto &record : records())
+            after += record.value("type").toString() == QStringLiteral("ui_response");
+        QCOMPARE(after, 2);
+    }
+
     // OpenGhost decides nothing with the mode: Full is relayed to Pi, and a call Pi
     // still asks about is a card in Full too. A change reaches the idle and the
     // running Pi at once; what it does to a waiting request is Pi's to say.
@@ -1203,8 +1265,8 @@ class PiTest final : public QObject
         QTRY_VERIFY(records().mid(before).contains(
             QJsonObject{{"type", "mode"}, {"mode", "auto"}, {"session", session}}));
         QCOMPARE(h.chat.approvals().size(), 1);
-        // Full: the stand-in plugin allows the waiting call itself and takes the
-        // request back; the card goes without an answer from OpenGhost.
+        // Full: the (scripted) permission plugin allows the waiting call itself and
+        // takes the request back; the card goes without an answer from OpenGhost.
         h.chat.setMode(PermissionMode::Full);
         QTRY_VERIFY(h.settled());
         QVERIFY(h.text(DisplayRow::Role::Assistant).endsWith(QStringLiteral("\n\nran")));

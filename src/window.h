@@ -150,6 +150,12 @@ class WindowController final : public QObject
     {
         m_chat.approve(id.toULongLong(), allow);
     }
+    // A card action (allow for the session, deny with a reason, …) the request offered.
+    Q_INVOKABLE void decide(const QString &id, const QString &action, const QString &note = {},
+                            const QString &scope = {})
+    {
+        m_chat.decide(id.toULongLong(), action, note, scope);
+    }
     Q_INVOKABLE void copy(const QString &text);
     Q_INVOKABLE QString selectedText(QQuickTextDocument *document, int start, int end) const;
     Q_INVOKABLE void copySelection(QQuickTextDocument *document, int start, int end);

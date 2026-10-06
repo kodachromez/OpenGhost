@@ -1122,6 +1122,8 @@ ApplicationWindow {
                                 detailsOpen: window.approvalDetails
                                 onDetailsToggled: open => window.approvalDetails = open
                                 onAnswer: allow => window.frontend.approve(approval.requestId, allow)
+                                onDecision: (action, note, scope) =>
+                                    window.frontend.decide(approval.requestId, action, note, scope)
                                 onGone: window.dropApproval(approval.requestId)
                             }
                         }

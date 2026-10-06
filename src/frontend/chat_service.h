@@ -176,6 +176,12 @@ class ChatService final : public QObject
     void authenticate(const Command &command, const QString &flow = {});
     void answerLogin(const AnswerLogin &answer); // Not an auth mutation: no authFinished.
     void approve(RequestId id, bool allow);
+    // A card action the request offered (ApprovalRequest::actions): it is the
+    // answer (approve… allows, deny… denies) with how wide an Allow is or why a
+    // Deny was given. `note`: a deny reason; `scope`: "subagent" or "session".
+    // Anything the request did not offer is ignored. OpenGhost decides nothing
+    // here: the asker (Pi's plugin-permissions) applies it.
+    void decide(RequestId id, const QString &action, const QString &note, const QString &scope);
     static QString metrics(const ChatRecord::Turn &turn);
     static QJsonArray entries(const QVector<DisplayRow> &rows);
     static QVector<DisplayRow> rowsOf(const QJsonArray &saved);

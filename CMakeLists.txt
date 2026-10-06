@@ -56,6 +56,16 @@ qt_add_resources(native_contract browser_contract PREFIX /browser BASE src/brows
 # The Pi backend's bridge extension, handed to `pi -e` (runs inside Pi, not here).
 qt_add_resources(native_contract pi_bridge PREFIX /pi BASE src/backend/pi
     FILES src/backend/pi/openghost-bridge.js)
+# plugin-permissions, OpenGhost's Pi permission plugin (the sole permission
+# policy and enforcement layer), as its committed bundle and the two grammars its
+# bash parser loads; also handed to `pi -e`. Built from its TypeScript sources by
+# `npm run bundle` (src/backend/pi/plugin-permissions); building OpenGhost needs
+# no Node.
+qt_add_resources(native_contract pi_permissions PREFIX /pi/plugin-permissions
+    BASE src/backend/pi/plugin-permissions/dist
+    FILES src/backend/pi/plugin-permissions/dist/plugin-permissions.js
+        src/backend/pi/plugin-permissions/dist/web-tree-sitter.wasm
+        src/backend/pi/plugin-permissions/dist/tree-sitter-bash.wasm)
 if(OPENGHOST_BROWSER)
     add_library(native_browser_automation STATIC src/browser/qt_browser_automation.cpp
         src/browser/qt_browser_automation.h)
@@ -184,6 +194,22 @@ if(OPENGHOST_BUILD_SMOKE_TEST)
     # The real `pi` on PATH (skipped without one), with a scripted faux model:
     # access modes relayed, permission requests shown and answered (a test-only
     # stand-in permission plugin asks), extension dialogs/errors.
+    # plugin-permissions' own suite (the donor's retained tests and OpenGhost's
+    # mode, card and boundary tests) and the check that its committed bundle is
+    # what its sources build to. Both need Node and `npm ci` in the plugin
+    # directory; without them they are skipped.
+    find_program(OPENGHOST_NODE node)
+    if(OPENGHOST_NODE)
+        set(plugin_permissions_dir ${CMAKE_CURRENT_SOURCE_DIR}/src/backend/pi/plugin-permissions)
+        add_test(NAME native_plugin_permissions_test
+            COMMAND ${OPENGHOST_NODE} scripts/test.mjs
+            WORKING_DIRECTORY ${plugin_permissions_dir})
+        add_test(NAME native_plugin_permissions_bundle_check
+            COMMAND ${OPENGHOST_NODE} scripts/check-bundle.mjs
+            WORKING_DIRECTORY ${plugin_permissions_dir})
+        set_tests_properties(native_plugin_permissions_test native_plugin_permissions_bundle_check
+            PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 300)
+    endif()
     add_executable(native_pi_real_test tests/pi_real.cpp)
     target_link_libraries(native_pi_real_test PRIVATE native_contract Qt6::Test)
     target_compile_definitions(native_pi_real_test PRIVATE

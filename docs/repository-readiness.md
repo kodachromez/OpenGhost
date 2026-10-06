@@ -130,6 +130,14 @@ what Pi reports and no more:
   incarnation/revision boundaries, exact failed-turn Retry, mini-session semantics,
   approval/host lifetimes and truthful usage/errors with that backend. The fake
   alone proves none of its durability or remote-effect guarantees.
+- [plugin-permissions](plugin-permissions.md) is a decision layer, not a sandbox:
+  an action reachable through an allowed tool is limited only by the rules and Pi's
+  process permissions. Its retained upstream semantics include a user's session
+  approval outranking a config `deny` its pattern covers; it offers no durable
+  "always allow". Its committed bundle is rebuilt with Node (`npm run bundle`);
+  the CTest bundle check catches drift. Auto's risky-command list is a rule list,
+  not an exhaustive risk model; the engine's wrapper/unparseable floors and the
+  outside-folder boundary still apply.
 
 ## Checks for the documentation audit (`4542756`)
 

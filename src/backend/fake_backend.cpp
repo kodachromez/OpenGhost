@@ -410,7 +410,8 @@ void FakeBackend::advance()
             continue;
         auto &turn = it->turns[it->active];
         const auto scenario = turn.start.input.text;
-        if ((scenario == "/fake tools" || scenario == "/fake approval") && !turn.toolStarted) {
+        const bool asks = scenario == "/fake approval" || scenario == "/fake decisions";
+        if ((scenario == "/fake tools" || asks) && !turn.toolStarted) {
             turn.toolStarted = true;
             publish(
                 it.key(), *it, turn,
@@ -418,7 +419,7 @@ void FakeBackend::advance()
                             QStringLiteral("{\"effects\":\"none\"}")});
             // The fixture always asks, in every mode: deciding is the backend's
             // permission plugin's, never OpenGhost's.
-            if (scenario == "/fake approval") {
+            if (asks) {
                 turn.approval = ++m_reverse;
                 m_approvals.insert(turn.approval, it.key());
                 ApprovalRequest request{
@@ -432,6 +433,18 @@ void FakeBackend::advance()
                 presentation.code = "No command runs. This is an in-memory approval fixture.";
                 presentation.reveal = "command";
                 request.presentation = presentation;
+                // `/fake decisions`: the request as Pi's plugin-permissions makes it,
+                // with its decisions and their shortcuts. What a decision means is
+                // the plugin's; the fixture only reports which one came back.
+                if (scenario == "/fake decisions") {
+                    request.actions = {
+                        {"approve", "Allow", {}, "y"},
+                        {"approveSession", "Allow for session",
+                         "Yes, allow tool \"demo\" for this session", "s"},
+                        {"deny", "Deny", {}, "n"},
+                        {"denyWithReason", "Deny with reason", {}, "r"}};
+                    request.doublePressToConfirm = true;
+                }
                 emit reverseRequest(turn.approval, request);
             }
             return;
@@ -517,6 +530,8 @@ void FakeBackend::answer(RequestId id, const ReverseResult &result)
     const bool allow = answer && answer->decision == Decision::Allow;
     publish(sessionId, *session, turn,
             ApprovalResolved{"fixture-approval", allow ? Decision::Allow : Decision::Deny});
+    if (answer && answer->action == QStringLiteral("approveSession"))
+        turn.response = QStringLiteral("Simulated tool allowed for the session.");
     if (!allow) {
         turn.approvalDone = true;
         publish(
@@ -526,7 +541,9 @@ void FakeBackend::answer(RequestId id, const ReverseResult &result)
                           std::nullopt,
                           QStringLiteral("Denied; nothing ran"),
                           true});
-        turn.response = QStringLiteral("Simulated tool denied. Nothing ran.");
+        turn.response = answer && answer->note
+                            ? QStringLiteral("Simulated tool denied: %1").arg(*answer->note)
+                            : QStringLiteral("Simulated tool denied. Nothing ran.");
     }
 }
 } // namespace openghost

@@ -12,6 +12,12 @@
 > concerned (`openghost-policy.js`) has been removed; see
 > [OpenGhost owns no permission policy](#openghost-owns-no-permission-policy).
 > The M12 fixes and M15 are unchanged.
+>
+> **Enforcer added (2026-10-06):** the permission plugin is now
+> [plugin-permissions](plugin-permissions.md), OpenGhost's own Pi plugin derived
+> from `@gotgenes/pi-permission-system` 40.0.0 and shipped with OpenGhost. It is
+> the sole enforcement layer; the test-only stand-in plugin is gone. See
+> [plugin-permissions](#plugin-permissions-2026-10-06).
 
 ## Verdict and scope
 
@@ -423,11 +429,12 @@ These limits are unchanged:
 Pi/the Pi permission plugin. OpenGhost only renders permission UI and relays
 decisions.**
 
-The intended architecture: Pi's permission plugin decides whether a call needs
+The architecture: Pi's permission plugin decides whether a call needs
 approval, is allowed or is denied. When it asks, Pi emits the request, OpenGhost
 shows the existing approval card, and the user's answer goes back to that exact
-Pi request. No such plugin is built here. Until one is installed, Pi's tools run
-unasked in every mode.
+Pi request. *(Superseded 2026-10-06: that plugin is now
+[plugin-permissions](plugin-permissions.md), shipped with OpenGhost. Without it,
+Pi's tools run unasked and OpenGhost says permissions are not enforced.)*
 
 ### Removed (enforcement)
 
@@ -499,3 +506,42 @@ unasked in every mode.
 
 The limits listed under [Evidence](#evidence) applied to the removed policy. They
 are now the Pi permission plugin's to address.
+
+## plugin-permissions (2026-10-06)
+
+OpenGhost now ships [plugin-permissions](plugin-permissions.md), derived from
+`@gotgenes/pi-permission-system` 40.0.0 (commit `191011f`), as the sole
+permission policy and enforcement layer, replacing the test-only stand-in
+(`tests/pi/real/permission.ts`, deleted). The donor's engine is kept; its
+terminal dialog, `/permission-system` command, yolo setting and status bar are
+removed. OpenGhost's mode drives the engine (Ask and Auto as a rule layer, Full
+as the donor's ask→allow rewrite that keeps hard denies), and its requests use
+the existing `openghost:approval` contract, with the plugin's decisions (allow
+once, for the session, both directions, deny, deny with a reason) on the
+existing card. A card decision beyond yes/no is relayed ahead of the confirm
+(bridge op `choice`) and can only refine the confirm's answer.
+
+OpenGhost still owns no policy: no shell, path, read/write, symlink, containment
+or mode logic was added to the C++ code, the QML or the bridge. The bridge reports
+whether an enforcer is loaded (`enforcer` in the `mode` reply), and `PiBackend`
+says "Permissions are not enforced" when none is; it substitutes nothing.
+
+The real-Pi tests are replaced by tests against the shipped plugin:
+
+| Test | Verifies |
+| --- | --- |
+| `native_pi_real_test::askAsksAndTheAnswerGoesBack` | The plugin holds `ask`; a command and a write are cards with the plugin's decisions and keys; Deny refuses and Allow runs, checked on disk; looking inside the folder is silent |
+| `native_pi_real_test::autoFollowsThePluginsPolicy` | Auto: the folder is silent, `rm`, a write outside the folder and a deny rule are enforced |
+| `native_pi_real_test::malformedArgumentsNeverRun` | Pi validates arguments before the plugin, which judges exactly what runs |
+| `native_pi_real_test::fullIsThePluginsAndKeepsHardDenies` | Full allows a risky command and an outside write; an operator deny still denies |
+| `native_pi_real_test::modesReachThePlugin` | Each mode reaches the plugin; an operator rule, not OpenGhost, stops Ask asking |
+| `native_pi_real_test::anOlderModeUpdateNeverWins` | Numbered mode updates in the real bridge and plugin; the enforcer holds the latest |
+| `native_pi_real_test::fullReleasesTheWaitingCard` | Full while a card waits: the plugin allows it and takes the request back |
+| `native_pi_real_test::allowForTheSessionIsThePlugins` | Allow for session covers the pattern in this chat only |
+| `native_pi_real_test::denyWithAReasonTellsTheAgent` | The reason reaches the agent |
+| `native_pi_real_test::stopWithdrawsTheWaitingCall` | Stop withdraws the card; a stale answer runs nothing |
+| `native_pi_real_test::aDuplicateAnswerRunsNothingTwice` | Answer-once |
+| `native_pi_real_test::deletionAndExitCloseTheCard` | Chat deletion and Pi exit close the card; nothing runs |
+| `native_pi_real_test::withoutThePluginOpenGhostEnforcesNothing` | The enforcement boundary: without the plugin, calls run unasked and OpenGhost says so |
+| `native_pi_test::cardChoicesReachTheAskerBeforeItsAnswer` | Only offered decisions are taken; the choice precedes the confirm |
+| `native_plugin_permissions_test` | The donor's retained engine and security tests, and OpenGhost's mode, card and boundary tests |

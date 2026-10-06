@@ -2165,6 +2165,28 @@ void ChatService::approve(RequestId id, bool allow)
     m_backend->answer(id, ApprovalAnswer{allow ? Decision::Allow : Decision::Deny, {}});
     emit changed();
 }
+void ChatService::decide(RequestId id, const QString &action, const QString &note,
+                         const QString &scope)
+{
+    const auto it = std::find_if(m_approvals.begin(), m_approvals.end(),
+                                 [id](const auto &p) { return p.request == id; });
+    if (it == m_approvals.end() || it->data.sessionId != m_current)
+        return;
+    const auto &offered = it->data.actions;
+    if (std::none_of(offered.cbegin(), offered.cend(),
+                     [&](const ApprovalAction &a) { return a.id == action; }))
+        return;
+    const bool allow = action.startsWith(QStringLiteral("approve"));
+    ApprovalAnswer answer{allow ? Decision::Allow : Decision::Deny, {}, action, {}, {}};
+    if (action == QStringLiteral("denyWithReason") && !note.trimmed().isEmpty())
+        answer.note = note.trimmed();
+    if (allow && it->data.scopes &&
+        (scope == QStringLiteral("subagent") || scope == QStringLiteral("session")))
+        answer.scope = scope;
+    m_approvals.erase(it); // Exactly once, even if answer() immediately emits events.
+    m_backend->answer(id, answer);
+    emit changed();
+}
 void ChatService::dismissApprovals(const QString &session, const QString &reason)
 {
     QVector<RequestId> ids;

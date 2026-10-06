@@ -240,7 +240,13 @@ def run(text, images=None):
                    "presentation": {"kind": "command", "title": "Run a command", "effect": "change",
                                     "badge": True, "places": [{"kind": "file", "label": "made.txt",
                                                                "title": "made.txt"}],
-                                    "code": "touch made.txt", "reveal": "command"}}
+                                    "code": "touch made.txt", "reveal": "command"},
+                   "actions": [{"id": "approve", "label": "Allow", "key": "y"},
+                               {"id": "approveSession", "label": "Allow for session",
+                                "detail": "Yes, allow bash \"touch *\" for this session", "key": "s"},
+                               {"id": "deny", "label": "Deny", "key": "n"},
+                               {"id": "denyWithReason", "label": "Deny with reason", "key": "r"}],
+                   "doublePressToConfirm": True}
         rid = dialog({"method": "confirm", "title": "openghost:approval", "message": json.dumps(request)},
                      lambda r: tool_done(bool(r.get("confirmed")) and not r.get("cancelled")))
         globals()["approval"] = ("og-approval-1", rid)
@@ -308,6 +314,9 @@ def bridged(cid, request):
             status(aid + ":approval", {"decision": "allow"})
             tool_done(True)
         return respond(cid, "prompt", data={"disposition": "handled"})
+    elif op == "choice":  # A card choice, ahead of the confirm it refines.
+        note({"type": "choice", "approvalId": request.get("approvalId"), "choice": request.get("choice")})
+        status(token, {"ok": bool(approval) and approval[0] == request.get("approvalId")})
     elif op == "refresh":
         note({"type": "refresh"})
         status(token, {"ok": True})
