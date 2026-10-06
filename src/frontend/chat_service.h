@@ -14,7 +14,8 @@ namespace openghost
 struct DisplayRow {
     // Moved: a mini chat's "caught up" line. Preserved: a saved entry this port
     // does not draw (compaction/stats), kept unchanged for the next save.
-    enum class Role { User, Assistant, Note, Moved, Preserved } role = Role::Note;
+    // Tool: one tool call's card (its text is the call's output).
+    enum class Role { User, Assistant, Note, Moved, Preserved, Tool } role = Role::Note;
     DisplayRow() = default;
     DisplayRow(Role role, QString key, QString text, QString state,
                QVector<DisplayAttachment> attachments, QString metrics, QString tip, qint64 started,
@@ -38,6 +39,22 @@ struct DisplayRow {
     };
     std::optional<Spent> usage;
     QJsonObject raw;
+    // Assistant: a part of its turn's reply that follows tool calls.
+    bool continued = false;
+    // Tool: the call (state is running, done, error, cancelled, missing or
+    // unconfirmed; never done without the backend's result saying so).
+    struct Tool {
+        QString callId, name;
+        QString arguments; // The model's JSON text as shown, when known.
+        bool known = false;
+        QString ending; // How it ended, a line each, when the backend said more.
+        // Live output dropped from its front: whole lines, then the cut start
+        // of the first line kept; `trimmed` counts UTF-16 units (not saved).
+        double omittedLines = 0, omittedCharacters = 0, trimmed = 0;
+        qsizetype removed = 0; // Units of the latest output snapshot not kept.
+        QString after;         // The reply part (row key) whose message made the call.
+        bool saved = false;    // Settled by the backend's saved result.
+    } tool;
 };
 struct ChatRecord {
     QString id, title;
@@ -67,11 +84,9 @@ struct ChatRecord {
         QSet<QString> hostSeen; // completed/cancelled IDs remain spent for this turn
         std::optional<Usage::Context> context;
         QString activity, finishReason;
-        struct ToolState {
-            QString name, state;
-            QJsonObject progress, result;
-        };
-        QHash<QString, ToolState> tools;
+        QHash<QString, QString> tools; // toolCallId -> its latest card's row key
+        int toolCount = 0;
+        bool continued = false; // The next reply part follows tool calls.
         QHash<QString, QString> steering;          // clientInputId -> display row
         QHash<QString, DisplayRow> recoveryInputs; // saved queued inputs during replay
         QVector<SessionEvent> early;
@@ -213,6 +228,8 @@ class ChatService final : public QObject
     void checkpointFailed(ChatRecord &chat);
     void finishRows(ChatRecord &chat, const QString &state);
     void publishReply(ChatRecord &chat);
+    DisplayRow *toolRow(ChatRecord &chat, const QString &callId);
+    DisplayRow *addTool(ChatRecord &chat, const QString &callId, const QString &name);
     void chooseSaved(const ModelSelection &selection, bool thinkingPreference);
     ModelSelection preferredModel() const;
     void problem(const Error &error);

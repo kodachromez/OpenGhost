@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # A scripted stand-in for `pi --mode rpc` (test only): the RPC records PiBackend
 # relies on, shaped as Pi 1.0.4 emits them. No model, network or credentials.
-# The prompt text picks the run: reject, handled, fail, length, tools, slow,
+# The prompt text picks the run: reject, handled, fail, length, tools, toolcards
+# (tool calls with output and results), toolslow (a call left running), slow,
 # delay, switch (an extension changes the model); anything else is echoed. While "slow" runs, steers queue; a steer
 # approve: a tool call a stand-in Pi permission plugin asks the user about, in
 # every mode (it allows the waiting one itself once the mode turns full); foreign: another extension's select dialog; ext-error: an extension fails.
@@ -109,6 +110,47 @@ def assistant(text, stop="stop", spent=None, error=None):
     last_stop = stop
 
 
+def tool_message(text, calls, spent=None):
+    """An assistant message that makes tool calls, streamed as Pi's RPC does:
+    text and tool call blocks by contentIndex (partial arguments are deltas),
+    then the whole message. calls: [(id, name, arguments)]."""
+    global last_stop
+    blocks = ([{"type": "text", "text": text}] if text else []) + \
+        [{"type": "toolCall", "id": c[0], "name": c[1], "arguments": c[2]} for c in calls]
+    message = {"role": "assistant", "content": blocks, "api": "fake", "provider": selected()[0],
+               "model": selected()[1], "usage": spent or usage(0, 0), "stopReason": "toolUse",
+               "timestamp": 0}
+    out({"type": "message_start", "message": dict(message, content=[], stopReason="pending")})
+    for index, block in enumerate(blocks):
+        if block["type"] == "text":
+            out({"type": "message_update", "usage": message["usage"],
+                 "assistantMessageEvent": {"type": "text_delta", "contentIndex": index, "delta": text}})
+            continue
+        args = json.dumps(block["arguments"])
+        out({"type": "message_update", "usage": message["usage"], "assistantMessageEvent": {
+            "type": "toolcall_start", "contentIndex": index, "id": block["id"], "toolName": block["name"]}})
+        out({"type": "message_update", "usage": message["usage"], "assistantMessageEvent": {
+            "type": "toolcall_delta", "contentIndex": index, "delta": args[: len(args) // 2]}})
+        out({"type": "message_update", "usage": message["usage"], "assistantMessageEvent": {
+            "type": "toolcall_end", "contentIndex": index, "toolCall": block}})
+    out({"type": "message_end", "message": message})
+    append({"type": "message", "message": message})
+    last_stop = "toolUse"
+
+
+def tool_event(kind, cid, name, **fields):
+    out(dict({"type": "tool_execution_" + kind, "toolCallId": cid, "toolName": name}, **fields))
+
+
+def tool_result(cid, name, text, error):
+    message = {"role": "toolResult", "toolCallId": cid, "toolName": name,
+               "content": [{"type": "text", "text": text}], "details": {}, "isError": error,
+               "timestamp": 0}
+    out({"type": "message_start", "message": message})
+    out({"type": "message_end", "message": message})
+    append({"type": "message", "message": message})
+
+
 def user(text, images=None):
     message = {"role": "user", "content": [{"type": "text", "text": text}] + list(images or []), "timestamp": 0}
     out({"type": "message_start", "message": message})
@@ -158,6 +200,35 @@ def run(text, images=None):
     elif text == "tools":
         assistant("Let me check.", "toolUse", usage(40, 4))
         assistant("Done.", "stop", usage(60, 6, 40))
+    elif text == "toolcards":
+        # Two calls of one message; output snapshots; ends in completion order
+        # (the second first, failed); Pi's saved results in call order; the reply.
+        bash = {"command": "ls -la"}
+        read = {"path": "notes.md", "offset": 3, "limit": 2}
+        tool_message("Let me look.", [("call-a", "bash", bash), ("call-b", "read", read)], usage(30, 3))
+        tool_event("start", "call-a", "bash", args=bash)
+        tool_event("update", "call-a", "bash", args=bash, partialResult={"content": [], "details": None})
+        tool_event("update", "call-a", "bash", args=bash,
+                   partialResult={"content": [{"type": "text", "text": "a\n"}], "details": {}})
+        tool_event("update", "ghost", "bash", args={},
+                   partialResult={"content": [{"type": "text", "text": "orphan"}]})
+        tool_event("update", "call-a", "bash", args=bash,
+                   partialResult={"content": [{"type": "text", "text": "a\nb\n"}], "details": {}})
+        tool_event("start", "call-b", "read", args=read)
+        tool_event("end", "call-b", "read", isError=True,
+                   result={"content": [{"type": "text", "text": "ENOENT: notes.md"}], "details": {}})
+        tool_event("end", "call-a", "bash", isError=False,
+                   result={"content": [{"type": "text", "text": "a\nb\n"}], "details": {}})
+        tool_result("call-a", "bash", "a\nb\n", False)
+        tool_result("call-b", "read", "ENOENT: notes.md", True)
+        assistant("All done.", "stop", usage(50, 5))
+    elif text == "toolslow":  # A call still running: Stop, or OpenGhost exits.
+        bash = {"command": "sleep 60"}
+        tool_message("", [("call-s", "bash", bash)], usage(10, 1))
+        tool_event("start", "call-s", "bash", args=bash)
+        tool_event("update", "call-s", "bash", args=bash,
+                   partialResult={"content": [{"type": "text", "text": "started\n"}], "details": {}})
+        return
     elif text == "switch":  # An extension changes Pi's model (pi.setModel) mid-run.
         globals()["model"] = ("p", "m2")
         append({"type": "model_change", "provider": "p", "modelId": "m2"})

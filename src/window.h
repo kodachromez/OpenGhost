@@ -195,6 +195,7 @@ class WindowController final : public QObject
     }
     void sync();
     void syncPlugins();
+    void applyRenderers();
     void keepPictures(const QVector<openghost::Attachment> &sent);
     void catalog();
     QObject *m_browser = nullptr;
@@ -217,6 +218,7 @@ class WindowController final : public QObject
     qint64 m_pictureBytes = 0;
     QSet<QString> m_previewed; // "key/card" shown
     QHash<QString, Entry> m_rendered;
+    bool m_redrawing = false; // sync() after a renderer change
     TranscriptModel m_transcript;
     SessionModel m_sessions;
     PluginModel m_plugins;

@@ -93,6 +93,27 @@ it is not evidence that every store does. The path validation is not a sandbox
 against symlink races or other host processes. Use a private, single-instance
 profile; qualify these boundaries before sensitive-data use.
 
+### Tool Calls plugin limits
+
+The Tool Calls frontend plugin ([frontend plugins](frontend-plugins.md)) shows
+what Pi reports and no more:
+
+- Pi's stock events have no per-call cancellation, Bash exit/signal/cleanup
+  report or durable `structuredContent`; cards end *Done*/*Failed* from
+  `isError`, a stopped call stays *Result unconfirmed*, and Ghosty's Bash ending
+  diagnostics never appear. `cancelled` is supported by the card but not produced.
+- Live output is Pi's snapshot, which Pi may already have truncated; the
+  omission note counts only what OpenGhost dropped past 32 Ki. Live output is
+  not saved by Pi: a call cut off by an app exit is rebuilt *No result was
+  saved* without it. Pictures in results are said, not shown.
+- *Waiting for approval* relies on an approval naming the call (`toolCallId`).
+- Cards are rebuilt from the display cache or, for a turn being recovered, from
+  Pi's session; older caches written before tool rows existed have no cards.
+- Ghosty's subagent activity panel is not part of the plugin.
+- **Not visually verified**: pixel/geometry parity with Ghosty's cards, their
+  motion and reduced motion were not compared on screen. Offscreen smokes check
+  structure, texts, states and switching only.
+
 ### Toolchain, platform and packaging qualification
 
 - Resolve or separately qualify the two [GCC metatype warnings](cpp-port.md#known-gcc-metatype-warnings)

@@ -449,6 +449,12 @@ ApplicationWindow {
         property: "model"
         value: window.frontend ? window.frontend.transcript : null
     }
+    // Rows drawn by another renderer (a frontend plugin turned on or off) show
+    // other texts: a range in them is not kept.
+    Connections {
+        target: window.frontend ? window.frontend.frontendPlugins : null
+        function onRenderersChanged() { Selection.clear() }
+    }
     Binding {
         target: Selection
         property: "diagramWidth"

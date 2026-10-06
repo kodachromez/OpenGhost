@@ -257,10 +257,15 @@ QVariant ReplySelection::field(int index, const char *role) const
 
 QString ReplySelection::extraOf(int index) const
 {
-    // What a row shows besides its body: a user message's receipt.
+    // What a row shows besides its body: a user message's receipt; for a row
+    // a plugin draws, whatever its revision, its disclosure and its renderer.
     const QString kind = field(index, "kind").toString();
     QStringList parts{kind};
-    if (kind == QLatin1String("user")) {
+    if (kind != QLatin1String("user") && kind != QLatin1String("assistant") &&
+        kind != QLatin1String("note")) {
+        parts << field(index, "revision").toString() << field(index, "expanded").toString()
+              << field(index, "trimmedText").toString();
+    } else if (kind == QLatin1String("user")) {
         parts << field(index, "preview").toString();
         const auto notes = m_notes.value(field(index, "key").toString());
         for (auto it = notes.cbegin(); it != notes.cend(); ++it)
@@ -358,6 +363,17 @@ ReplySelection::Row ReplySelection::build(const QString &key) const
             add(QStringLiteral("u:r"), field(index, "preview").toString(), 'p');
         } else if (kind == QLatin1String("note")) {
             add(QStringLiteral("n:t"), r.source, 'l');
+        } else {
+            // A row a plugin draws: its texts as its renderer shows them
+            // (TranscriptModel::rowTexts()), a block each.
+            QVariantList texts;
+            QMetaObject::invokeMethod(m_model, "rowTexts", Q_RETURN_ARG(QVariantList, texts),
+                                      Q_ARG(int, index));
+            for (const auto &value : std::as_const(texts)) {
+                const auto text = value.toMap();
+                add(text.value(QStringLiteral("path")).toString(),
+                    text.value(QStringLiteral("text")).toString(), 'l');
+            }
         }
     }
     r.copyable = r.reply && field(index, "copyable").toBool();
@@ -627,9 +643,9 @@ void ReplySelection::followTrims(int first, int last)
     // it along, as the output's document keeps its own selection (LiveText).
     bool moved = false;
     for (Pos *pos : {&m_anchor, &m_focus, &m_spanFrom, &m_spanTo}) {
-        if (pos->unit != QLatin1String("t/b:t"))
-            continue;
         const int index = indexOf(pos->row);
+        if (pos->unit.isEmpty() || pos->unit != field(index, "trimmedText").toString())
+            continue;
         if (index < first || index > last || !m_trims.contains(pos->row))
             continue;
         const double cut = field(index, "trimmed").toDouble() - m_trims.value(pos->row);
@@ -649,7 +665,8 @@ void ReplySelection::noteTrims()
 {
     m_trims.clear();
     for (const Pos *pos : {&m_anchor, &m_focus, &m_spanFrom, &m_spanTo})
-        if (pos->unit == QLatin1String("t/b:t") && !m_trims.contains(pos->row))
+        if (!pos->unit.isEmpty() && !m_trims.contains(pos->row) &&
+            pos->unit == field(indexOf(pos->row), "trimmedText").toString())
             m_trims.insert(pos->row, field(indexOf(pos->row), "trimmed").toDouble());
 }
 

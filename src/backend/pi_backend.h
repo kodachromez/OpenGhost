@@ -91,6 +91,7 @@ class PiBackend final : public Backend
         std::optional<TurnCompleted> settled; // wait for an in-flight steer before ending
         bool clearing = false;
         QStringList queue; // Pi's steering queue, as last reported
+        QHash<QString, QString> calls; // tool calls shown this run: id -> name
     };
     // One OpenGhost session and the Pi child running its session file.
     struct Chat {

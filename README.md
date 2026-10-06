@@ -100,6 +100,12 @@ to **OFF** and enables all four checks:
   scene graph (e.g. `MAXIMIZE=1 tests/parity/private-kwin.sh 3840 2160 1.45 out
   --splash-check`, a private headless KWin) it also checks the rendered frames:
   mist at .6 of the window's pixels, no Ghost afterimage, identical redraws.
+- `native_tool_calls_test`: the Tool Calls frontend plugin without a window:
+  its one hook through repeated On/Off (saved choice, no leftover hooks), its
+  card texts and selection, and Ghosty's tool formatter with Pi's tool schemas.
+  `native_pi_test` maps the scripted Pi's tool events to cards (order, snapshots,
+  results, Stop, restart), and `native_fake_ui_smoke` draws the cards in the
+  real transcript and switches the plugin Off/On twice while a call waits.
 - `native_pi_real_test`: `PiBackend` against the installed `pi` (skipped without
   one) with Pi AI's faux model in a throwaway agent directory: Ask/Auto/Full
   relayed to Pi, approval cards for a test-only stand-in Pi permission plugin's

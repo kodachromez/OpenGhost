@@ -23,6 +23,8 @@ class FrontendPlugins final : public QObject
     Q_PROPERTY(int count READ count NOTIFY countChanged)
     // UI targets enabled plugins show (true) or hide (false); absent: no plugin's say.
     Q_PROPERTY(QVariantMap visibility READ visibility NOTIFY visibilityChanged)
+    // Row kinds enabled plugins draw: kind -> delegate URL.
+    Q_PROPERTY(QVariantMap renderers READ renderers NOTIFY renderersChanged)
   public:
     // `store`: where on/off choices are kept; null keeps them in memory.
     explicit FrontendPlugins(PreferencesStore *store, QObject *parent = nullptr);
@@ -47,12 +49,19 @@ class FrontendPlugins final : public QObject
     bool decorating() const;
     QVariantMap decorate(const ChatRowView &row) const; // pluginId -> decoration
     int hooks() const; // Registered hooks of every enabled plugin.
+    // The enabled renderer of a row kind, or null: the host's own presentation.
+    const RowRenderer *renderer(const QString &kind) const;
+    QVariantMap renderers() const;
+    // Moves whenever a kind's renderer is added, removed or replaced.
+    quint64 renderGeneration() const { return m_renderGeneration; }
 
   signals:
     void entriesChanged();
     void countChanged();
     void visibilityChanged();
     void rowsChanged(); // Row decorators were added, removed or asked to rerun.
+    // A row kind's renderer came or went: the transcript is drawn again.
+    void renderersChanged();
 
   private:
     friend class FrontendPluginContext;
@@ -69,7 +78,7 @@ class FrontendPlugins final : public QObject
     PreferencesStore *m_store;
     QMap<QString, bool> m_choices; // Without a store.
     std::vector<std::unique_ptr<Slot>> m_slots; // Stable: plugin code may add or remove.
-    quint64 m_generation = 0;
+    quint64 m_generation = 0, m_renderGeneration = 0;
 };
 
 // The plugins built into this OpenGhost. None is registered by default yet;

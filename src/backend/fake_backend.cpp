@@ -414,7 +414,8 @@ void FakeBackend::advance()
             turn.toolStarted = true;
             publish(
                 it.key(), *it, turn,
-                ToolStarted{"fixture-tool", "demo", QStringLiteral("Simulated tool (no effects)")});
+                ToolStarted{"fixture-tool", "demo", QStringLiteral("Simulated tool (no effects)"),
+                            QStringLiteral("{\"effects\":\"none\"}")});
             // The fixture always asks, in every mode: deciding is the backend's
             // permission plugin's, never OpenGhost's.
             if (scenario == "/fake approval") {
@@ -440,11 +441,15 @@ void FakeBackend::advance()
         if (turn.toolStarted && !turn.approvalDone) {
             turn.approvalDone = true;
             publish(it.key(), *it, turn,
-                    ToolProgress{"fixture-tool", {{"text", "Simulated progress"}}});
+                    ToolProgress{"fixture-tool", {{"text", "Simulated progress"}},
+                                 QStringLiteral("Simulated progress")});
             publish(
                 it.key(), *it, turn,
                 ToolCompleted{"fixture-tool",
-                              {{"text", "Simulated result; no host action"}, {"isError", false}}});
+                              {{"text", "Simulated result; no host action"}, {"isError", false}},
+                              std::nullopt,
+                              QStringLiteral("Simulated result; no host action"),
+                              false});
         }
         if (!turn.queue.isEmpty()) {
             if (turn.offset)
@@ -516,7 +521,11 @@ void FakeBackend::answer(RequestId id, const ReverseResult &result)
         turn.approvalDone = true;
         publish(
             sessionId, *session, turn,
-            ToolCompleted{"fixture-tool", {{"text", "Denied; nothing ran"}, {"isError", true}}});
+            ToolCompleted{"fixture-tool",
+                          {{"text", "Denied; nothing ran"}, {"isError", true}},
+                          std::nullopt,
+                          QStringLiteral("Denied; nothing ran"),
+                          true});
         turn.response = QStringLiteral("Simulated tool denied. Nothing ran.");
     }
 }

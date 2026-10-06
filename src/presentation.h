@@ -22,7 +22,8 @@ struct Attachment {
 // One bounded display row. Text is implicitly shared, so publishing a copy to
 // the GUI thread does not duplicate unchanged rows.
 struct Entry {
-    enum Kind { User, Assistant, Note };
+    // Tool: a tool call, drawn by the frontend plugin that renders tool rows.
+    enum Kind { User, Assistant, Note, Tool };
     Kind kind = Note;
     QString key;       // Same for a live row and its canonical replacement.
     QString text;      // Message or notice.
@@ -42,6 +43,19 @@ struct Entry {
     Join join = Apart;
     // Enabled frontend plugins' presentation data, by plugin ID; empty without any.
     QVariantMap decorations;
+    // A tool call (Tool rows): text is its output, state its state.
+    struct Call {
+        QString id, name, arguments, ending;
+        bool known = false; // Its arguments are known.
+        double omittedLines = 0, omittedCharacters = 0, trimmed = 0;
+        bool operator==(const Call &o) const
+        {
+            return id == o.id && name == o.name && arguments == o.arguments &&
+                   ending == o.ending && known == o.known && omittedLines == o.omittedLines &&
+                   omittedCharacters == o.omittedCharacters && trimmed == o.trimmed;
+        }
+        bool operator!=(const Call &o) const { return !(*this == o); }
+    } tool;
     quint64 revision = 0; // Changes exactly when displayed content changes.
 };
 

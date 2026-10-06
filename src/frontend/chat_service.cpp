@@ -129,14 +129,93 @@ DisplayAttachment displayOf(const Attachment &a)
             {},     {}};
 }
 const QStringList Receipts{"queued", "applied", "notApplied", "unconfirmed"};
+
+// A tool card's output, bounded as Ghosty's transcript bounds it: live output
+// keeps its newest 32 Ki units, a result its first 32 Ki and a notice.
+constexpr qsizetype ToolOutput = 32 * 1024;
+constexpr int ToolCards = 256; // Per turn.
+const QString ToolClipped =
+    QStringLiteral("\n\n[Display limit reached; additional text is omitted here.]");
+qsizetype codePoints(QStringView text)
+{
+    qsizetype count = text.size();
+    for (const QChar c : text)
+        count -= c.isLowSurrogate();
+    return count;
+}
+// Where the kept tail of `all` starts: past the bound, at a line start when
+// one follows, never inside a surrogate pair.
+qsizetype tailStart(const QString &all)
+{
+    if (all.size() <= ToolOutput)
+        return 0;
+    qsizetype start = all.size() - ToolOutput;
+    if (all.at(start - 1) != QLatin1Char('\n')) {
+        const auto newline = all.indexOf(QLatin1Char('\n'), start);
+        if (newline >= 0 && newline < all.size() - 1)
+            start = newline + 1;
+        else if (all.at(start).isLowSurrogate())
+            ++start;
+    }
+    return start;
+}
+// Ended lines dropped count as lines; a cut inside one counts its dropped start.
+void countDropped(DisplayRow::Tool &tool, QStringView removed)
+{
+    const auto newline = removed.lastIndexOf(QLatin1Char('\n'));
+    if (newline >= 0) {
+        tool.omittedLines += removed.count(QLatin1Char('\n'));
+        tool.omittedCharacters = 0;
+    }
+    tool.omittedCharacters += codePoints(removed.mid(newline + 1));
+}
+void liveOutput(DisplayRow &row, const QString &output, bool append)
+{
+    auto &tool = row.tool;
+    if (append) {
+        QString all = row.text + output;
+        const auto start = tailStart(all);
+        if (start > 0) {
+            countDropped(tool, QStringView(all).left(start));
+            tool.trimmed += start; // The view removes just this prefix from its document.
+            all.remove(0, start);
+        }
+        row.text = all;
+        return;
+    }
+    // A snapshot of everything so far. When it only grew, the view trims its
+    // front; otherwise it shows the new text whole.
+    const auto start = tailStart(output);
+    const bool grew = start >= tool.removed &&
+                      QStringView(output).mid(tool.removed).startsWith(row.text);
+    if (grew)
+        tool.trimmed += start - tool.removed;
+    tool.removed = start;
+    tool.omittedLines = tool.omittedCharacters = 0;
+    if (start > 0)
+        countDropped(tool, QStringView(output).left(start));
+    row.text = output.mid(start);
+}
+QString resultOutput(const QString &output)
+{
+    if (output.size() <= ToolOutput)
+        return output;
+    qsizetype cut = ToolOutput;
+    if (output.at(cut - 1).isHighSurrogate())
+        --cut;
+    return output.left(cut) + ToolClipped;
+}
 } // namespace
 
 // The display cache. Notes (errors/Stopped) are view-only, as in the reference.
 QJsonArray ChatService::entries(const QVector<DisplayRow> &rows)
 {
     QJsonArray out;
+    QString reply; // The latest assistant row: a tool call made by its message joins it.
     for (const auto &row : rows) {
         QJsonObject o;
+        if (row.role == DisplayRow::Role::Assistant)
+            reply = row.key;
         switch (row.role) {
         case DisplayRow::Role::Note:
             continue;
@@ -158,8 +237,29 @@ QJsonArray ChatService::entries(const QVector<DisplayRow> &rows)
                 o.insert("receipt", row.state);
             break;
         }
+        case DisplayRow::Role::Tool:
+            o = {{"role", "tool"},
+                 {"callId", row.tool.callId},
+                 {"name", row.tool.name},
+                 {"state", row.state},
+                 {"output", row.text}};
+            if (row.tool.known)
+                o.insert("arguments", row.tool.arguments);
+            if (!row.tool.ending.isEmpty())
+                o.insert("ending", row.tool.ending);
+            if (row.tool.omittedLines > 0)
+                o.insert("omittedLines", row.tool.omittedLines);
+            if (row.tool.omittedCharacters > 0)
+                o.insert("omittedCharacters", row.tool.omittedCharacters);
+            if (!row.remoteTurn.isEmpty())
+                o.insert("turn", row.remoteTurn);
+            if (!reply.isEmpty() && row.tool.after == reply)
+                o.insert("joined", true);
+            break;
         case DisplayRow::Role::Assistant:
             o = {{"role", "assistant"}, {"content", row.text}};
+            if (row.continued)
+                o.insert("continued", true);
             if (!row.remoteTurn.isEmpty())
                 o.insert("turn", row.remoteTurn);
             if (!row.model.isEmpty())
@@ -185,6 +285,7 @@ QJsonArray ChatService::entries(const QVector<DisplayRow> &rows)
 QVector<DisplayRow> ChatService::rowsOf(const QJsonArray &saved)
 {
     QVector<DisplayRow> rows;
+    QString reply;
     for (const auto &value : Library::displayMessages(saved)) {
         const auto o = value.toObject();
         const auto role = o.value("role").toString();
@@ -208,6 +309,7 @@ QVector<DisplayRow> ChatService::rowsOf(const QJsonArray &saved)
             row.remoteTurn = o.value("turn").isString() ? o.value("turn").toString() : QString();
             row.model = o.value("model").toString();
             row.uncounted = o.value("uncounted").toBool();
+            row.continued = o.value("continued").toBool();
             if (o.value("usage").isObject()) {
                 const auto u = o.value("usage").toObject();
                 row.usage =
@@ -215,6 +317,23 @@ QVector<DisplayRow> ChatService::rowsOf(const QJsonArray &saved)
                                       u.value("written").toDouble(), u.value("output").toDouble(),
                                       u.value("requests").toDouble()};
             }
+        } else if (role == "tool") {
+            row.role = DisplayRow::Role::Tool;
+            row.tool.callId = o.value("callId").toString();
+            row.tool.name = o.value("name").toString();
+            row.tool.known = o.value("arguments").isString();
+            row.tool.arguments = o.value("arguments").toString();
+            row.tool.ending = o.value("ending").toString();
+            row.tool.omittedLines = o.value("omittedLines").toDouble();
+            row.tool.omittedCharacters = o.value("omittedCharacters").toDouble();
+            row.text = o.value("output").toString();
+            row.remoteTurn = o.value("turn").toString();
+            if (o.value("joined").toBool())
+                row.tool.after = reply;
+            // A call saved while it ran: its result never arrived here.
+            row.state = o.value("state").toString();
+            if (row.state == QStringLiteral("running"))
+                row.state = QStringLiteral("unconfirmed");
         } else if (role == "moved") {
             row.role = DisplayRow::Role::Moved;
             row.text = QStringLiteral("Caught up with the main chat");
@@ -223,6 +342,8 @@ QVector<DisplayRow> ChatService::rowsOf(const QJsonArray &saved)
             row.hidden = true;
             row.raw = o;
         }
+        if (row.role == DisplayRow::Role::Assistant)
+            reply = row.key;
         rows.append(row);
     }
     return rows;
@@ -984,6 +1105,35 @@ void ChatService::publishReply(ChatRecord &chat)
             row.text = parts.join(QStringLiteral("\n\n"));
     }
 }
+DisplayRow *ChatService::toolRow(ChatRecord &chat, const QString &callId)
+{
+    const auto key = chat.turn.tools.value(callId);
+    if (key.isEmpty())
+        return nullptr;
+    for (auto &row : chat.rows)
+        if (row.key == key)
+            return &row;
+    return nullptr;
+}
+// A new card, after everything shown so far: the reply goes on below it.
+DisplayRow *ChatService::addTool(ChatRecord &chat, const QString &callId, const QString &name)
+{
+    auto &turn = chat.turn;
+    if (callId.isEmpty() || name.isEmpty() || turn.toolCount >= ToolCards)
+        return nullptr;
+    ++turn.toolCount;
+    DisplayRow row{DisplayRow::Role::Tool, uuid(), {}, QStringLiteral("running"), {}, {}, {}, -1, -1};
+    row.backendTurn = turn.clientId;
+    row.remoteTurn = turn.remoteId;
+    row.tool.callId = callId;
+    row.tool.name = name;
+    row.tool.after = turn.replyKey;
+    chat.rows.append(row);
+    turn.tools.insert(callId, row.key);
+    turn.replyKey = uuid();
+    turn.continued = true;
+    return &chat.rows.last();
+}
 void ChatService::event(const SessionEvent &event)
 {
     const auto &id = event.identity;
@@ -1148,6 +1298,7 @@ void ChatService::applyEvent(ChatRecord &chat, const SessionEvent &event, bool r
                               -1,
                               -1});
             part = chat.rows.end() - 1;
+            part->continued = std::exchange(turn.continued, false);
             part->pendingTurn =
                 std::any_of(chat.rows.cbegin(), chat.rows.cend(), [&](const auto &r) {
                     return r.backendTurn == turn.clientId && r.pendingTurn;
@@ -1179,22 +1330,58 @@ void ChatService::applyEvent(ChatRecord &chat, const SessionEvent &event, bool r
     } else if (const auto *done = std::get_if<TurnCompleted>(&event.payload)) {
         endTurn(chat, *done, replay);
     } else if (const auto *tool = std::get_if<ToolStarted>(&event.payload)) {
-        if (tool->toolCallId.isEmpty() || turn.tools.contains(tool->toolCallId))
+        // A duplicate (the call's execution after its announcement) only adds
+        // arguments that were not known; a reused ID after a result is a new call.
+        auto *row = toolRow(chat, tool->toolCallId);
+        if (row && row->state == QStringLiteral("running")) {
+            if (!row->tool.known && tool->arguments) {
+                row->tool.arguments = *tool->arguments;
+                row->tool.known = true;
+            }
+        } else if (!(row = addTool(chat, tool->toolCallId, tool->name))) {
             return;
-        turn.tools.insert(tool->toolCallId, {tool->name, "started", {}, {}});
+        } else {
+            row->tool.known = tool->arguments.has_value();
+            row->tool.arguments = tool->arguments.value_or(QString());
+        }
         turn.activity = tool->title.value_or(tool->name);
         emit worked();
     } else if (const auto *progress = std::get_if<ToolProgress>(&event.payload)) {
-        auto tool = turn.tools.find(progress->toolCallId);
-        if (tool != turn.tools.end() && tool->state == "started")
-            tool->progress = progress->detail;
+        // Output only for a running call; orphan or late output is dropped.
+        auto *row = toolRow(chat, progress->toolCallId);
+        if (!row || row->state != QStringLiteral("running"))
+            return;
+        const auto legacy = progress->detail.value("text");
+        const auto output = progress->output ? progress->output
+                            : legacy.isString() ? std::optional(legacy.toString())
+                                                : std::nullopt;
+        if (!output)
+            return;
+        liveOutput(*row, *output, progress->append);
+        emit worked();
     } else if (const auto *done = std::get_if<ToolCompleted>(&event.payload)) {
-        auto tool = turn.tools.find(done->toolCallId);
-        if (tool != turn.tools.end() && tool->state == "started") {
-            tool->state = "completed";
-            tool->result = done->detail;
-            turn.activity.clear();
-        }
+        // An outcome the backend did not report is no outcome: the call stays
+        // unresolved rather than being shown as done.
+        const auto reported = done->isError ? done->isError
+                              : done->detail.value("isError").isBool()
+                                  ? std::optional(done->detail.value("isError").toBool())
+                                  : std::nullopt;
+        const auto output = done->output ? *done->output : done->detail.value("text").toString();
+        if (!reported || done->toolCallId.isEmpty())
+            return;
+        auto *row = toolRow(chat, done->toolCallId);
+        if (row && done->name && *done->name != row->tool.name)
+            return; // Not this call's result.
+        if (row && row->state != QStringLiteral("running") && (!done->saved || row->tool.saved))
+            return; // A duplicate: the first result stands, settled once by the saved one.
+        if (!row && (!done->name || !(row = addTool(chat, done->toolCallId, *done->name))))
+            return; // A result for a call never announced: its arguments stay unknown.
+        row->state = *reported ? QStringLiteral("error") : QStringLiteral("done");
+        row->text = resultOutput(output);
+        row->tool.omittedLines = row->tool.omittedCharacters = 0;
+        row->tool.removed = 0;
+        row->tool.saved = done->saved;
+        turn.activity.clear();
     } else if (const auto *accepted = std::get_if<InputAccepted>(&event.payload)) {
         if (replay && !turn.steering.contains(accepted->clientInputId) &&
             (accepted->input || turn.recoveryInputs.contains(accepted->clientInputId))) {
@@ -1220,6 +1407,7 @@ void ChatService::applyEvent(ChatRecord &chat, const SessionEvent &event, bool r
             if (!key.isEmpty() && row.key == key && row.state != "applied") {
                 row.state = "applied";
                 turn.replyKey = uuid(); // The next assistant message is a new reply part.
+                turn.continued = false;
             }
         if (!replay)
             save(chat);
@@ -1401,9 +1589,17 @@ QString ChatService::metrics(const ChatRecord::Turn &turn)
 }
 void ChatService::updateMetrics(ChatRecord &chat, ChatRecord::Turn &turn)
 {
+    // A reply with tool calls is in parts: the metrics go under its last text.
+    const auto part = [&](const DisplayRow &row) {
+        return std::any_of(turn.messages.cbegin(), turn.messages.cend(),
+                           [&](const auto &m) { return m.rowKey == row.key; });
+    };
+    const bool parts = turn.toolCount > 0 && std::any_of(chat.rows.cbegin(), chat.rows.cend(),
+                                                         [&](const DisplayRow &row) {
+                                                             return part(row) && !row.text.isEmpty();
+                                                         });
     for (auto it = chat.rows.rbegin(); it != chat.rows.rend(); ++it) {
-        if (std::any_of(turn.messages.cbegin(), turn.messages.cend(),
-                        [&](const auto &m) { return m.rowKey == it->key; })) {
+        if (part(*it) && (!parts || !it->text.isEmpty())) {
             it->metrics = turn.terminal ? metrics(turn) : QString();
             if (turn.input || turn.output)
                 it->usage = DisplayRow::Spent{turn.input, turn.cached, turn.written, turn.output,
@@ -1411,6 +1607,15 @@ void ChatService::updateMetrics(ChatRecord &chat, ChatRecord::Turn &turn)
             it->tip = QStringLiteral("Input %1 · Output %2").arg(turn.input).arg(turn.output);
             it->started = turn.started;
             it->completed = turn.completed;
+            // The turn's usage is saved once, with the part that shows it.
+            if (turn.toolCount > 0)
+                for (auto &row : chat.rows)
+                    if (&row != &*it && part(row)) {
+                        row.metrics.clear();
+                        row.tip.clear();
+                        row.usage.reset();
+                        row.started = row.completed = -1;
+                    }
             break;
         }
     }
@@ -1424,9 +1629,12 @@ void ChatService::endTurn(ChatRecord &chat, const TurnCompleted &done, bool repl
     turn.completed = replay ? -1 : QDateTime::currentMSecsSinceEpoch();
     const auto finish = done.finishReason.value_or(turn.finishReason);
     turn.activity.clear();
-    for (auto &tool : turn.tools)
-        if (tool.state == "started")
-            tool.state = "interrupted";
+    // Calls still unresolved: no result was saved (rebuilt history), or none
+    // arrived before the turn ended here. Never done, never cancelled.
+    for (auto &row : chat.rows)
+        if (row.role == DisplayRow::Role::Tool && row.backendTurn == turn.clientId &&
+            row.state == QStringLiteral("running"))
+            row.state = replay ? QStringLiteral("missing") : QStringLiteral("unconfirmed");
     turn.retryable = done.status == TurnStatus::Error &&
                      (!done.error || (done.error->retryable != std::optional<bool>(false) &&
                                       done.error->action != std::optional<QString>("none")));
@@ -1551,7 +1759,8 @@ void ChatService::retry()
         chat.turn.terminal = chat.turn.stopped = chat.turn.retryable = false;
         const auto prepared = *chat.turn.prepared;
         for (auto &row : chat.rows)
-            if (row.backendTurn == prepared.clientTurnId && row.state == QStringLiteral("error"))
+            if (row.backendTurn == prepared.clientTurnId && row.role != DisplayRow::Role::Tool &&
+                row.state == QStringLiteral("error"))
                 row.state = QStringLiteral("sending");
         QString userKey;
         for (const auto &row : chat.rows)

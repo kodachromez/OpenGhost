@@ -563,6 +563,36 @@
       "revision": "3222049f561d8cd98bbc30183c15176cbaa1e17f",
       "source_sha256": "412536b4027529b21404869374a6d0a29e7817deedf11f807f4f9d4f74785e82",
       "reason": "Existing OpenGhost 1.3 home Chats group; no service/workspace-switching implementation"
+    },
+    {
+      "source": "native-ghosty/qml/ToolCard.qml",
+      "destination": "plugins/tool_calls/qml/ToolCard.qml",
+      "source_sha256": "63afe96ff49e927aefb6bfbdcfc51fbaa5025bcddb35c522fe429c828f89247a",
+      "scope": "ordinary tool card for the Tool Calls frontend plugin; subagent activity panel removed, facade renamed, deferred well restore owned by a Timer"
+    },
+    {
+      "source": "native-ghosty/src/toolcard.cpp",
+      "destination": "plugins/tool_calls/toolcard.cpp",
+      "source_sha256": "62ff5e81dcf8c2e13466445c5051a3e31497fa7be8a14893cc0af53ab8ec6ce6",
+      "scope": "describe/endLines/liveNote/omission/plain/units; subagent branch and steps() removed; Pi edit oldText/newText read as removed/added"
+    },
+    {
+      "source": "native-ghosty/src/toolcard.h",
+      "destination": "plugins/tool_calls/toolcard.h",
+      "source_sha256": "9c499ce8e463051f13451ecd64f2f003481c6246cb7ba066d6dbdc3034740891",
+      "scope": "declarations without activity.h/rich.h; ToolText moved to plugins/tool_calls/tooltext.{h,cpp}"
+    },
+    {
+      "source": "native-ghosty/qml/ChatEntry.qml",
+      "destination": "plugins/tool_calls/qml/ToolEntry.qml",
+      "source_sha256": "6b30a82cd6695e3eb318f02873a513b18302e68ed06e7f214796245b918c3fd5",
+      "scope": "tool row entrance motion only (500 ms rise/scale/fade, reduced motion)"
+    },
+    {
+      "source": "native-ghosty/src/transcript.cpp",
+      "destination": "src/frontend/chat_service.cpp",
+      "source_sha256": "590001c570c878c8dc4e7f9eec0aa8bbc30f50c81e7d164e168cb260fa56af86",
+      "scope": "tool output bounds only: 32 Ki live tail at a line start with omitted line/character counts, first 32 Ki of a result with the display-limit notice"
     }
   ],
   "excluded_custom_animations": [

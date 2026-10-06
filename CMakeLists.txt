@@ -91,6 +91,27 @@ qt_add_shaders(native_window "ui_shaders" PREFIX / FILES
     shaders/blur.frag shaders/oil.frag shaders/glass.frag shaders/veil.frag shaders/tone.frag
     shaders/frame.frag shaders/mist.frag)
 
+# Tool Calls, a frontend plugin (plugins/tool_calls): Ghosty's tool cards as the
+# renderer of the transcript's tool rows. Without it (OFF) tool rows are kept
+# but not drawn, as with the plugin turned off.
+option(OPENGHOST_TOOL_CALLS "Build the Tool Calls frontend plugin" ON)
+if(OPENGHOST_TOOL_CALLS)
+    # The card's texts (formatting and selection) and the plugin: QtCore only.
+    add_library(openghost_tool_calls_core STATIC plugins/tool_calls/toolcard.h
+        plugins/tool_calls/toolcard.cpp plugins/tool_calls/tool_calls_plugin.h
+        plugins/tool_calls/tool_calls_plugin.cpp)
+    target_include_directories(openghost_tool_calls_core PUBLIC plugins/tool_calls)
+    target_link_libraries(openghost_tool_calls_core PUBLIC native_contract)
+    native_warnings(openghost_tool_calls_core)
+    # The same texts for the card's QML (ToolText).
+    add_library(openghost_tool_calls STATIC)
+    qt_add_qml_module(openghost_tool_calls URI OpenGhost.ToolCalls VERSION 1.0 NO_PLUGIN
+        RESOURCE_PREFIX / OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/OpenGhost/ToolCalls
+        SOURCES plugins/tool_calls/tooltext.h plugins/tool_calls/tooltext.cpp)
+    target_link_libraries(openghost_tool_calls PUBLIC openghost_tool_calls_core Qt6::Qml)
+    native_warnings(openghost_tool_calls)
+endif()
+
 qt_add_executable(openghost-cpp src/main.cpp)
 set_target_properties(openghost-cpp PROPERTIES WIN32_EXECUTABLE TRUE MACOSX_BUNDLE TRUE
     MACOSX_BUNDLE_GUI_IDENTIFIER "org.openghost.cpp")
@@ -105,6 +126,19 @@ foreach(name Main ChatEntry LiveText Sidebar SettingsDialog Markdown Block Inlin
     set_source_files_properties(qml/${name}.qml PROPERTIES QT_RESOURCE_ALIAS ${name}.qml)
     list(APPEND qml_files qml/${name}.qml)
 endforeach()
+if(OPENGHOST_TOOL_CALLS)
+    # The plugin's card, in the window's module (it uses LiveText and SelectArea).
+    foreach(name ToolEntry ToolCard)
+        set_source_files_properties(plugins/tool_calls/qml/${name}.qml
+            PROPERTIES QT_RESOURCE_ALIAS ${name}.qml)
+        list(APPEND qml_files plugins/tool_calls/qml/${name}.qml)
+    endforeach()
+    target_link_libraries(openghost-cpp PRIVATE openghost_tool_calls)
+    target_compile_definitions(openghost-cpp PRIVATE OPENGHOST_TOOL_CALLS)
+    if(OPENGHOST_BUILD_SMOKE_TEST)
+        target_sources(openghost-cpp PRIVATE tests/tool_calls_smoke.cpp)
+    endif()
+endif()
 if(OPENGHOST_BROWSER)
     foreach(name BrowserPanel BrowserGuest BrowserPopup)
         set_source_files_properties(qml/${name}.qml PROPERTIES QT_RESOURCE_ALIAS ${name}.qml)
@@ -194,6 +228,14 @@ if(OPENGHOST_BUILD_SMOKE_TEST)
     add_test(NAME native_media_test COMMAND native_media_test)
     set_tests_properties(native_media_test PROPERTIES TIMEOUT 30
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    if(OPENGHOST_TOOL_CALLS)
+        # The Tool Calls plugin's hook through On/Off and its card texts.
+        add_executable(native_tool_calls_test tests/tool_calls.cpp)
+        target_link_libraries(native_tool_calls_test PRIVATE openghost_tool_calls_core Qt6::Test)
+        native_warnings(native_tool_calls_test)
+        add_test(NAME native_tool_calls_test COMMAND native_tool_calls_test)
+        set_tests_properties(native_tool_calls_test PROPERTIES TIMEOUT 15)
+    endif()
     add_test(NAME native_ui_smoke COMMAND openghost-cpp --smoke-test)
     add_test(NAME native_fake_ui_smoke COMMAND openghost-cpp --smoke-test --fake-backend)
     set_tests_properties(native_ui_smoke native_fake_ui_smoke PROPERTIES TIMEOUT 30

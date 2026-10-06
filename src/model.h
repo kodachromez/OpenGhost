@@ -7,6 +7,7 @@
 #include <QSet>
 
 #include <algorithm>
+#include <functional>
 #include <limits>
 
 // A list model applied as keyed diffs: unchanged rows keep their delegates,
@@ -137,6 +138,24 @@ class TranscriptModel final : public KeyedModel
         CompletedRole,
         JoinRole,
         DecorationsRole,
+        // A tool row's call (Entry::Call), and whether the reader opened it.
+        ToolCallRole,
+        ToolNameRole,
+        ArgumentsRole,
+        ArgumentsKnownRole,
+        EndingRole,
+        OmittedLinesRole,
+        OmittedCharactersRole,
+        TrimmedRole,
+        ExpandedRole,
+        RevisionRole,
+        TrimmedTextRole, // The selectable text `trimmed` counts in, if any.
+    };
+    // What a plugin-drawn row kind's renderer tells the transcript.
+    struct Renderer {
+        std::function<QVector<std::pair<QString, QString>>(const QVariantMap &row)> selection;
+        QString trimmedText;
+        bool startExpanded = false;
     };
 
     using KeyedModel::KeyedModel;
@@ -144,7 +163,9 @@ class TranscriptModel final : public KeyedModel
     QVariant data(const QModelIndex &index, int role) const override;
     QHash<int, QByteArray> roleNames() const override;
 
-    void apply(const QVector<Entry> &rows);
+    // `redrawn`: rows that appear are shown again (another renderer), not new.
+    void apply(const QVector<Entry> &rows, bool redrawn = false);
+    Q_INVOKABLE bool quiet(const QString &key) const { return m_quiet.contains(key); }
     // Another conversation: every delegate and presentation edit is replaced.
     void reset(const QVector<Entry> &rows);
     Q_INVOKABLE int indexOf(const QString &key) const;
@@ -154,11 +175,25 @@ class TranscriptModel final : public KeyedModel
     Q_INVOKABLE QVariant edit(const QString &key) const;
     // Anything but a string drops the edit.
     Q_INVOKABLE void setEdit(const QString &key, const QVariant &source);
+    // Opens or shuts a row (a tool card): presentation only, kept by key while
+    // the conversation is shown, whichever renderer draws it.
+    Q_INVOKABLE void toggle(int row);
+    // Plugin-drawn kinds ("tool"), by kind; none: no row of a kind is drawn
+    // by a plugin. Rows already shown are told their selectable texts changed.
+    void setRenderers(QHash<QString, Renderer> renderers);
+    // A plugin-drawn row's selectable texts ({path, text} maps), as its
+    // renderer shows them; empty for any other row (selection.h).
+    Q_INVOKABLE QVariantList rowTexts(int row) const;
 
   private:
     friend class ModelTest;
+    bool expanded(const Entry &entry) const;
+    QVariantMap fields(const Entry &entry) const;
     QVector<Entry> m_rows;
     QHash<QString, QString> m_edits;
+    QSet<QString> m_toggled; // Rows the reader opened or shut, by key.
+    QSet<QString> m_quiet;   // Rows shown again by a renderer change.
+    QHash<QString, Renderer> m_renderers;
 };
 
 // The saved-session sidebar: OpenGhost's list, sorted and filtered by title on the

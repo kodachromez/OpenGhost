@@ -25,6 +25,17 @@ void FrontendPluginContext::redecorate()
     if (m_decorator)
         emit m_owner->rowsChanged();
 }
+void FrontendPluginContext::renderRows(const QString &kind, RowRenderer renderer)
+{
+    if (kind.isEmpty() || (renderer.delegate.isEmpty() && !m_renderers.contains(kind)))
+        return;
+    if (renderer.delegate.isEmpty())
+        m_renderers.remove(kind);
+    else
+        m_renderers.insert(kind, std::move(renderer));
+    ++m_owner->m_renderGeneration;
+    emit m_owner->renderersChanged();
+}
 void FrontendPluginContext::setVisible(const QString &target, bool visible)
 {
     const auto found = m_visibility.constFind(target);
@@ -140,10 +151,15 @@ void FrontendPlugins::stop(Slot &slot, bool notify)
         return;
     const bool rows = bool(current->context->m_decorator);
     const bool visibility = !current->context->m_visibility.isEmpty();
+    const bool renderers = !current->context->m_renderers.isEmpty();
     current->context.reset();
+    if (renderers)
+        ++m_renderGeneration;
     if (!notify)
         return;
     emit entriesChanged();
+    if (renderers)
+        emit renderersChanged();
     if (rows)
         emit rowsChanged();
     if (visibility)
@@ -216,6 +232,26 @@ QVariantMap FrontendPlugins::decorate(const ChatRowView &row) const
                 decorations.insert(slot->info.id, decoration);
         }
     return decorations;
+}
+const RowRenderer *FrontendPlugins::renderer(const QString &kind) const
+{
+    for (const auto &slot : m_slots)
+        if (slot->context)
+            if (const auto found = slot->context->m_renderers.constFind(kind);
+                found != slot->context->m_renderers.cend())
+                return &*found;
+    return nullptr;
+}
+QVariantMap FrontendPlugins::renderers() const
+{
+    QVariantMap map;
+    for (const auto &slot : m_slots)
+        if (slot->context)
+            for (auto it = slot->context->m_renderers.cbegin();
+                 it != slot->context->m_renderers.cend(); ++it)
+                if (!map.contains(it.key()))
+                    map.insert(it.key(), it->delegate.toString());
+    return map;
 }
 int FrontendPlugins::hooks() const
 {

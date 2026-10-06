@@ -6,6 +6,10 @@
 #include "platform/platform.h"
 #include "videoinfo.h"
 #include "window.h"
+#ifdef OPENGHOST_TOOL_CALLS
+#include "tool_calls_plugin.h"
+#include "tooltext.h"
+#endif
 #include <cstdio>
 #include <cstring>
 #include <memory>
@@ -228,6 +232,10 @@ int main(int argc, char *argv[])
     WindowController controller(backend.get(), preferencesPath, dataPath, browser.get(),
                                 usagePath);
     openghost::registerBuiltinPlugins(*controller.frontendPlugins());
+#ifdef OPENGHOST_TOOL_CALLS
+    registerToolCallsTypes();
+    controller.frontendPlugins()->add(std::make_unique<openghost::ToolCallsPlugin>());
+#endif
     QObject::connect(&controller, &WindowController::closeRequested, &app, &QCoreApplication::quit);
     QQmlApplicationEngine engine;
 #ifdef OPENGHOST_SMOKE_TEST

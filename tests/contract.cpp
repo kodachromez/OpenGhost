@@ -632,7 +632,17 @@ class ContractTest : public QObject
         QTRY_VERIFY(!chat.pending());
         fake.advance();
         QCOMPARE(chat.approvals().size(), 1);
-        QCOMPARE(chat.current().turn.tools["fixture-tool"].state, QStringLiteral("started"));
+        const auto card = [&]() -> const DisplayRow & {
+            const auto key = chat.current().turn.tools.value("fixture-tool");
+            for (const auto &row : chat.current().rows)
+                if (row.key == key)
+                    return row;
+            static const DisplayRow none;
+            return none;
+        };
+        QCOMPARE(card().role, DisplayRow::Role::Tool);
+        QCOMPARE(card().state, QStringLiteral("running")); // Waiting: not proof that it ran.
+        QCOMPARE(card().tool.name, QStringLiteral("demo"));
         const auto pending = chat.approvals().first();
         emit fake.reverseRequest(999,
                                  pending.data); // Duplicate request must not duplicate the card.
@@ -646,12 +656,14 @@ class ContractTest : public QObject
         chat.approve(pending.request, false); // One answer only.
         QVERIFY(chat.approvals().isEmpty());
         fake.advance();
-        QCOMPARE(chat.current().turn.tools["fixture-tool"].state, QStringLiteral("completed"));
-        QVERIFY(!chat.current().turn.tools["fixture-tool"].progress.isEmpty());
-        QVERIFY(!chat.current().turn.tools["fixture-tool"].result.isEmpty());
+        QCOMPARE(card().state, QStringLiteral("done"));
+        QCOMPARE(card().text, QStringLiteral("Simulated result; no host action"));
         for (int i = 0; i < 100; ++i)
             fake.advance();
-        QCOMPARE(chat.current().rows.size(), 2); // No invented tool transcript cards.
+        // The prompt, the call's card and the reply after it; nothing invented.
+        QCOMPARE(chat.current().rows.size(), 3);
+        QCOMPARE(chat.current().rows[1].role, DisplayRow::Role::Tool);
+        QVERIFY(chat.current().rows[2].continued);
         QVERIFY(chat.send("/fake approval"));
         QTRY_VERIFY(!chat.pending());
         fake.advance();
@@ -669,6 +681,141 @@ class ContractTest : public QObject
         chat.stop();
         QTRY_VERIFY(!chat.pending());
     }
+    // Tool calls are rows of their own, in announcement order, and never show
+    // an outcome the backend did not report.
+    void toolCallsAreTruthfulRows()
+    {
+        FakeBackend fake(nullptr, 0);
+        PreferencesStore prefs({});
+        ChatService chat(&fake, &prefs);
+        chat.initialize();
+        QTRY_VERIFY(chat.ready());
+        QVERIFY(chat.send("hello"));
+        QTRY_VERIFY(!chat.pending());
+        QVERIFY(!chat.current().turn.remoteId.isEmpty());
+        const auto send = [&](EventPayload payload, std::optional<QString> message = std::nullopt) {
+            const auto &c = chat.current();
+            emit fake.sessionEvent(
+                {{c.id, c.sequence + 1, c.turn.remoteId, message, c.turn.clientId}, payload});
+        };
+        const auto row = [&](const QString &call) -> DisplayRow {
+            const auto key = chat.current().turn.tools.value(call);
+            for (const auto &r : chat.current().rows)
+                if (!key.isEmpty() && r.key == key)
+                    return r;
+            return {};
+        };
+        const auto tools = [&] {
+            int n = 0;
+            for (const auto &r : chat.current().rows)
+                n += r.role == DisplayRow::Role::Tool;
+            return n;
+        };
+        send(MessageStarted{}, QStringLiteral("m1"));
+        send(MessageDelta{QStringLiteral("Looking.")}, QStringLiteral("m1"));
+        send(MessageCompleted{QStringLiteral("Looking."), {}}, QStringLiteral("m1"));
+        send(ToolStarted{"c1", "bash", {}, QStringLiteral(R"({"command":"ls"})")}, QStringLiteral("m1"));
+        send(ToolStarted{"c2", "read", {}, std::nullopt}, QStringLiteral("m1"));
+        QCOMPARE(tools(), 2);
+        const auto reply = chat.current().rows[1].key;
+        QCOMPARE(chat.current().rows[2].tool.callId, QStringLiteral("c1"));
+        QCOMPARE(chat.current().rows[3].tool.callId, QStringLiteral("c2"));
+        QCOMPARE(row("c1").tool.after, reply);
+        QCOMPARE(row("c1").state, QStringLiteral("running"));
+        // Its execution: the same card, arguments learnt once.
+        send(ToolStarted{"c1", "bash", {}, QStringLiteral(R"({"command":"other"})")});
+        send(ToolStarted{"c2", "read", {}, QStringLiteral(R"({"path":"x"})")});
+        QCOMPARE(tools(), 2);
+        QCOMPARE(row("c1").tool.arguments, QStringLiteral(R"({"command":"ls"})"));
+        QVERIFY(row("c2").tool.known);
+        // Output: orphan output is dropped; snapshots replace.
+        send(ToolProgress{"ghost", {}, QStringLiteral("orphan")});
+        QCOMPARE(tools(), 2);
+        send(ToolProgress{"c1", {}, QStringLiteral("a\n")});
+        send(ToolProgress{"c1", {}, QStringLiteral("a\nb\n")});
+        QCOMPARE(row("c1").text, QStringLiteral("a\nb\n"));
+        QCOMPARE(row("c1").tool.trimmed, 0.0);
+        // Past 32 Ki units the newest output stays, cut at a line start, and
+        // what was dropped is counted; the view trims only what it dropped.
+        QString big = QStringLiteral("a\nb\n");
+        for (int i = 0; big.size() < 40 * 1024; ++i)
+            big += QStringLiteral("line %1\n").arg(i);
+        send(ToolProgress{"c1", {}, big});
+        auto c1 = row("c1");
+        QVERIFY(c1.text.size() <= 32 * 1024 && big.endsWith(c1.text));
+        QVERIFY(c1.tool.omittedLines > 0);
+        QCOMPARE(c1.tool.omittedCharacters, 0.0);
+        QCOMPARE(c1.tool.omittedLines, double(big.left(big.size() - c1.text.size()).count('\n')));
+        QCOMPARE(c1.tool.trimmed, double(big.size() - c1.text.size()));
+        const auto trimmed = c1.tool.trimmed;
+        const QString more = big + QStringLiteral("more\n").repeated(100);
+        send(ToolProgress{"c1", {}, more});
+        QVERIFY(row("c1").tool.trimmed > trimmed && more.endsWith(row("c1").text));
+        QCOMPARE(row("c1").tool.trimmed, double(more.size() - row("c1").text.size()));
+        const auto grown = row("c1").tool.trimmed;
+        send(ToolProgress{"c1", {}, QStringLiteral("replaced")}); // Not a growth: shown whole.
+        QCOMPARE(row("c1").text, QStringLiteral("replaced"));
+        QCOMPARE(row("c1").tool.trimmed, grown);
+        QCOMPARE(row("c1").tool.omittedLines, 0.0);
+        // Results: an unreported outcome or another call's name finish nothing.
+        send(ToolCompleted{"c2", {}, QStringLiteral("read"), QStringLiteral("?"), std::nullopt});
+        send(ToolCompleted{"c2", {}, QStringLiteral("bash"), QStringLiteral("?"), false});
+        QCOMPARE(row("c2").state, QStringLiteral("running"));
+        send(ToolCompleted{"c2", {}, QStringLiteral("read"), QStringLiteral("nope"), true});
+        QCOMPARE(row("c2").state, QStringLiteral("error"));
+        send(ToolCompleted{"c2", {}, QStringLiteral("read"), QStringLiteral("fine"), false});
+        QCOMPARE(row("c2").state, QStringLiteral("error")); // The first result stands,
+        send(ToolCompleted{"c2", {}, QStringLiteral("read"), QStringLiteral("nope, saved"), true, true});
+        QCOMPARE(row("c2").text, QStringLiteral("nope, saved")); // settled once by the saved one.
+        send(ToolCompleted{"c2", {}, QStringLiteral("read"), QStringLiteral("again"), false, true});
+        QCOMPARE(row("c2").text, QStringLiteral("nope, saved"));
+        QCOMPARE(row("c2").state, QStringLiteral("error"));
+        send(ToolProgress{"c2", {}, QStringLiteral("late")}); // Output after the result: dropped.
+        QCOMPARE(row("c2").text, QStringLiteral("nope, saved"));
+        // A long result keeps its first 32 Ki units and says so.
+        send(ToolCompleted{"c1", {}, QStringLiteral("bash"), big, false});
+        c1 = row("c1");
+        QCOMPARE(c1.state, QStringLiteral("done"));
+        QVERIFY(c1.text.startsWith(big.left(32 * 1024)) && c1.text.contains("Display limit"));
+        QCOMPARE(c1.tool.omittedLines, 0.0);
+        // A result for a call never announced: a card whose arguments are unknown.
+        send(ToolCompleted{"c9", {}, std::nullopt, QStringLiteral("x"), false});
+        QCOMPARE(tools(), 2);
+        send(ToolCompleted{"c9", {}, QStringLiteral("web_fetch"), QStringLiteral("page"), false});
+        QCOMPARE(tools(), 3);
+        QVERIFY(!row("c9").tool.known);
+        QCOMPARE(row("c9").state, QStringLiteral("done"));
+        // The reply goes on below the cards, as a part of it.
+        send(MessageStarted{}, QStringLiteral("m2"));
+        send(MessageCompleted{QStringLiteral("Done."), {}}, QStringLiteral("m2"));
+        QCOMPARE(chat.current().rows.last().text, QStringLiteral("Done."));
+        QVERIFY(chat.current().rows.last().continued);
+        send(ToolStarted{"c3", "bash", {}, QStringLiteral("{}")}, QStringLiteral("m2"));
+        send(TurnCompleted{});
+        // Unresolved when the turn ended: unconfirmed, never done or cancelled.
+        QCOMPARE(row("c3").state, QStringLiteral("unconfirmed"));
+        QCOMPARE(row("c1").state, QStringLiteral("done"));
+        // Usage and metrics stay with the reply's last text, saved once.
+        int metered = 0;
+        for (const auto &r : chat.current().rows)
+            metered += !r.metrics.isEmpty();
+        QCOMPARE(metered, 1);
+        // The display cache: every card as shown; a running one was never settled.
+        auto rows = chat.current().rows;
+        rows[3].state = QStringLiteral("running");
+        const auto saved = ChatService::rowsOf(ChatService::entries(rows));
+        QCOMPARE(saved.size(), rows.size());
+        QCOMPARE(saved[2].tool.name, QStringLiteral("bash"));
+        QCOMPARE(saved[2].text, rows[2].text);
+        QCOMPARE(saved[3].state, QStringLiteral("unconfirmed"));
+        QCOMPARE(saved[2].tool.after, saved[1].key);
+        QVERIFY(!saved[4].tool.known);
+        // A malformed saved card is dropped, not guessed.
+        QJsonArray bad{QJsonObject{{"role", "tool"}, {"callId", "c"}, {"name", "x"}, {"state", "great"}},
+                       QJsonObject{{"role", "tool"}, {"callId", ""}, {"name", "x"}, {"state", "done"}}};
+        QVERIFY(ChatService::rowsOf(bad).isEmpty());
+    }
+
     void terminalReceiptsAndEmptyResponse()
     {
         FakeBackend fake(nullptr, 0);

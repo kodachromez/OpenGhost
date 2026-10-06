@@ -157,6 +157,9 @@ bool retireSplashDuringRender(QQmlApplicationEngine &engine, QQuickWindow *windo
 
 int pluginSmoke(QQmlApplicationEngine &engine, QQuickWindow *window);
 int frontendPluginSmoke(QQmlApplicationEngine &engine, QQuickWindow *window);
+#ifdef OPENGHOST_TOOL_CALLS
+int toolCallsSmoke(QQuickWindow *window, WindowController &controller);
+#endif
 
 // Bounded offline rendering and optional fake-backend integration check.
 int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
@@ -185,14 +188,23 @@ int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
           "no startup workspace picker");
     check(!window->findChild<QObject *>(QStringLiteral("unfinished")),
           "no inherited recovery banner");
-    check(!QFile::exists(QStringLiteral(":/OpenGhost/Ui/ToolCard.qml")),
-          "no tool-result panel packaged");
+#ifdef OPENGHOST_TOOL_CALLS
+    const bool toolCalls = true;
+#else
+    const bool toolCalls = false;
+#endif
+    // Tool cards come only with the Tool Calls frontend plugin; no subagent panel.
+    check(QFile::exists(QStringLiteral(":/OpenGhost/Ui/ToolCard.qml")) == toolCalls,
+          "tool card packaged only with the Tool Calls plugin");
     check(qmlTypeId("OpenGhost.Cpp", 1, 0, "ToolText") == -1,
-          "no tool/subagent display helper registered");
+          "no tool display helper in the host module");
+    check(controller.frontendPlugins()->renderers().contains(QStringLiteral("tool")) ==
+              (toolCalls && controller.frontendPlugins()->enabled(QStringLiteral("openghost.tool-calls"))),
+          "tool rows are drawn only by the enabled Tool Calls plugin");
     const auto roles = controller.transcript()->roleNames().values();
-    check(roles.contains("messageState") && !roles.contains("toolName") &&
-              !roles.contains("activity") && !roles.contains("expanded"),
-          "transcript exposes only retained message roles");
+    check(roles.contains("messageState") && roles.contains("toolName") &&
+              !roles.contains("activity") && !roles.contains("activityNote"),
+          "transcript exposes message and tool call roles, no subagent activity");
 
     QSignalSpy accepted(&controller, &WindowController::accepted);
     const bool fake = QCoreApplication::arguments().contains(QStringLiteral("--fake-backend"));
@@ -928,8 +940,10 @@ int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
         }
         const auto *pluginsTab =
             findVisual(window->contentItem(), QStringLiteral("settingsTab-plugins"));
-        check(!pluginsTab || !pluginsTab->isVisible(),
-              "Plugins hidden when backend does not advertise runtime plugins");
+        // Without the backend's runtime plugins, only registered frontend plugins.
+        check((pluginsTab && pluginsTab->isVisible()) ==
+                  (controller.frontendPlugins()->count() > 0),
+              "Plugins shown only for frontend plugins when backend does not advertise runtime plugins");
         check(!findVisual(window->contentItem(), QStringLiteral("settingsTab-model")),
               "no extra Model tab");
         check(!findVisual(window->contentItem(), QStringLiteral("settingsTab-notifications")),
@@ -1007,6 +1021,10 @@ int smokeTest(QQmlApplicationEngine &engine, WindowController &controller)
     QTest::qWait(100);
     check(!window->grabWindow().isNull(), "light theme paints");
     Theme::choose(QStringLiteral("dark"));
+#ifdef OPENGHOST_TOOL_CALLS
+    if (fake)
+        failures += toolCallsSmoke(window, controller);
+#endif
     failures += frontendPluginSmoke(engine, window);
     failures += pluginSmoke(engine, window);
     check(!engine.property("smokeWarnings").toBool(), "no QML binding/load warnings");

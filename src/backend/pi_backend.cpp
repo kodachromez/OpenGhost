@@ -84,6 +84,81 @@ QString textOf(const QJsonValue &content)
             text += block.toObject().value("text").toString();
     return text;
 }
+// Tool calls as the transcript shows them. Identities longer than 256 units are
+// refused rather than truncated into collisions; arguments are shown up to 4 Ki
+// units (Ghosty's display bounds), a clipped text no longer parsing as JSON.
+constexpr qsizetype ToolIdentity = 256, ToolArguments = 4096, ToolCalls = 256;
+bool toolIdentity(const QString &id, const QString &name)
+{
+    return !id.isEmpty() && id.size() <= ToolIdentity && !name.isEmpty() &&
+           name.size() <= ToolIdentity;
+}
+std::optional<QString> argumentsOf(const QJsonValue &arguments)
+{
+    if (arguments.isUndefined())
+        return std::nullopt;
+    QString json;
+    if (arguments.isObject())
+        json = QString::fromUtf8(QJsonDocument(arguments.toObject()).toJson(QJsonDocument::Compact));
+    else if (arguments.isArray())
+        json = QString::fromUtf8(QJsonDocument(arguments.toArray()).toJson(QJsonDocument::Compact));
+    else
+        json = QString::fromUtf8(QJsonDocument(QJsonArray{arguments}).toJson(QJsonDocument::Compact))
+                   .mid(1)
+                   .chopped(1);
+    if (json.size() > ToolArguments) {
+        qsizetype cut = ToolArguments;
+        if (json.at(cut - 1).isHighSurrogate())
+            --cut;
+        json = json.left(cut) + QChar(0x2026);
+    }
+    return json;
+}
+// A tool result's visible text: its text blocks, a line each. Pictures are not
+// shown in a tool card, only said to be there.
+std::optional<QString> resultText(const QJsonValue &content)
+{
+    if (content.isString())
+        return content.toString();
+    if (!content.isArray())
+        return std::nullopt;
+    QStringList parts;
+    for (const auto &value : content.toArray()) {
+        const auto block = value.toObject();
+        const auto type = block.value("type").toString();
+        if (type == QStringLiteral("text"))
+            parts.append(block.value("text").toString());
+        else if (type == QStringLiteral("image"))
+            parts.append(QStringLiteral("[A picture, not shown here]"));
+    }
+    return parts.join('\n');
+}
+// A finished assistant message's tool calls, in its content order.
+QVector<ToolStarted> callsOf(const QJsonObject &message)
+{
+    QVector<ToolStarted> calls;
+    for (const auto &value : message.value("content").toArray()) {
+        const auto block = value.toObject();
+        if (block.value("type").toString() != QStringLiteral("toolCall"))
+            continue;
+        const auto id = block.value("id").toString(), name = block.value("name").toString();
+        if (toolIdentity(id, name))
+            calls.append(ToolStarted{id, name, std::nullopt, argumentsOf(block.value("arguments"))});
+    }
+    return calls;
+}
+// Pi's saved result of a call (a toolResult message), or none when malformed:
+// its content must be an array and isError a boolean.
+std::optional<ToolCompleted> savedResult(const QJsonObject &message)
+{
+    const auto id = message.value("toolCallId").toString(),
+               name = message.value("toolName").toString();
+    const auto text = resultText(message.value("content"));
+    if (!toolIdentity(id, name) || !message.value("content").isArray() || !text ||
+        !message.value("isError").isBool())
+        return std::nullopt;
+    return ToolCompleted{id, {}, name, text, message.value("isError").toBool(), true};
+}
 std::optional<QString> finishOf(const QString &stopReason)
 {
     if (stopReason == QStringLiteral("stop") || stopReason == QStringLiteral("length"))
@@ -298,6 +373,7 @@ rebuilt(const QJsonArray &entries, const QString &client, TurnStatus *status)
     QString stopReason, errorMessage;
     std::optional<QJsonObject> ended;
     bool open = true, prompted = false;
+    int calls = 0;
     for (qsizetype i = at + 1; i < entries.size(); ++i) {
         const auto entry = entries[i].toObject();
         if (isMark(entry, QStringLiteral("end")) && markOf(entry).value("turn").toString() == turn) {
@@ -314,6 +390,11 @@ rebuilt(const QJsonArray &entries, const QString &client, TurnStatus *status)
             prompted = true; // the prompt itself; later ones are steering
             continue;
         }
+        if (role == QStringLiteral("toolResult")) {
+            if (const auto result = savedResult(message))
+                events.append(*result);
+            continue;
+        }
         if (role != QStringLiteral("assistant"))
             continue;
         MessageStarted started;
@@ -325,6 +406,9 @@ rebuilt(const QJsonArray &entries, const QString &client, TurnStatus *status)
         events.append(MessageCompleted{textOf(message.value("content")), finishOf(stopReason)});
         if (const auto usage = usageOf(message))
             events.append(*usage);
+        for (const auto &call : callsOf(message))
+            if (calls++ < ToolCalls)
+                events.append(call);
     }
     TurnCompleted done;
     if (ended) {
@@ -1937,6 +2021,12 @@ void PiBackend::runEvent(const QString &session, const QString &type, const QJso
                 }
             return;
         }
+        if (role == QStringLiteral("toolResult") && type == QStringLiteral("message_end")) {
+            // Pi's saved result: it settles the call's live end, never adds a card.
+            if (const auto result = savedResult(message); result && run.calls.contains(result->toolCallId))
+                publish(session, *result);
+            return;
+        }
         if (role != QStringLiteral("assistant"))
             return;
         if (type == QStringLiteral("message_start")) {
@@ -1957,7 +2047,40 @@ void PiBackend::runEvent(const QString &session, const QString &type, const QJso
                 true);
         if (const auto usage = usageOf(message))
             publish(session, *usage, true);
+        // Its tool calls, complete, in the message's order: announced before Pi
+        // runs them (not proof that they run), never from partial arguments.
+        // (A later message may reuse an ID: the frontend tells calls apart.)
+        for (const auto &call : callsOf(message))
+            if (run.calls.contains(call.toolCallId) || run.calls.size() < ToolCalls) {
+                run.calls.insert(call.toolCallId, call.name);
+                publish(session, call, true);
+            }
         run.message.clear();
+    } else if (type == QStringLiteral("tool_execution_start")) {
+        // A call no assistant message announced still gets its card.
+        const auto id = object.value("toolCallId").toString(),
+                   name = object.value("toolName").toString();
+        if (toolIdentity(id, name) && !run.calls.contains(id) && run.calls.size() < ToolCalls) {
+            run.calls.insert(id, name);
+            publish(session, ToolStarted{id, name, std::nullopt, argumentsOf(object.value("args"))});
+        }
+    } else if (type == QStringLiteral("tool_execution_update")) {
+        // Pi's tools report their whole output so far each time: a snapshot.
+        const auto id = object.value("toolCallId").toString();
+        if (run.calls.value(id) != object.value("toolName").toString())
+            return;
+        const auto partial = object.value("partialResult").toObject();
+        publish(session, ToolProgress{id, {}, resultText(partial.value("content")), false});
+    } else if (type == QStringLiteral("tool_execution_end")) {
+        const auto id = object.value("toolCallId").toString(),
+                   name = object.value("toolName").toString();
+        if (run.calls.value(id) != name)
+            return;
+        const auto result = object.value("result").toObject();
+        publish(session, ToolCompleted{id, {}, name, resultText(result.value("content")),
+                                       object.value("isError").isBool()
+                                           ? std::optional<bool>(object.value("isError").toBool())
+                                           : std::nullopt});
     } else if (type == QStringLiteral("message_update")) {
         const auto event = object.value("assistantMessageEvent").toObject();
         if (event.value("type").toString() != QStringLiteral("text_delta"))
@@ -2021,6 +2144,16 @@ void PiBackend::publish(const QString &session, EventPayload payload, bool messa
                 return e.identity.messageId == event.identity.messageId &&
                        std::holds_alternative<MessageDelta>(e.payload);
             });
+        // Nor every snapshot of a call's output: the latest, until its result.
+        const auto *progress = std::get_if<ToolProgress>(&event.payload);
+        const auto *result = std::get_if<ToolCompleted>(&event.payload);
+        if ((progress && !progress->append) || result) {
+            const auto call = progress ? progress->toolCallId : result->toolCallId;
+            journal->events.removeIf([&](const SessionEvent &e) {
+                const auto *earlier = std::get_if<ToolProgress>(&e.payload);
+                return earlier && earlier->toolCallId == call;
+            });
+        }
         journal->events.append(event);
     }
     emit sessionEvent(event);

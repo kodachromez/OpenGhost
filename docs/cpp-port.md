@@ -96,10 +96,21 @@ QML resource namespaces are `OpenGhost.Ui` and `OpenGhost.Cpp`.
 - Custom mascot splash/images/font, alternate/ripple/happy-motion assets,
   splash selector, extra Model/Notifications settings tabs, execution-backend
   settings, voice controls, slash helper and an added Stop button. Stop is Escape.
-- Tool/subagent/thinking transcript panels, startup service/workspace picker and
+- Subagent/thinking transcript panels, startup service/workspace picker and
   Recover/Abandon & Delete banner. The reference's `chat.js::applyEvent` tracks
   tool status/working ghost, not tool-result cards. Approval cards and model
   thinking-level selection remain; reasoning events are not drawn.
+- **Approved exception: tool-call cards, as the Tool Calls frontend plugin**
+  (`plugins/tool_calls/`, `OPENGHOST_TOOL_CALLS`, default ON; Settings → Plugins,
+  on by default). Ghosty's ordinary `ToolCard.qml`/`toolcard.*` and its tool
+  entrance motion draw the transcript's `tool` rows through the frontend plugin
+  SDK's row renderer hook ([frontend plugins](frontend-plugins.md)). Its
+  subagent activity panel is not imported. With the plugin off (or not built)
+  the transcript is as before: a reply is one message and its calls are not
+  drawn. The rows themselves (Pi's `message_end` tool calls,
+  `tool_execution_*` and saved `toolResult` messages) are kept by
+  `ChatService` and the display cache either way. QML namespace:
+  `OpenGhost.ToolCalls` (`ToolText`); the cards are in `OpenGhost.Ui`.
 - No mini-chat dialog, password lock screen, add-folder picker, broader
   plus-menu operations or visual diagram form editor. Mini/lock/folder
   **state** exists; that does not imply those views are ported.

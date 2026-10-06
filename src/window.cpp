@@ -108,6 +108,14 @@ WindowController::WindowController(openghost::Backend *backend, QString preferen
     });
     connect(&m_frontendPlugins, &openghost::FrontendPlugins::rowsChanged, this,
             &WindowController::sync);
+    // A row kind's renderer came or went (a plugin turned on or off): the open
+    // chat is drawn again at once, from the same rows; nothing is sent.
+    connect(&m_frontendPlugins, &openghost::FrontendPlugins::renderersChanged, this, [this] {
+        applyRenderers();
+        m_redrawing = true;
+        sync();
+        m_redrawing = false;
+    });
     connect(&m_chat, &openghost::ChatService::catalogChanged, this, &WindowController::catalog);
     connect(&m_chat, &openghost::ChatService::accepted, this, &WindowController::accepted);
     connect(&m_chat, &openghost::ChatService::removed, this, &WindowController::sessionRemoved);
@@ -192,6 +200,29 @@ WindowController::WindowController(openghost::Backend *backend, QString preferen
     m_chat.initialize();
 }
 
+void WindowController::applyRenderers()
+{
+    QHash<QString, TranscriptModel::Renderer> renderers;
+    const auto kinds = m_frontendPlugins.renderers();
+    for (auto it = kinds.cbegin(); it != kinds.cend(); ++it) {
+        const auto *renderer = m_frontendPlugins.renderer(it.key());
+        if (!renderer)
+            continue;
+        TranscriptModel::Renderer shown;
+        if (const auto selection = renderer->selection)
+            shown.selection = [selection](const QVariantMap &row) {
+                QVector<std::pair<QString, QString>> texts;
+                for (const auto &text : selection(row))
+                    texts.append({text.path, text.text});
+                return texts;
+            };
+        shown.trimmedText = renderer->trimmedText;
+        shown.startExpanded = renderer->startExpanded;
+        renderers.insert(it.key(), shown);
+    }
+    m_transcript.setRenderers(renderers);
+}
+
 void WindowController::syncPlugins()
 {
     const int count = m_plugins.rowCount();
@@ -268,13 +299,45 @@ void WindowController::sync()
     QVector<Entry> rows;
     QHash<QString, Entry> rendered;
     const bool decorating = m_frontendPlugins.decorating();
-    for (const auto &row : chat.rows) {
+    // Tool calls are drawn only by a plugin that renders them. Without one the
+    // transcript is as it was before tool rows: a turn's reply is one message
+    // and its calls are not shown.
+    const bool tools = m_frontendPlugins.renderer(QStringLiteral("tool")) != nullptr;
+    QString turnOf; // The backend turn of the last entry, while it is its reply.
+    QHash<QString, QString> after; // Tool entries: the reply part whose message made them.
+    for (qsizetype i = 0; i < chat.rows.size(); ++i) {
+        const auto &row = chat.rows.at(i);
         if (row.hidden || row.role == openghost::DisplayRow::Role::Preserved ||
             row.role == openghost::DisplayRow::Role::Moved)
             continue; // Pending parts and undrawn saved entries; moved is mini-only.
+        if (row.role == openghost::DisplayRow::Role::Tool && !tools)
+            continue;
+        const bool assistant = row.role == openghost::DisplayRow::Role::Assistant;
+        if (!tools && assistant && row.continued && !rows.isEmpty() &&
+            rows.last().kind == Entry::Assistant && turnOf == row.backendTurn) {
+            // Without tool cards a reply that went on after its calls is one
+            // message, as before: its parts' text, the latest state and metrics.
+            auto &reply = rows.last();
+            if (!row.text.isEmpty())
+                reply.text = reply.text.isEmpty() ? row.text : reply.text + "\n\n" + row.text;
+            reply.state = row.state;
+            if (!row.metrics.isEmpty() || row.completed >= 0 || row.started >= 0) {
+                reply.metrics = row.metrics;
+                reply.preview = row.tip;
+                reply.started = row.started;
+                reply.completed = row.completed;
+            }
+            reply.copyable = !reply.text.isEmpty();
+            continue;
+        }
+        // With them, a message that only made tool calls: its cards say it all.
+        if (tools && assistant && row.text.isEmpty() && i + 1 < chat.rows.size() &&
+            chat.rows.at(i + 1).role == openghost::DisplayRow::Role::Tool)
+            continue;
         Entry entry;
         entry.kind = row.role == openghost::DisplayRow::Role::User        ? Entry::User
-                     : row.role == openghost::DisplayRow::Role::Assistant ? Entry::Assistant
+                     : assistant                                          ? Entry::Assistant
+                     : row.role == openghost::DisplayRow::Role::Tool      ? Entry::Tool
                                                                           : Entry::Note;
         entry.key = row.key;
         entry.text = row.text;
@@ -303,10 +366,30 @@ void WindowController::sync()
                                       a.size.value_or(-1)});
         }
         entry.copyable = entry.kind == Entry::Assistant && !row.text.isEmpty();
+        if (entry.kind == Entry::Tool) {
+            const auto &call = row.tool;
+            entry.tool = {call.callId,       call.name,          call.arguments,
+                          call.ending,       call.known,         call.omittedLines,
+                          call.omittedCharacters, call.trimmed};
+            // One exchange's text and its calls read as one message.
+            if (!rows.isEmpty() && !call.after.isEmpty() &&
+                (rows.last().key == call.after ||
+                 (rows.last().kind == Entry::Tool && rows.last().join == Entry::Joined &&
+                  after.value(rows.last().key) == call.after)))
+                entry.join = Entry::Joined;
+            after.insert(row.key, call.after);
+        }
+        if (assistant)
+            turnOf = row.backendTurn;
+        else if (entry.kind != Entry::Tool)
+            turnOf.clear();
+        rows.append(entry);
+    }
+    for (auto &entry : rows) {
         if (decorating) {
-            static const char *const roles[] = {"user", "assistant", "note"};
+            static const char *const roles[] = {"user", "assistant", "note", "tool"};
             entry.decorations = m_frontendPlugins.decorate(
-                {chat.id, row.key, QString::fromLatin1(roles[entry.kind]), row.text, row.state});
+                {chat.id, entry.key, QString::fromLatin1(roles[entry.kind]), entry.text, entry.state});
         }
         const auto previous = m_rendered.constFind(entry.key);
         entry.revision =
@@ -319,12 +402,12 @@ void WindowController::sync()
                        previous->metrics != entry.metrics || previous->preview != entry.preview ||
                        previous->started != entry.started ||
                        previous->completed != entry.completed ||
-                       previous->decorations != entry.decorations);
-        rows.append(entry);
+                       previous->decorations != entry.decorations ||
+                       previous->join != entry.join || previous->tool != entry.tool);
         rendered.insert(entry.key, entry);
     }
     m_rendered = std::move(rendered);
-    m_transcript.apply(rows);
+    m_transcript.apply(rows, m_redrawing);
     QVector<Session> sessions;
     QSet<QString> listed;
     for (const auto &record : m_chat.chats()) {
@@ -538,8 +621,10 @@ QVariantList WindowController::approvals() const
                     {"title", p.tool},
                     {"code", QString::fromUtf8(QJsonDocument(p.args).toJson())},
                     {"reveal", "command"}};
-        result.append(QVariantMap{
-            {"requestId", QString::number(pending.request)}, {"card", card}, {"answered", false}});
+        result.append(QVariantMap{{"requestId", QString::number(pending.request)},
+                                  {"card", card},
+                                  {"answered", false},
+                                  {"toolCallId", p.toolCallId}});
     }
     return result;
 }
@@ -611,11 +696,9 @@ void WindowController::cancelLogin(const QString &id)
 }
 void WindowController::copyEntry(const QString &key)
 {
-    for (const auto &row : m_chat.current().rows)
-        if (row.key == key) {
-            copy(row.text);
-            return;
-        }
+    // The message as drawn: without tool cards, a reply's parts are one.
+    if (const auto entry = m_rendered.constFind(key); entry != m_rendered.cend())
+        copy(entry->text);
 }
 void WindowController::close() { emit closeRequested(); }
 void WindowController::newChat() { m_chat.newChat(); }

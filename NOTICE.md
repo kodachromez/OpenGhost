@@ -9,7 +9,9 @@ The copied material includes OpenGhost's procedural ghost, original 1.3 splash,
 UI motion, layout, icons and native Markdown/highlighting/TeX/diagram rendering
 rules. `resources/openghost.png` is the unchanged upstream icon (also present
 in `reference/openghost/desktop/icon.png`). Source revisions are recorded in
-`docs/native-import.json`.
+`docs/native-import.json`. The Tool Calls frontend plugin (`plugins/tool_calls/`)
+adapts Ghosty's native tool card (`ToolCard.qml`, `toolcard.*`) and its tool
+entrance motion; Ghosty's subagent activity panel is not included.
 
 **Ghosty's custom mascot splash, its assets/font, alternate/ripple animations,
 and custom appearance choices are not included.** This fork is not official

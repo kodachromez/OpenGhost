@@ -24,13 +24,26 @@ Item {
     // How it follows the row before (Entry::Join): messages are 28 px apart
     // (.thread-list); parts of one reply are 14 px apart.
     required property int join
+    // A tool call's row (kind "tool"; drawn by the frontend plugin that renders
+    // tool rows): the call, how it ended, the live output's dropped front, and
+    // whether the reader opened it (toggle()). Its state is messageState.
+    required property string toolCallId
+    required property string toolName
+    required property string arguments
+    required property bool argumentsKnown
+    required property string ending
+    required property double omittedLines
+    required property double omittedCharacters
+    required property double trimmed
+    required property bool expanded
 
     width: ListView.view ? ListView.view.width : 0
     // The reading column (.thread-list): at most 680 px, 24 px from the edges.
     readonly property real column: Math.min(680, width - 48)
     readonly property real columnX: (width - column) / 2
     readonly property real gap: index === 0 ? 0 : join === 1 ? 14 : 28
-    height: gap + (content.item ? content.item.implicitHeight : 0)
+    height: gap + (content.item ? content.item.implicitHeight
+                                : plugged.item ? plugged.item.implicitHeight : 0)
     // Its full height when the list places it: a row that grows after it
     // appears makes following the end rebuild the rows around it, and one
     // above the view would move what the reader sees. A row made below the
@@ -47,6 +60,7 @@ Item {
         // as its source grows and when it completes.
         rich.seed = entry.messageState === "live" ? entry.key : entry.body
         rich.hold = false // Parses now, unless paced and past the slice's budget.
+        plug()
         Theme.settle(entry)
         Qt.callLater(entry.near)
         if (view && view.opening)
@@ -91,6 +105,21 @@ Item {
     function menu(area) {
         entry.ListView.view.showMenu(area)
     }
+    function toggle() {
+        entry.ListView.view.model.toggle(entry.index)
+    }
+    // A row kind a frontend plugin draws: its packaged component, made with
+    // this row as `row`. None for the kinds drawn here.
+    readonly property string renderer: kind === "user" || kind === "assistant" || kind === "note"
+                                       || !frontend || !frontend.frontendPlugins ? ""
+                                       : frontend.frontendPlugins.renderers[kind] ?? ""
+    onRendererChanged: plug()
+    function plug() {
+        if (renderer.length > 0)
+            plugged.setSource(renderer, {row: entry})
+        else
+            plugged.source = ""
+    }
     readonly property var frontend: ListView.view ? ListView.view.frontend : null
     function dropped(area, height) {
         entry.ListView.view.dropped(entry, area.mapToItem(entry, 0, area.topPadding).y, height)
@@ -117,7 +146,12 @@ Item {
         devicePixelRatio: Screen.devicePixelRatio
     }
     readonly property alias rich: rich
+    // A row shown again because the tool rows' renderer came or went is not a
+    // new arrival: it neither replays its reveal nor its entry motion.
     ListView.onAdd: {
+        const model = ListView.view ? ListView.view.model : null
+        if (model && model.quiet(entry.key))
+            return
         if (entry.kind === "assistant" && entry.messageState === "live")
             rich.revealFromStart()
         entry.arrive()
@@ -186,7 +220,16 @@ Item {
         opacity: entry.arrival
         transform: Translate { y: 8 * (1 - entry.arrival) }
         sourceComponent: entry.kind === "note" ? note
-                       : entry.kind === "user" ? userMessage : assistantMessage
+                       : entry.kind === "user" ? userMessage
+                       : entry.kind === "assistant" ? assistantMessage : null
+    }
+    // A plugin-drawn row (plug()). Its entry motion is the plugin's own.
+    Loader {
+        id: plugged
+        objectName: "plugged"
+        x: entry.columnX
+        y: entry.gap
+        width: entry.column
     }
 
     // A message's copy button (.message-tools .md-copy).

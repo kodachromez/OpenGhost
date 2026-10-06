@@ -1,7 +1,9 @@
 #pragma once
 #include <QHash>
 #include <QString>
+#include <QUrl>
 #include <QVariantMap>
+#include <QVector>
 #include <functional>
 
 // OpenGhost's frontend plugin SDK: native, in-process additions to the window's
@@ -37,8 +39,35 @@ inline const QString ReplyDelta = QStringLiteral("reply.delta"); // A reply's te
 // One displayed transcript row, read-only, as the chat rendering hook sees it.
 struct ChatRowView {
     QString sessionId, key;
-    QString role; // "user", "assistant" or "note"
+    QString role; // "user", "assistant", "note" or "tool"
     QString text, state;
+};
+
+// One text of a row the conversation-wide selection can take, in reading
+// order: a path that stays the same while the row shows it, and the text
+// exactly as shown (one position per line end).
+struct SelectionText {
+    QString path, text;
+};
+
+// How a plugin draws the transcript rows of one kind the host keeps but does
+// not draw itself ("tool": a tool call; later "thinking"). The host keeps the
+// rows' data whether or not a renderer is registered; without one, it shows
+// them as it always has.
+struct RowRenderer {
+    // The packaged QML component drawing a row (qrc:, never a backend's URL).
+    // It is made with `row`: the row's ChatEntry (its model roles, column,
+    // toggle(), dropped(), frontend, ListView view).
+    QUrl delegate;
+    // The row's selectable texts as the component shows them, from the row's
+    // model roles by name, so a selection takes rows that are not built.
+    // Called while selecting: no side effects.
+    std::function<QVector<SelectionText>(const QVariantMap &row)> selection;
+    // The path of the text whose front the host trims as live output streams
+    // (its `trimmed` role counts the units), if any.
+    QString trimmedText;
+    // Rows arrive open rather than shut (the reader's toggles still win).
+    bool startExpanded = false;
 };
 
 // Everything a plugin registers goes through its context, so disabling or
@@ -63,6 +92,9 @@ class FrontendPluginContext final
     // Ask for the open chat's rows to be decorated again (the decorator's
     // output depends on state that changed).
     void redecorate();
+    // The rows of `kind` are drawn by `renderer` while the plugin is on (one
+    // plugin per kind: the first registered wins). An empty delegate removes it.
+    void renderRows(const QString &kind, RowRenderer renderer);
     // Named UI targets (an action or a panel, e.g. "browser") this plugin
     // shows or hides. Hidden by any enabled plugin wins over shown.
     void setVisible(const QString &target, bool visible);
@@ -77,13 +109,15 @@ class FrontendPluginContext final
     }
     int hooks() const
     {
-        return int(m_events.size() + m_visibility.size()) + (m_decorator ? 1 : 0);
+        return int(m_events.size() + m_visibility.size() + m_renderers.size()) +
+               (m_decorator ? 1 : 0);
     }
     FrontendPlugins *m_owner;
     QString m_id;
     QHash<QString, EventHandler> m_events;
     RowDecorator m_decorator;
     QHash<QString, bool> m_visibility;
+    QHash<QString, RowRenderer> m_renderers;
 };
 
 class FrontendPlugin

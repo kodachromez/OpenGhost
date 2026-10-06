@@ -336,17 +336,33 @@ struct MessageCompleted {
 struct ReasoningDelta {
     QString text;
 }; // intentionally invisible
+// A tool call the model made, announced once its arguments are complete (never
+// from partial argument JSON). Not proof that it ran. Calls of one assistant
+// message are announced in that message's order.
 struct ToolStarted {
     QString toolCallId, name;
     std::optional<QString> title;
+    // The arguments as the model sent them: compact JSON text, bounded for
+    // display (a clipped text is no longer valid JSON). Absent: not known.
+    std::optional<QString> arguments = std::nullopt;
 };
+// Live output of a running call. Activity state only, not assistant text.
 struct ToolProgress {
     QString toolCallId;
     QJsonObject detail;
-}; // Activity state only, not assistant text.
+    // What the call has output so far: the whole output so far (a snapshot,
+    // as Pi's tools report it) unless `append`. Absent: no visible output.
+    std::optional<QString> output = std::nullopt;
+    bool append = false;
+};
+// A call's result. `isError` absent: the outcome was not reported (never
+// read as success). A result for a call never announced carries its name.
 struct ToolCompleted {
     QString toolCallId;
     QJsonObject detail;
+    std::optional<QString> name = std::nullopt, output = std::nullopt;
+    std::optional<bool> isError = std::nullopt;
+    bool saved = false; // The backend's saved result; it settles a live one.
 };
 enum class Decision { Allow, Deny };
 struct ApprovalResolved {

@@ -125,7 +125,9 @@ QJsonArray displayAttachments(const QJsonObject &entry)
 
 QJsonArray Library::displayMessages(const QJsonArray &messages)
 {
-    static const QStringList roles{"user", "assistant", "compact", "stats", "moved"};
+    static const QStringList roles{"user", "assistant", "compact", "stats", "moved", "tool"};
+    static const QStringList toolStates{"running", "done", "error", "cancelled", "missing",
+                                        "unconfirmed"};
     static const QStringList receipts{"queued", "applied", "notApplied", "unconfirmed"};
     QJsonArray result;
     for (const auto &value : messages) {
@@ -149,6 +151,31 @@ QJsonArray Library::displayMessages(const QJsonArray &messages)
                 out.insert(key, entry.value(key));
         if (entry.value("pendingTurn") == QJsonValue(true))
             out.insert("pendingTurn", true);
+        if (role == "tool") {
+            // A tool call's card, as shown: bounded strings and a known state.
+            const auto callId = entry.value("callId").toString(),
+                       name = entry.value("name").toString();
+            if (callId.isEmpty() || callId.size() > 256 || name.isEmpty() || name.size() > 256 ||
+                !toolStates.contains(entry.value("state").toString()))
+                continue;
+            out.insert("callId", callId);
+            out.insert("name", name);
+            out.insert("state", entry.value("state"));
+            out.insert("output", entry.value("output").toString().left(33 * 1024));
+            if (entry.value("arguments").isString())
+                out.insert("arguments", entry.value("arguments").toString().left(4097));
+            if (entry.value("ending").isString())
+                out.insert("ending", entry.value("ending").toString().left(4096));
+            for (const auto *key : {"omittedLines", "omittedCharacters"})
+                if (count(entry.value(key)))
+                    out.insert(key, entry.value(key));
+            if (entry.value("turn").isString())
+                out.insert("turn", entry.value("turn"));
+            if (entry.value("joined") == QJsonValue(true))
+                out.insert("joined", true);
+            result.append(out);
+            continue;
+        }
         if (role == "user") {
             const auto text = entry.value("text").isString() ? entry.value("text").toString()
                               : entry.value("content").isString()
@@ -170,6 +197,8 @@ QJsonArray Library::displayMessages(const QJsonArray &messages)
                 out.insert("usage", usageOf(entry.value("usage").toObject()));
             if (role == "assistant") {
                 out.insert("content", entry.value("content").toString());
+                if (entry.value("continued") == QJsonValue(true))
+                    out.insert("continued", true);
                 if (entry.value("turn").isString() || count(entry.value("turn")))
                     out.insert("turn", entry.value("turn"));
                 if (!out.contains("usage") && (entry.value("uncounted") == QJsonValue(true) ||

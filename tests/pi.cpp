@@ -74,6 +74,24 @@ struct Harness {
                              [role](const DisplayRow &row) { return row.role == role; });
     }
     bool settled() const { return chat.ready() && !chat.busy() && !chat.pending(); }
+    QVector<DisplayRow> tools() const
+    {
+        QVector<DisplayRow> found;
+        for (const auto &row : chat.current().rows)
+            if (row.role == DisplayRow::Role::Tool)
+                found.append(row);
+        return found;
+    }
+    // The chat's drawn rows: user, assistant, note or tool, in order.
+    QStringList shape() const
+    {
+        static const char *const names[] = {"user", "assistant", "note", "moved", "preserved", "tool"};
+        QStringList out;
+        for (const auto &row : chat.current().rows)
+            if (!row.hidden)
+                out.append(QString::fromLatin1(names[int(row.role)]));
+        return out;
+    }
 };
 Result ask(Backend &backend, const Command &command)
 {
@@ -266,6 +284,94 @@ class PiTest final : public QObject
         QCOMPARE(h.last(DisplayRow::Role::Note)->state, QStringLiteral("error"));
         QVERIFY(h.chat.canRetry());
         QCOMPARE(h.usage.size(), 4); // A failed attempt's spend is real too.
+    }
+
+    // Pi's tool events become one card per call, in the assistant message's
+    // order, between that message's text and the reply after the calls.
+    void toolCallsFollowPi()
+    {
+        Harness h;
+        QTRY_VERIFY(h.chat.ready());
+        QVERIFY(h.chat.send(QStringLiteral("toolcards")));
+        QTRY_VERIFY(h.settled());
+        QCOMPARE(h.shape(), (QStringList{"user", "assistant", "tool", "tool", "assistant"}));
+        const auto &rows = h.chat.current().rows;
+        QCOMPARE(rows[1].text, QStringLiteral("Let me look."));
+        QCOMPARE(rows[4].text, QStringLiteral("All done."));
+        QVERIFY(rows[4].continued && !rows[1].continued);
+        const auto tools = h.tools(); // The orphan update made no card.
+        QCOMPARE(tools.size(), 2);
+        QCOMPARE(tools[0].tool.callId, QStringLiteral("call-a"));
+        QCOMPARE(tools[0].tool.name, QStringLiteral("bash"));
+        QVERIFY(tools[0].tool.known);
+        QCOMPARE(tools[0].tool.arguments, QStringLiteral(R"({"command":"ls -la"})"));
+        QCOMPARE(tools[0].state, QStringLiteral("done"));
+        QCOMPARE(tools[0].text, QStringLiteral("a\nb\n")); // Snapshots replaced, not appended.
+        QVERIFY(tools[0].tool.saved);
+        QCOMPARE(tools[0].tool.after, rows[1].key);
+        // Finished first, failed: still second, and not success.
+        QCOMPARE(tools[1].tool.name, QStringLiteral("read"));
+        QCOMPARE(tools[1].state, QStringLiteral("error"));
+        QCOMPARE(tools[1].text, QStringLiteral("ENOENT: notes.md"));
+        QVERIFY(tools[1].tool.arguments.contains(QStringLiteral("\"notes.md\"")));
+        QCOMPARE(h.usage.size(), 2); // Each assistant message once.
+        // The display cache keeps the cards as shown.
+        const auto saved = ChatService::rowsOf(ChatService::entries(rows));
+        QCOMPARE(saved.size(), rows.size());
+        QCOMPARE(saved[2].role, DisplayRow::Role::Tool);
+        QCOMPARE(saved[2].tool.arguments, tools[0].tool.arguments);
+        QCOMPARE(saved[2].tool.after, saved[1].key);
+        QCOMPARE(saved[3].state, QStringLiteral("error"));
+        QCOMPARE(saved[3].text, tools[1].text);
+        QVERIFY(saved[4].continued);
+        QCOMPARE(commands().count(QStringLiteral("prompt toolcards")), 1);
+    }
+
+    void stopLeavesARunningCallUnconfirmed()
+    {
+        Harness h;
+        QTRY_VERIFY(h.chat.ready());
+        QVERIFY(h.chat.send(QStringLiteral("toolslow")));
+        QTRY_VERIFY(h.tools().size() == 1 && h.tools()[0].text == QStringLiteral("started\n"));
+        QCOMPARE(h.tools()[0].state, QStringLiteral("running"));
+        h.chat.stop();
+        QTRY_VERIFY(h.settled());
+        // Its result never came: neither done nor cancelled, its output kept.
+        QCOMPARE(h.tools()[0].state, QStringLiteral("unconfirmed"));
+        QCOMPARE(h.tools()[0].text, QStringLiteral("started\n"));
+    }
+
+    void restartShowsSavedToolCalls()
+    {
+        QTemporaryDir profile;
+        QString a;
+        {
+            Harness h(profile.path());
+            QTRY_VERIFY(h.chat.ready());
+            QVERIFY(h.chat.send(QStringLiteral("toolcards")));
+            QTRY_VERIFY(h.settled());
+            a = h.chat.current().id;
+            QVERIFY(h.chat.send(QStringLiteral("toolslow")));
+            QTRY_VERIFY(h.tools().size() == 3 && !h.tools()[2].text.isEmpty());
+        } // OpenGhost exits while the call runs.
+        Harness h(profile.path());
+        QTRY_VERIFY(h.chat.ready());
+        h.chat.open(a);
+        QTRY_VERIFY(!h.chat.pending());
+        QVERIFY(h.chat.current().reconciled);
+        const auto tools = h.tools();
+        QCOMPARE(tools.size(), 3);
+        // The finished turn's cards from the display cache, as shown.
+        QCOMPARE(tools[0].state, QStringLiteral("done"));
+        QCOMPARE(tools[0].text, QStringLiteral("a\nb\n"));
+        QCOMPARE(tools[1].state, QStringLiteral("error"));
+        // The cut-off turn rebuilt from Pi's session: its call, without a saved
+        // result and without the live output Pi never saved. Nothing reran.
+        QCOMPARE(tools[2].tool.name, QStringLiteral("bash"));
+        QCOMPARE(tools[2].tool.arguments, QStringLiteral(R"({"command":"sleep 60"})"));
+        QCOMPARE(tools[2].state, QStringLiteral("missing"));
+        QVERIFY(tools[2].text.isEmpty());
+        QCOMPARE(commands().count(QStringLiteral("prompt toolslow")), 1);
     }
 
     void retryContinuesTheFailedTurnExactly()
