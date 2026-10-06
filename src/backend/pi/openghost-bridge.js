@@ -7,9 +7,16 @@
 //   openghost:<token>:prompt  {promptId, type, message, placeholder?, options?}
 // A prompt is answered by {op: "answer", promptId, value} (or cancelled).
 // {op: "retry"} retries Pi's failed latest reply in place (OpenGhost's Retry).
+// {op: "instructions", text} sets the standing instructions every run's system
+// prompt carries, as its own named section: system prompt, never history, so
+// compaction keeps them. {op: "mark", entry} records an OpenGhost turn's start or
+// end in Pi's session (a custom entry: kept in the session file, never context).
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
 
 const RETRY = "openghost-retry"; // The custom message that starts a retry run.
+const MARK = "openghost-turn"; // OpenGhost's turn records in Pi's session.
+const INSTRUCTIONS = "openghost-instructions"; // The system prompt section.
+let instructions = "";
 const logins = new Map(); // provider -> AbortController
 const prompts = new Map(); // promptId -> {resolve, reject}
 let nextPrompt = 0;
@@ -26,6 +33,11 @@ function latest(sessionManager) {
 }
 
 export default function (pi) {
+  pi.on("before_agent_start", (event) => {
+    const sections = event.systemPromptOptions.sections;
+    if (instructions) sections[INSTRUCTIONS] = instructions;
+    else delete sections[INSTRUCTIONS];
+  });
   // A retry trigger never reaches the model, nor do the failed replies it retried:
   // the retry sees exactly the context the failed reply saw.
   pi.on("context", (event) => {
@@ -37,7 +49,7 @@ export default function (pi) {
     return { messages };
   });
   pi.registerCommand("openghost", {
-    description: "OpenGhost frontend bridge (providers, login, logout, retry)",
+    description: "OpenGhost frontend bridge (providers, login, logout, retry, instructions, turn records)",
     handler: async (args, ctx) => {
       let request;
       try {
@@ -116,8 +128,16 @@ export default function (pi) {
           const failed = latest(ctx.sessionManager);
           if (failed?.type !== "message" || failed.message.role !== "assistant" || failed.message.stopReason !== "error")
             throw new Error("Pi's latest reply did not fail, so there is nothing to retry.");
+          // A continuation has no before_agent_start: Pi keeps the prompt sections,
+          // instructions included, that the failed turn had.
           status("", { ok: true });
           pi.sendMessage({ customType: RETRY, content: [], display: false }, { triggerTurn: true });
+        } else if (request.op === "instructions") {
+          instructions = String(request.text ?? "");
+          status("", { ok: true });
+        } else if (request.op === "mark") {
+          pi.appendEntry(MARK, request.entry);
+          status("", { ok: true });
         } else if (request.op === "logout") {
           await runtime.logout(request.provider, { signal: AbortSignal.timeout(15_000) });
           status("", { ok: true });
